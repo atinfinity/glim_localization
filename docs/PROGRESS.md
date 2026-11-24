@@ -12,7 +12,7 @@ For each phase, record what was done, problems and workarounds, and open items.
 
 ### Environment
 
-- Verified in Docker (linux/arm64, 8 CPUs, about 7.7 GB memory). Phases 1 and 2 were also verified on GitHub Actions (amd64); later phases were verified on arm64 only unless stated.
+- Verified in Docker (linux/arm64, 8 CPUs, about 7.7 GB memory). Phases 1 and 2 were also verified on GitHub Actions (amd64); later phases were verified on arm64 only unless stated. Since #28 (2026-11-25), GitHub Actions runs the full checks on both amd64 and arm64.
 - Container: `ros:jazzy-ros-base` (Ubuntu 24.04), g++ 13.3.0, Boost 1.83. No GUI.
 
 ### Target platform
@@ -585,6 +585,61 @@ Second step of [#2](https://github.com/atinfinity/glim_localization/issues/2): t
 - **Review fixes** (PR [#22](https://github.com/atinfinity/glim_localization/pull/22)): the stop line is logged after the odometry thread is joined, so frames still queued are counted; the counters read by `stop()` are atomic; the node logs when the RMW has no matched events (the tests then time out on the matched line); the wait for the three matched lines shares one deadline; the comment on `DISCOVERY_MARGIN_S` says why it stays (the player's writers must match the node's readers too); the coverage report is printed only on failure.
 - **Docs**: the "Early messages can be lost" note in DESIGN ("R2 node: differences from the plan") now names the cause and the new log lines.
 
+## Relocalizer: yaw search around a given initial pose (2026-11-25, part of [#3](https://github.com/atinfinity/glim_localization/issues/3))
+
+A pose from outside (a 2D Pose Estimate click, `~/initialize`, the configured `init_T_world_imu`, the replay `--init-pose`) can be off in yaw by tens of degrees, and scan-to-map registration alone does not recover from it. This adds an opt-in yaw search on the first scan. Design in DESIGN §5.3, keys in the ROS 2 guide ([Initial pose yaw search](ros2.md#initial-pose-yaw-search)).
+
+- **Core** (`glim_localization/relocalization/`, no ROS):
+  - `PoseCandidateGenerator` (`generate(CandidateQuery{hint, frame, map})`) is the plug point; `YawCandidateGenerator` turns the hint about world z by 0, +s, -s, ... up to the range (180 deg and 15 deg give 24 candidates; -180 is dropped as the same yaw as +180). A global relocalizer will implement the same interface without a hint (`set_candidate_generator`).
+  - `score_candidate` registers the scan from the candidate with the unary VGICP map factors of all levels (the odometry's `create_map_factors`) and Levenberg-Marquardt (10 iterations), then scores the registered pose by the finest-voxel inlier ratio, the same quantity as the status inlier ratio. No overlapping tile or a non-finite solve scores 0.
+  - `search_candidates` scores in order until the time budget (the first candidate always), and `select_best_candidate` takes the highest score at or above the minimum (ties to the earlier, nearer candidate; NaN never passes). The best one is reported also when rejected.
+- **Odometry**: the search runs for the configured pose and EXTERNAL resets that are not `from_current`; `relocalize()` and IMU gap self-resets are not searched. Accepted: start from the registered 6-DoF pose, velocity turned by the yaw. Rejected: LOST, and frames are dropped until the next reset. Parameters are validated at construction (also when the search is off). Status fields `init_search`, `init_search_candidates`, `init_search_score`, `init_search_yaw_offset`, `init_search_time`, cleared by each reset.
+- **Decisions**:
+  - Opt-in (`init_yaw_search: false`), so existing behaviour and tests are unchanged.
+  - The reported yaw correction is the registered pose's, not the candidate's offset: in the first run neighbouring candidates (for example -45 and -60 deg for a 75 deg error) converged to the same correct pose and the earlier one won the tie, so the candidate offset was 30 deg off the applied correction.
+  - Inlier ratio as the score, rather than the residual, so that `init_yaw_search_min_inlier_ratio` and the quality monitor's thresholds mean the same thing.
+  - The search runs synchronously in the estimation thread on the first scan; it happens once per given pose.
+- **ROS**: `LocalizationStatus.msg` gets `INIT_SEARCH_NONE/ACCEPTED/REJECTED`, `init_search`, `init_search_candidates`, `init_search_score`, `init_search_yaw_offset`, `init_search_time`; the publisher maps them and adds them to the diagnostics (a rejected search says so in the diagnostic message). `test_message_constants` pins the enum, `test_localization_publisher` checks the mapping. `Initialize.srv` notes that its `score` cannot carry the search result (the pose is applied at the next frame). The new fields change the message type, so nodes and recorded bags built with the old definition do not interoperate with the new one; `scripts/test_interfaces.sh` pins the new definition.
+- **Replay**: `summary.json` gets `init_search` (result, candidates, score, yaw_offset_deg, seconds).
+- **Verification** (synthetic map `replay_map_params()`, Docker on the development Mac, arm64; position error 0.3 / -0.2 / 0.1 m on top of the yaw error in the odometry tests):
+
+  | Case | Result | Search | Error after 3 s (max) |
+  | --- | --- | --- | --- |
+  | Odometry, 75 deg, search off | LOST at 12 s | | 25.2 m, 87.6 deg (last) |
+  | Odometry, configured pose, 75 deg | ACCEPTED, correction -74.99 deg, inlier ratio 0.997 | 24 candidates, 0.83 s | 0.011 m, 0.090 deg |
+  | Odometry, configured pose, -90 deg | ACCEPTED, 90.01 deg, 0.997 | 24, 0.84 s | 0.011 m, 0.090 deg |
+  | Odometry, `reset()` at 0.5 s, -80 deg | ACCEPTED, 80.01 deg, 0.998 | 24, 0.84 s | 0.011 m, 0.090 deg |
+  | Odometry, pose 500 m off the map | REJECTED, LOST, no estimate | 24, < 0.1 ms (no tiles) | |
+  | Odometry, new pose after the rejection, 60 deg | ACCEPTED, -59.99 deg | 24, 0.86 s | 0.006 m, 0.090 deg |
+  | Scoring unit test, 60 / 75 / 90 / -80 deg | Correction within 1 deg of the error | 24, 0.60 to 0.63 s | 0.002 to 0.003 m, 0.03 to 0.04 deg |
+  | Replay tool, 75 deg, search off | exit 0, all frames TRACKING | | 3.39 m, 69.1 deg (last pose) |
+  | Replay tool, 75 deg, search on | exit 0, ACCEPTED, -75 deg | 24, 0.86 s | 0.006 m, 0.052 deg (last pose) |
+  | Replay tool, pose 200 m above the map, search on | exit 1 at the first LOST frame, log says the pose was rejected | | |
+
+  - The first estimated frame takes about 0.84 s with the search instead of about 4 ms; later frames are 5 to 7 ms, as before.
+  - The replay run without the search passes the tracking-ratio gate with a 69 deg error: the quality monitor alone does not catch a wrong yaw on this map.
+  - Under parallel ctest the search slowed 2.5 times and the default 2 s budget stopped at 11 of 24 candidates (still the right yaw, since the candidates are ordered by distance from the given yaw). The tests that count candidates now set a 30 s budget.
+  - Not verified at first: the GPU module (verified with the review fixes below), real scans and real-scan timing.
+- **Review fixes** (PR [#24](https://github.com/atinfinity/glim_localization/pull/24)):
+  - **Acceptance rules**: a pose is accepted only when every candidate was scored, the best reaches the minimum inlier ratio, and the runner-up (best candidate more than two steps away in yaw from the best) is more than `init_yaw_search_min_score_gap` below it. Before, a search cut short by the budget was accepted from the candidates it had scored, and two near-equal yaws were decided by order. `search_candidates` returns an outcome (ACCEPTED, NO_CANDIDATE, TRUNCATED, LOW_SCORE, AMBIGUOUS) with the runner-up.
+  - **Defaults**: `init_yaw_search_min_inlier_ratio` 0.5 to 0.7, `init_yaw_search_time_budget` 2 to 10 s; new `init_yaw_search_min_score_gap` (0.05) and `init_yaw_search_min_points` (100). 0.7: on the synthetic map the right yaw scores 0.997, the runner-up (the 180 deg flip) 0.865 to 0.891, and a wrong yaw (75 deg) registered alone 0.55 to 0.61, which passed the old 0.5. 10 s: see the timing below; real-scan timing is not measured, and a truncated search is now rejected, so the budget needs room.
+  - **Budget inside the registration**: the deadline is passed to Levenberg-Marquardt as `termination_criteria`, so the budget is checked between iterations, not only between candidates. The first candidate is scored without the deadline (bounded by `max_iterations`) so that a cut-short search still reports a score. With and without a far deadline the scores and poses were identical, and the time the same.
+  - **Tiles at the registered pose**: the score is computed on the tiles selected again at the registered pose, not those of the candidate pose.
+  - **Frames while the search is pending**: frames with fewer than `init_yaw_search_min_points` points are dropped. Upstream `OdometryEstimationIMU::insert_frame` only warns on an empty frame and still takes its first-frame branch, so without this an empty first frame would have started the estimation without a search.
+  - **Status and message**: `init_search_candidates_total`, `init_search_runner_up_score` and `init_search_runner_up_yaw_offset` in the core status, `LocalizationStatus.msg` (a breaking change of the message type), the diagnostics and `summary.json` (also `truncated`). The diagnostic message of a rejection says whether the budget ran out or gives the best and runner-up scores.
+  - **Limits**: step at least 0.5 deg (at most 720 candidates).
+  - **Tests**: truncated search rejected (budget 0); runner-up reported and a stricter gap rejected as ambiguous; a symmetric synthetic room (half-turn poses score 0.932 and 0.930) rejected as ambiguous; a wrong yaw on the map with range 0 rejected (0.61 < 0.7); empty and sparse frames keep the search pending; the velocity turned with the yaw (error 0.004 m/s, 2.04 m/s if not turned); an IMU gap self-reset does not search; a non-identity LiDAR-IMU extrinsic; the deadline check does not change convergence; the GPU module corrects a 75 deg error (skipped without a GPU); invalid parameters; both shipped configs carry every key.
+  - **GPU module** (RTX 2080 Ti, CUDA 13.1 image), in two rounds:
+    - At 2e52c10, before the review fixes: the CUDA `ci.sh` passed (core 253/253, colcon 12/12, GPU replay e2e). The search timings come from an ad-hoc copy of `test_init_yaw_search` run on the GPU module at that commit: 24 candidates in 1.65 to 1.73 s with the GPU module and 1.73 to 1.88 s with the CPU module, about 70 to 78 ms per candidate (synthetic data, 2 threads); on arm64 it is about 26 to 33 ms per candidate. The search uses CPU factors in both modules.
+    - At 65e0e2e, with the review fixes: `GLIM_LOC_REQUIRE_GPU=1` CUDA `ci.sh` passed. Core ctest 264/264 (the only skip is `GpuNeedsACudaBuild`, as expected in a CUDA build); colcon test 12/12 (75 tests); interfaces passed; Python 187 passed. Replay e2e: CPU and GPU ATE both rmse 0.0058 m, max 0.0119 m, rotation max 0.080 deg; odometry mean 18.7 ms (CPU) and 3.4 ms (GPU); CPU vs GPU over 121 poses at most 1.124e-05 m and 3.352e-04 deg apart. `LocalizationOdometryGPUTest.YawSearchCorrectsALargeYawError` ran on the GPU (not skipped) and passed: 24 of 24 candidates in 1896.32 ms, score 0.996018, runner-up 0.889904; after the search max translation 0.0119 m, max rotation 0.0795 deg, inlier ratio 0.9995.
+    - The later fixes (the rejection reason, the distinct-yaw cap, the deadline and budget nits) change shared code (`candidate_search.cpp`, the odometry base class, the ROS publisher) but no GPU-specific file, so the GPU run was not repeated for them; the Actions CPU build covers them.
+  - **Re-review fixes**:
+    - **Rejection reason**: `init_search_reason` (NONE, TRUNCATED, LOW_SCORE, AMBIGUOUS, NO_CANDIDATE) in the core status, `LocalizationStatus.msg` (breaking), the diagnostics and `summary.json` (`reason`). The diagnostics message gives the numbers for that reason only; before, NO_CANDIDATE printed "best 0.000, runner-up 0.000" because the text was inferred from the counts.
+    - **Distinct yaw**: the runner-up must be more than `min(2 * step, 90 deg)` from the best. With 2 * step alone, a step of 90 deg or more left no candidate far enough away, so no runner-up and no ambiguity check. A test with a 90 deg step now reports the half-turn runner-up. The docs no longer say a bad pose is never accepted silently: with range 0 or a small range only the inlier threshold applies.
+    - **Deadline**: a registration that converges on the iteration where the deadline passes counts as completed. A non-finite time budget is treated as 0. The sparse-frame warning is logged once per pending search.
+    - **Tests**: the one-iteration wall-clock check is loosened to 2 s; the bounded and unbounded scores are compared to 1e-6; the frame swap in the extrinsic test is undone by a scope guard.
+- **Remaining for [#3](https://github.com/atinfinity/glim_localization/issues/3)**: global relocalization (FPFH + RANSAC/GNC on accumulated scans, a `PoseCandidateGenerator` without a hint, and `global_search` in `~/initialize`); roll and pitch from gravity and height from the map; accumulating several scans before scoring; running the search off the estimation thread; real-scan timing and evaluation on real data.
+
 ## map_compiler: PLY input and 2D occupancy grid (2026-11-25, [#4](https://github.com/atinfinity/glim_localization/issues/4))
 
 - **PLY input** (`map/ply_reader.hpp`): a small reader written here, since PCL is not in the image and gtsam_points has no PLY reader. `ascii` and `binary_little_endian` 1.0; vertex `x`, `y`, `z` as `float`/`float32` or `double`/`float64`; other properties, list properties and other elements are skipped. After reading, PLY goes through the PCD path unchanged (downsampling, covariance estimation, tiling), with `source: "ply"`.
@@ -607,6 +662,28 @@ Second step of [#2](https://github.com/atinfinity/glim_localization/issues/2): t
   - Docs: the flat-ground assumption, and that no noise filter is applied.
   - Re-verified in Docker on the development Mac: core ctest 247/247, Python tests 190.
 - **Open**: covariance recomputation for GLIM dumps moved to [#31](https://github.com/atinfinity/glim_localization/issues/31).
+
+## arm64 in GitHub Actions (2026-11-25, [#28](https://github.com/atinfinity/glim_localization/issues/28))
+
+arm64 was covered only by local CI (`scripts/ci_local.sh` on the Apple silicon development Mac), which the project no longer runs. GitHub Actions now runs the full checks on both architectures.
+
+- **Jobs**: `build-and-test-arm64` on `ubuntu-24.04-arm` (free for public repositories) runs the steps of `build-and-test` through a YAML anchor, so the required check `build-and-test` keeps its job id and name. Same draft `if`, docs-only detection, concurrency and paths-ignore. Timeouts: 30 min on amd64 (unchanged), 45 min for the arm64 checks.
+- **Per architecture**, from the job environment and `runner.arch`:
+  - GHCR tag: `glim_localization:<hash>` for amd64 (unchanged), `<hash>-arm64` for arm64. Both are single-platform tags, so a pull never gets the other architecture.
+  - buildx gha cache scope: `image-amd64` and `image-arm64` (amd64 used the default scope before).
+  - ccache key: `ccache-<X64|ARM64>-<image hash>-<sources hash>`; the restore keys stay within the architecture.
+  - The 10 GB Actions cache now holds two buildx layer caches and two ccaches (each at most 500 MB).
+- **Publishing**: `publish-image-arm64` (on `ubuntu-24.04-arm`, native build) mirrors `publish-image`: only on a push to `main` of a non-fork repository, only when the image was missing, `packages: write` only in that job. Each publish job depends only on its own architecture's checks, so one architecture failing does not hold back the other's image.
+- **Measured on PR #29** (4-CPU GitHub-hosted runners; the PR runs restore no ccache, because the keys are new and only pushes to `main` save one):
+
+| Run | amd64 `build-and-test` | arm64 `build-and-test-arm64` |
+| --- | --- | --- |
+| [First](https://github.com/atinfinity/glim_localization/actions/runs/45503594633): arm64 image missing, no layer cache | 8 min 56 s (image pulled, checks 8 min 20 s) | 13 min 50 s (image build 6 min 8 s, checks 7 min 24 s) |
+| [Second](https://github.com/atinfinity/glim_localization/actions/runs/45508203818): arm64 layer cache warm | 8 min 39 s (image pulled, checks 7 min 52 s) | 8 min 59 s (image build from cache 52 s, checks 7 min 49 s) |
+
+  - Both architectures: core ctest 224/224, colcon test 12/12, Python tests and replay e2e passed. No portability fix was needed.
+  - For comparison, amd64 runs on `main` with a warm ccache took about 6 min before this change.
+- **After merge**: the first amd64 run restores no ccache and the next amd64 image build has no layer cache, because the key and scope names changed (the GHCR image is still pulled). The first push to `main` publishes the arm64 image and saves the arm64 ccache. `build-and-test-arm64` is to be added to the required checks of the ruleset.
 
 ## README demo animation (2026-11-25, [#25](https://github.com/atinfinity/glim_localization/issues/25))
 

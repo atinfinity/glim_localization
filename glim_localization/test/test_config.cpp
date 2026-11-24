@@ -49,6 +49,19 @@ TEST(ConfigTest, OdometryUsesLocalizationModule) {
   const json odometry = read_config(global.at("config_odometry").get<std::string>()).at("odometry_estimation");
   EXPECT_EQ(odometry.at("so_name").get<std::string>(), "libodometry_localization_cpu.so");
   EXPECT_DOUBLE_EQ(odometry.at("init_pose_damping_scale").get<double>(), 1e2);
+  // The yaw search of the given initial pose is opt-in; its keys are the documented defaults in both modules
+  const json gpu_global = read_config("gpu/config.json").at("global");
+  const json gpu_odometry = read_config("gpu/" + gpu_global.at("config_odometry").get<std::string>()).at("odometry_estimation");
+  for (const auto* config : {&odometry, &gpu_odometry}) {
+    EXPECT_FALSE(config->at("init_yaw_search").get<bool>());
+    EXPECT_DOUBLE_EQ(config->at("init_yaw_search_range_deg").get<double>(), 180.0);
+    EXPECT_DOUBLE_EQ(config->at("init_yaw_search_step_deg").get<double>(), 15.0);
+    EXPECT_DOUBLE_EQ(config->at("init_yaw_search_min_inlier_ratio").get<double>(), 0.7);
+    EXPECT_DOUBLE_EQ(config->at("init_yaw_search_min_score_gap").get<double>(), 0.05);
+    EXPECT_DOUBLE_EQ(config->at("init_yaw_search_time_budget").get<double>(), 10.0);
+    EXPECT_EQ(config->at("init_yaw_search_max_iterations").get<int>(), 10);
+    EXPECT_EQ(config->at("init_yaw_search_min_points").get<int>(), 100);
+  }
 }
 
 TEST(ConfigTest, GpuConfigSelectsGpuModule) {
