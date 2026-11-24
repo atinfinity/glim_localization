@@ -481,7 +481,7 @@ First step of #2: a CUDA build environment. There is no GPU odometry module yet.
   - GLIM and glim_ros2 built with `BUILD_WITH_CUDA=ON` and `CMAKE_CUDA_ARCHITECTURES` from the build argument `CUDA_ARCHITECTURES` (default 75).
   - Pins and key fingerprints are in docs/DEPENDENCIES.md; the design is in DESIGN §5.6.
   - The CPU image, its inputs hash and the CPU path of every script are unchanged.
-- **Build mode**: `GLIM_LOC_BUILD_WITH_CUDA=ON` (set by the CUDA image) makes `build_core.sh` and `build_colcon.sh` pass `BUILD_WITH_CUDA=ON`. `check_deps.sh` checks the CUDA package, `GTSAM_POINTS_USE_CUDA`, nvcc 13.1 and GLIM's GPU odometry module (built and loadable).
+- **Build mode**: `GLIM_LOC_BUILD_WITH_CUDA=ON` (set by the CUDA image) makes `build_core.sh` and `build_colcon.sh` pass `BUILD_WITH_CUDA=ON`. In CPU mode `build_core.sh` passes `OFF` to the core, and `build_colcon.sh` passes nothing, because colcon gives its CMake arguments to every package. `check_deps.sh` checks the CUDA package, `GTSAM_POINTS_USE_CUDA`, nvcc 13.1 and GLIM's GPU odometry module (built and loadable).
 - **GPU test**: `test_gpu_smoke` lists the devices and builds a `GaussianVoxelMapGPU` from a synthetic cloud, comparing it with `GaussianVoxelMapCPU`. Without a visible GPU it skips; `GLIM_LOC_REQUIRE_GPU=1`, which `ci.sh` sets when `nvidia-smi` lists a GPU, makes the skip a failure.
 - **GitHub Actions** stays CPU-only. A new job lints `docker/Dockerfile.cuda` with `docker build --check`. `scripts/tests/test_dockerfile_cuda.py` keeps the shared pins and lines of the two Dockerfiles in sync.
 - **GLIM patch (CUDA image only)**: `third_party/patches/glim_cuda/0001-gtsam-points-1.2.2-has-index.patch`.
@@ -492,5 +492,31 @@ First step of #2: a CUDA build environment. There is no GPU odometry module yet.
   - `scripts/docker_run.sh --cuda scripts/ci.sh` passes in 276 s: dependency check, core ctest 220/220 (including `GpuSmoke.ListsDevices` 0.23 s and `GpuSmoke.BuildsGaussianVoxelMapGPU` 0.84 s, run with `GLIM_LOC_REQUIRE_GPU=1`), colcon test 12/12, Python tests 182, replay e2e.
   - The same image without `--gpus`: both GPU tests are reported as skipped and ctest passes. With `GLIM_LOC_REQUIRE_GPU=1` both fail.
   - Two image builds failed early on transient DNS errors resolving github.com on that machine; a retry passed. The build time is not recorded because later builds reused cached layers.
-- **CPU path**: `scripts/ci_local.sh --force` on the development Mac passes. One of three runs failed in `test_launch_r2_component` (71 poses for 121 frames, below the 90% bound); the next run on the same tree passed. That test does not change here, so it is a timing flake under load, not a CUDA change.
+- **CPU path**: `scripts/ci_local.sh --force` on the development Mac passes. One of three runs failed in `test_launch_r2_component` (71 poses for 121 frames, below the 90% bound); the next run on the same tree passed. This change does not touch that test or any ROS code, so the flake was there before; the cause is not known yet and is tracked in #20.
 - **Remaining for #2**: the GPU localization odometry module (`odometry_localization_gpu`), `GaussianVoxelMapGPU` tiles in MapManager, GPU memory management (LRU and prefetch), GPU replay evaluation and the CPU vs GPU comparison.
+
+### Review fixes for the CUDA variant (2026-11-25)
+
+- **Compose**: `dev-cuda` requests all GPUs with `deploy.resources.reservations.devices` (driver nvidia, count all, capabilities gpu) instead of `gpus: all`. Compose before v2.30 rejects the `gpus` key while validating the whole file, which would also break the CPU service. The image no longer sets `NVIDIA_VISIBLE_DEVICES`, so GPUs come only from a device request, also on a host whose default runtime is `nvidia`.
+- **Stale CUDA image**: `docker compose run` never rebuilds an existing tag. The CUDA image now copies its repository inputs to `/etc/glim_localization/inputs/`:
+  - `docker/Dockerfile.cuda`
+  - `docker/entrypoint.sh`
+  - `scripts/requirements.txt`
+  - the `glim`, `glim_cuda` and `glim_ros2` patches
+
+  In CUDA mode, `ci.sh` first runs `scripts/check_cuda_image_inputs.sh`, which fails when these files differ from the mounted tree. `GLIM_LOC_ALLOW_STALE_IMAGE=1` makes it warn instead.
+- **Tests**:
+  - The Dockerfile sync test skips each replaced CPU line only once, so the later `RUN apt-get update` lines are checked too.
+  - New tests check the inputs list against the Dockerfile COPY lines and the result of the stale check.
+  - The `ci.sh` tests in `test_ci_local.py` set the mode explicitly. In the CUDA image they had failed: the image sets `GLIM_LOC_BUILD_WITH_CUDA=ON`, and the new check was not stubbed.
+  - `test_gpu_smoke` also checks the y range of the voxel means.
+- **build_colcon.sh** passes `-DBUILD_WITH_CUDA=ON` only in CUDA mode, so its CPU command line is the same as before the CUDA mode.
+- **Flaky `test_launch_r2_component`**: tracked in #20 (drop counters to log, single-threaded component container).
+- **Verification on the GPU machine** (same machine as above; default Docker runtime runc):
+  - `ci.sh` with the image built before this fix fails at once on the stale check.
+  - After a rebuild (2.55 GB), `scripts/docker_run.sh --cuda scripts/ci.sh` passes in 278 s. The image check matches, and the GPU is visible through the device reservation. Core ctest is 220/220, with the two GPU tests passing under `GLIM_LOC_REQUIRE_GPU=1`. colcon test is 12/12, the Python tests 186, and replay e2e passes.
+  - `docker run` without `--gpus`: `NVIDIA_VISIBLE_DEVICES` is unset, both GPU tests are reported as skipped, and with `GLIM_LOC_REQUIRE_GPU=1` both fail.
+  - Installed CUDA packages:
+    - `cuda-nvcc-13-1`, `cuda-crt-13-1`, `cuda-culibos-dev-13-1` and `cuda-cccl-13-1`: 13.1.115-1
+    - `cuda-cudart-13-1`, `cuda-cudart-dev-13-1`, `cuda-driver-dev-13-1` and `cuda-toolkit-13-1-config-common`: 13.1.80-1
+    - `cuda-toolkit-13-config-common` and `cuda-toolkit-config-common`: 13.5.37-1

@@ -92,6 +92,11 @@ scripts/docker_run.sh --cuda scripts/ci.sh             # the same checks in CUDA
 
 `--cuda` selects the compose service `dev-cuda`: the image `glim_localization:dev-cuda` (or `GLIM_LOC_CUDA_IMAGE`), all GPUs, and its own build volume, so CPU and CUDA builds do not share `/ws/build`. In this image `scripts/ci.sh` runs in CUDA mode (`GLIM_LOC_BUILD_WITH_CUDA=ON`): our packages are configured with `BUILD_WITH_CUDA=ON`, `check_deps.sh` checks the CUDA packages and GLIM's GPU odometry module, and the GPU smoke test (`test_gpu_smoke`) builds a GPU voxel map. Without a visible GPU that test is reported as skipped; when `nvidia-smi` lists a GPU, `ci.sh` sets `GLIM_LOC_REQUIRE_GPU=1` and a skip fails.
 
+The GPUs come from a device reservation in compose (`deploy.resources.reservations.devices`, which any Compose v2 accepts). The image does not set `NVIDIA_VISIBLE_DEVICES`, so a container started without a device request (`docker run` without `--gpus`) sees no GPU, even on a host whose default Docker runtime is `nvidia`. On such a host, passing `-e NVIDIA_VISIBLE_DEVICES=...` exposes GPUs anyway.
+
+> [!IMPORTANT]
+> `docker compose run` does not rebuild an existing image. After you change `docker/Dockerfile.cuda`, `docker/entrypoint.sh`, `scripts/requirements.txt` or a patch under `third_party/patches/`, rebuild with `docker compose -f docker/compose.yaml build dev-cuda`. In CUDA mode `ci.sh` first runs `scripts/check_cuda_image_inputs.sh`, which fails when the image was built from other versions of these files. `GLIM_LOC_ALLOW_STALE_IMAGE=1` turns that failure into a warning.
+
 > [!NOTE]
 > The CUDA image only prepares the build. The GPU odometry module (`libodometry_localization_gpu.so`) is not written yet (#2), so localization still runs on the CPU module in both images.
 
