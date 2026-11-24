@@ -91,7 +91,7 @@ docker compose -f docker/compose.yaml build dev-cuda   # glim_localization:dev-c
 scripts/docker_run.sh --cuda scripts/ci.sh             # the same checks in CUDA mode
 ```
 
-`--cuda` selects the compose service `dev-cuda`: the image `glim_localization:dev-cuda` (or `GLIM_LOC_CUDA_IMAGE`), all GPUs, and its own build volume, so CPU and CUDA builds do not share `/ws/build`. In this image `scripts/ci.sh` runs in CUDA mode (`GLIM_LOC_BUILD_WITH_CUDA=ON`): our packages are configured with `BUILD_WITH_CUDA=ON`, `check_deps.sh` checks the CUDA packages and GLIM's GPU odometry module, and the GPU tests (`test_gpu_smoke`, `test_localization_odometry_gpu`) and a GPU replay run in `test_replay_e2e.sh` run on the GPU. Without a visible GPU that test is reported as skipped; when `nvidia-smi` lists a GPU, `ci.sh` sets `GLIM_LOC_REQUIRE_GPU=1` and a skip fails.
+`--cuda` selects the compose service `dev-cuda`: the image `glim_localization:dev-cuda` (or `GLIM_LOC_CUDA_IMAGE`), all GPUs, and its own build volume, so CPU and CUDA builds do not share `/ws/build`. In this image `scripts/ci.sh` runs in CUDA mode (`GLIM_LOC_BUILD_WITH_CUDA=ON`): our packages are configured with `BUILD_WITH_CUDA=ON`, `check_deps.sh` checks the CUDA packages and GLIM's GPU odometry module, and the GPU tests (`test_gpu_smoke`, `test_localization_odometry_gpu`) and a GPU replay in `test_replay_e2e.sh` run on the GPU. When `nvidia-smi` lists a GPU, `ci.sh` sets `GLIM_LOC_REQUIRE_GPU=1`: the GPU tests then fail instead of skipping, and the GPU replay runs and must agree with the CPU replay. Without it, ctest reports the GPU tests as skipped and `test_replay_e2e.sh` prints `SKIPPED: GPU replay`.
 
 The GPUs come from a device reservation in compose (`deploy.resources.reservations.devices`, which any Compose v2 accepts). The image does not set `NVIDIA_VISIBLE_DEVICES`, so a container started without a device request (`docker run` without `--gpus`) sees no GPU, even on a host whose default Docker runtime is `nvidia`. On such a host, passing `-e NVIDIA_VISIBLE_DEVICES=...` exposes GPUs anyway.
 
@@ -106,7 +106,12 @@ The CUDA build adds the GPU odometry module `libodometry_localization_gpu.so`. A
 | R1 (`config_path`) | `config/r1` | `config/r1_gpu` |
 | R2 (`config_path`) | `config/r2` | `config/r2_gpu` |
 
-The GPU odometry config (`config_odometry_localization_gpu.json`) has the same common keys as the CPU one, plus `map_gpu_max_tiles` (map tiles kept on the GPU, least recently used dropped; at least `map_max_submaps`) and GLIM's GPU keyframe keys for `use_keyframes`. In a CPU build, the replay tool exits with code 2 and the R2 node fails to configure when the config names the GPU module. For R1, copy the whole `config` directory, because `r1_gpu` refers to `../r1`.
+The GPU odometry config (`config_odometry_localization_gpu.json`) has the same common keys as the CPU one, plus `map_gpu_max_tiles` (map tiles kept on the GPU, least recently used dropped; at least `map_max_submaps`) and GLIM's GPU keyframe keys for `use_keyframes`. In a CPU build, the replay tool exits with code 2 and the R2 node fails to configure when the config names the GPU module. The GPU module also fails closed when CUDA is unusable: with no visible device it does not start (replay exits with code 1, the R2 node fails to activate), and a failed tile upload stops the odometry with an error.
+
+> [!WARNING]
+> Behavior change in this release: the replay tool and the R2 node now read `so_name` in `config_odometry` and need exactly `libodometry_localization_cpu.so` or `libodometry_localization_gpu.so` (a file name, not a path). An empty or missing `so_name`, a full path, or another module is an error (replay exit 2, R2 configure fails). Before, both ignored `so_name`. R1 loads the module through GLIM and is unchanged.
+
+For R1, copy the whole `config` directory, because `r1_gpu` refers to `../r1`.
 
 The build argument `CUDA_ARCHITECTURES` (default `75`, Turing; for example `"75;86;89"`) sets `CMAKE_CUDA_ARCHITECTURES` for any CUDA code compiled in the image. It is never `native`, because no GPU is visible during `docker build`. The prebuilt gtsam_points package already contains code for sm_75 and newer. Set it with `CUDA_ARCHITECTURES=86 docker compose -f docker/compose.yaml build dev-cuda`.
 
