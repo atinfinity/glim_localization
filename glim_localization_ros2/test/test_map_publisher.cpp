@@ -1,4 +1,5 @@
-// In-process test of ~/map: the map cloud conversion and its latched publication. No bag, no display.
+// In-process test of ~/map: the map cloud conversion and its latched publication. No bag, no
+// display.
 #include <gtest/gtest.h>
 
 #include <chrono>
@@ -10,11 +11,11 @@
 #include <stdexcept>
 #include <vector>
 
-#include <gtsam_points/types/point_cloud_cpu.hpp>
-#include <rclcpp/rclcpp.hpp>
-#include <sensor_msgs/msg/point_cloud2.hpp>
+#include "gtsam_points/types/point_cloud_cpu.hpp"
+#include "rclcpp/rclcpp.hpp"
+#include "sensor_msgs/msg/point_cloud2.hpp"
 
-#include <glim_localization_ros2/map_publisher.hpp>
+#include "glim_localization_ros2/map_publisher.hpp"
 
 namespace
 {
@@ -86,7 +87,8 @@ TEST(MapCloud, KeepsEveryPointInTheMapFrameWithoutDownsampling) {
 }
 
 TEST(MapCloud, KeepsOneCentroidPerVoxel) {
-  // Two points in voxel (0, 0, 0) of size 1, one in voxel (2, 0, 0), one in (-1, 0, 0) and one non-finite point
+  // Two points in voxel (0, 0, 0) of size 1, one in voxel (2, 0, 0), one in (-1, 0, 0) and one
+  // non-finite point
   const double nan = std::numeric_limits<double>::quiet_NaN();
   const auto tiles = {
     make_tile(0, translation(0.0, 0.0, 0.0), {{0.2, 0.2, 0.2}, {2.5, 0.5, 0.5}, {nan, 0.0, 0.0}}),
@@ -122,7 +124,8 @@ TEST(MapCloud, SkipsNonFinitePointsWithoutDownsampling) {
 TEST(MapCloud, RefusesACloudBeyondTheSizeLimit) {
   using glim_localization_ros2::check_map_cloud_size;
   using glim_localization_ros2::kMapCloudPointStep;
-  // The uint32 row_step of the message: 357913941 points of 12 bytes fit, one more does not, even with no byte cap
+  // The uint32 row_step of the message: 357913941 points of 12 bytes fit, one more does not, even
+  // with no byte cap
   const size_t max_uint32_points = std::numeric_limits<uint32_t>::max() / kMapCloudPointStep;
   const size_t no_cap = std::numeric_limits<size_t>::max();
   EXPECT_NO_THROW(check_map_cloud_size(max_uint32_points, no_cap));

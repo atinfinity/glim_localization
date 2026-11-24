@@ -1,28 +1,30 @@
-// R1: a GLIM extension module that publishes the localization result from inside glim_rosnode / glim_rosbag.
+// R1: a GLIM extension module that publishes the localization result from inside glim_rosnode /
+// glim_rosbag.
 //
-// EstimateBridge adapts glim::EstimationFrame (via OdometryEstimationCallbacks) to FrameEstimate and drives
-// LocalizationPublisher. A frame is published together with its status (LocalizationCallbacks::on_status), so a LOST
-// frame gives no ~/pose. It subscribes to /initialpose and forwards it to the odometry with
-// LocalizationCallbacks::request_reset, and publishes the map that the odometry module loaded on ~/map (latched).
-// Settings come from the "localization_ros" section of config_ros.json (see config/r1/config_ros.json).
+// EstimateBridge adapts glim::EstimationFrame (via OdometryEstimationCallbacks) to FrameEstimate
+// and drives LocalizationPublisher. A frame is published together with its status
+// (LocalizationCallbacks::on_status), so a LOST frame gives no ~/pose. It subscribes to
+// /initialpose and forwards it to the odometry with LocalizationCallbacks::request_reset, and
+// publishes the map that the odometry module loaded on ~/map (latched). Settings come from the
+// "localization_ros" section of config_ros.json (see config/r1/config_ros.json).
 #include <memory>
 #include <stdexcept>
 #include <string>
 #include <vector>
 
-#include <Eigen/Geometry>
+#include "Eigen/Geometry"
 
-#include <geometry_msgs/msg/pose_with_covariance_stamped.hpp>
-#include <rclcpp/rclcpp.hpp>
-#include <spdlog/spdlog.h>
+#include "geometry_msgs/msg/pose_with_covariance_stamped.hpp"
+#include "rclcpp/rclcpp.hpp"
+#include "spdlog/spdlog.h"
 
-#include <glim/util/config.hpp>
-#include <glim/util/extension_module_ros2.hpp>
+#include "glim/util/config.hpp"
+#include "glim/util/extension_module_ros2.hpp"
 
-#include <glim_localization/odometry/odometry_estimation_localization.hpp>
-#include <glim_localization_ros2/estimate_bridge.hpp>
-#include <glim_localization_ros2/localization_publisher.hpp>
-#include <glim_localization_ros2/map_publisher.hpp>
+#include "glim_localization/odometry/odometry_estimation_localization.hpp"
+#include "glim_localization_ros2/estimate_bridge.hpp"
+#include "glim_localization_ros2/localization_publisher.hpp"
+#include "glim_localization_ros2/map_publisher.hpp"
 
 namespace glim_localization_ros2
 {
@@ -34,7 +36,8 @@ public:
   LocalizationExtension()
   : bridge_(std::make_shared<EstimateBridge>()) {}
 
-  // The callbacks stay registered in the static slots after the extension is destroyed (see EstimateBridge)
+  // The callbacks stay registered in the static slots after the extension is destroyed (see
+  // EstimateBridge)
   ~LocalizationExtension() override {bridge_->detach();}
 
   std::vector<glim::GenericTopicSubscription::Ptr> create_subscriptions(
@@ -51,10 +54,12 @@ public:
         params),
       params);
 
-    // The slots are not thread-safe: register before the first frame, which cannot come before this constructor chain is done.
+    // The slots are not thread-safe: register before the first frame, which cannot come before this
+    // constructor chain is done.
     EstimateBridge::connect(bridge_);
 
-    // ~/map: glim_ros2 creates the odometry module (which loads the map) before the extensions, so the map is there
+    // ~/map: glim_ros2 creates the odometry module (which loads the map) before the extensions, so
+    // the map is there
     const MapPublisherParams map_params = read_map_publisher_params(config);
     if (map_params.enabled) {
       if (const auto map = glim_localization::LocalizationCallbacks::loaded_map()) {
@@ -62,7 +67,8 @@ public:
         const size_t num_map_points = count_map_points(tiles);
         if (map_params.voxel_size <= 0.0 && num_map_points > kLargeMapCloudPoints) {
           spdlog::warn(
-            "[glim_localization] map_cloud_voxel is 0 and the map has {} points: ~/map is large and slow to build and send; set map_cloud_voxel",
+            "[glim_localization] map_cloud_voxel is 0 and the map has {} points: "
+            "~/map is large and slow to build and send; set map_cloud_voxel",
             num_map_points);
         }
         map_publisher_ = std::make_unique<MapPublisher>(node.get_node_topics_interface(),

@@ -1,4 +1,4 @@
-#include <glim_localization_ros2/map_publisher.hpp>
+#include "glim_localization_ros2/map_publisher.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -8,9 +8,9 @@
 #include <stdexcept>
 #include <unordered_map>
 
-#include <Eigen/Core>
+#include "Eigen/Core"
 
-#include <sensor_msgs/msg/point_field.hpp>
+#include "sensor_msgs/msg/point_field.hpp"
 
 namespace glim_localization_ros2
 {
@@ -18,7 +18,8 @@ namespace glim_localization_ros2
 namespace
 {
 
-// Voxel coordinates beyond this are not representable as int64 after the division; such points are skipped.
+// Voxel coordinates beyond this are not representable as int64 after the division; such points are
+// skipped.
 constexpr double kMaxVoxelCoord = 1e15;
 
 struct VoxelKey
@@ -115,7 +116,8 @@ sensor_msgs::msg::PointCloud2 make_map_cloud(
     };
 
   if (voxel_size <= 0.0) {
-    // Every point: write straight into the message (the input size is an upper bound, non-finite points are skipped)
+    // Every point: write straight into the message (the input size is an upper bound, non-finite
+    // points are skipped)
     check_map_cloud_size(num_input_points, max_bytes);
     msg.data.resize(num_input_points * kMapCloudPointStep);
     size_t n = 0;

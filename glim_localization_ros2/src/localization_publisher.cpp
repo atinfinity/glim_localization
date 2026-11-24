@@ -1,11 +1,11 @@
-#include <glim_localization_ros2/localization_publisher.hpp>
+#include "glim_localization_ros2/localization_publisher.hpp"
 
 #include <cmath>
 #include <cstdio>
 #include <string>
 
-#include <diagnostic_msgs/msg/diagnostic_status.hpp>
-#include <geometry_msgs/msg/transform_stamped.hpp>
+#include "diagnostic_msgs/msg/diagnostic_status.hpp"
+#include "geometry_msgs/msg/transform_stamped.hpp"
 
 namespace glim_localization_ros2
 {
@@ -125,8 +125,8 @@ diagnostic_msgs::msg::KeyValue key_value(const std::string & key, const std::str
   return kv;
 }
 
-/// Why the search rejected the pose, with the numbers that matter for that reason (the thresholds are in the
-/// odometry config, not in the message).
+/// Why the search rejected the pose, with the numbers that matter for that reason (the thresholds
+/// are in the odometry config, not in the message).
 std::string init_search_rejection_reason(
   const glim_localization_msgs::msg::LocalizationStatus & msg)
 {
@@ -274,8 +274,8 @@ void LocalizationPublisher::publish_frame(const FrameEstimate & frame, uint8_t s
   const Eigen::Isometry3d T_map_base = frame.T_map_imu * params_.T_base_imu.inverse();
   const auto stamp = to_time_msg(frame.stamp);
 
-  // A lost frame is published nowhere but odom->base (internal_odom): the pose covariance is zero, which means
-  // "not estimated", and a consumer must not see a pose it cannot tell is lost.
+  // A lost frame is published nowhere but odom->base (internal_odom): the pose covariance is zero,
+  // which means "not estimated", and a consumer must not see a pose it cannot tell is lost.
   if (!lost) {
     geometry_msgs::msg::PoseWithCovarianceStamped pose;
     pose.header.stamp = stamp;
@@ -283,8 +283,8 @@ void LocalizationPublisher::publish_frame(const FrameEstimate & frame, uint8_t s
     pose.pose.pose = to_pose_msg(T_map_base);
     pose_pub_->publish(pose);
 
-    // The twist is in the child frame (REP-105). The estimate is of the IMU, so the velocity of the base origin
-    // is the IMU velocity plus w x p, with p the base origin in the IMU frame.
+    // The twist is in the child frame (REP-105). The estimate is of the IMU, so the velocity of the
+    // base origin is the IMU velocity plus w x p, with p the base origin in the IMU frame.
     const Eigen::Matrix3d R_base_imu = params_.T_base_imu.rotation();
     const Eigen::Vector3d p_base_in_imu = params_.T_base_imu.inverse().translation();
     const Eigen::Vector3d v_imu = frame.T_map_imu.rotation().transpose() * frame.v_map_imu;
@@ -319,8 +319,8 @@ bool LocalizationPublisher::compute_odom_base(
 {
   if (params_.tf_mode == TfMode::EXTERNAL_ODOM) {
     try {
-      // A double stamp near 1.7e9 s has 238 ns resolution, so the message stamp can be a few ns after an odom
-      // sample at the true stamp. Look up at the stamp floored to 1 us.
+      // A double stamp near 1.7e9 s has 238 ns resolution, so the message stamp can be a few ns
+      // after an odom sample at the true stamp. Look up at the stamp floored to 1 us.
       const int64_t ns = key_ns(stamp);
       const auto transform = tf_buffer_->lookupTransform(params_.odom_frame, params_.base_frame,
           tf2::TimePoint(std::chrono::nanoseconds(ns - ns % 1000)));
@@ -337,8 +337,9 @@ bool LocalizationPublisher::compute_odom_base(
     }
   }
 
-  // internal_odom: odom->base = anchor * pose. The anchor is identity at the first frame and changes only at the
-  // first frame after an external reset, where odom->base is kept at its last value.
+  // internal_odom: odom->base = anchor * pose. The anchor is identity at the first frame and
+  // changes only at the first frame after an external reset, where odom->base is kept at its last
+  // value.
   if (reanchor_ || !has_odom_base_) {
     anchor_ = has_odom_base_ ? Eigen::Isometry3d(last_odom_base_ *
         T_map_base.inverse()) : Eigen::Isometry3d::Identity();
@@ -383,8 +384,9 @@ void LocalizationPublisher::on_status(const glim_localization::LocalizationStatu
   msg.residual = status.residual;
   msg.processing_time = status.processing_time;
   msg.last_reset_reason = to_message_reason(status.last_reset_reason);
-  msg.init_search = static_cast<uint8_t>(status.init_search);  // Same values, pinned by test_message_constants
-  msg.init_search_reason = static_cast<uint8_t>(status.init_search_reason);  // Same values, see test_message_constants
+  // Same values, pinned by test_message_constants
+  msg.init_search = static_cast<uint8_t>(status.init_search);
+  msg.init_search_reason = static_cast<uint8_t>(status.init_search_reason);
   msg.init_search_candidates = status.init_search_candidates;
   msg.init_search_candidates_total = status.init_search_candidates_total;
   msg.init_search_score = status.init_search_score;
@@ -395,8 +397,8 @@ void LocalizationPublisher::on_status(const glim_localization::LocalizationStatu
   msg.header.frame_id = params_.map_frame;
 
   std::lock_guard<std::mutex> lock(mutex_);
-  // A reset status is stamped with min_stamp, which may be 0 and is not a frame time: use the last frame stamp,
-  // or the current time before the first frame
+  // A reset status is stamped with min_stamp, which may be 0 and is not a frame time: use the last
+  // frame stamp, or the current time before the first frame
   msg.header.stamp =
     for_frame ? to_time_msg(status.stamp) :
     (last_stamp_ ? to_time_msg(*last_stamp_) : builtin_interfaces::msg::Time(clock_->now()));

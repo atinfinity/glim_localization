@@ -4,14 +4,15 @@
 #include <limits>
 #include <optional>
 
-#include <glim_localization_ros2/init_pose_delay.hpp>
+#include "glim_localization_ros2/init_pose_delay.hpp"
 
 using glim_localization_ros2::check_init_pose_delay;
 
 namespace
 {
 constexpr double kMax = 0.2;  // max_init_pose_delay default
-constexpr double kT = 1700000000.0;  // a realistic stamp, where a double has about 0.24 us resolution
+// a realistic stamp, where a double has about 0.24 us resolution
+constexpr double kT = 1700000000.0;
 }  // namespace
 
 TEST(InitPoseDelay, UnstampedIsAlwaysAccepted) {

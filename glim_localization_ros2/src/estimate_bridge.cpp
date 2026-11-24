@@ -1,13 +1,13 @@
-#include <glim_localization_ros2/estimate_bridge.hpp>
+#include "glim_localization_ros2/estimate_bridge.hpp"
 
 #include <algorithm>
 #include <cmath>
 #include <stdexcept>
 #include <utility>
 
-#include <spdlog/spdlog.h>
+#include "spdlog/spdlog.h"
 
-#include <glim/odometry/callbacks.hpp>
+#include "glim/odometry/callbacks.hpp"
 
 namespace glim_localization_ros2
 {
@@ -47,12 +47,13 @@ LocalizationPublisherParams read_publisher_params(const glim::Config & config)
 
 void EstimateBridge::connect(const std::shared_ptr<EstimateBridge> & bridge)
 {
-  // The IMU, frame and status callbacks all run on the thread of AsyncOdometryEstimation (insert_imu, insert_frame and
-  // the reset applied there); the mutex also covers attach, detach and the pose conversion, which run on other threads.
+  // The IMU, frame and status callbacks all run on the thread of AsyncOdometryEstimation
+  // (insert_imu, insert_frame and the reset applied there); the mutex also covers attach, detach
+  // and the pose conversion, which run on other threads.
   glim::OdometryEstimationCallbacks::on_insert_imu.add(
     [bridge](const double stamp, const Eigen::Vector3d &, const Eigen::Vector3d & angular_vel) {
       bridge->add_imu(stamp, angular_vel);
-                                                                                                                                    });
+    });
   glim::OdometryEstimationCallbacks::on_update_new_frame.add(
     [bridge](const glim::EstimationFrame::ConstPtr & frame) {
       if (frame) {
@@ -115,8 +116,9 @@ void EstimateBridge::add_frame(const glim::EstimationFrame & frame)
     // Throttled: the first rejected frame, then every 100th
     if (frames_without_gyro_++ % 100 == 0) {
       spdlog::warn(
-        "[glim_localization] a frame has no IMU sample within {} s of its stamp: it is not published ({} so far)",
-          GyroBuffer::MAX_GAP,
+        "[glim_localization] a frame has no IMU sample within {} s of its stamp: "
+        "it is not published ({} so far)",
+        GyroBuffer::MAX_GAP,
         frames_without_gyro_);
     }
     return;
@@ -174,7 +176,8 @@ std::string EstimateBridge::to_T_map_imu(
   T_map_base.linear() = q.normalized().toRotationMatrix();
   T_map_base.translation() = t;
   T_map_imu = T_map_base * T_base_imu_;
-  min_stamp = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9;  // 0 for an unstamped pose: applies at the next frame
+  // 0 for an unstamped pose: applies at the next frame
+  min_stamp = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9;
   return "";
 }
 

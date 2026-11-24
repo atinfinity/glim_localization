@@ -1,4 +1,5 @@
-// In-process test of LocalizationPublisher with synthetic frames and one map jump. No bag, no display.
+// In-process test of LocalizationPublisher with synthetic frames and one map jump. No bag, no
+// display.
 #include <gtest/gtest.h>
 
 #include <chrono>
@@ -6,13 +7,13 @@
 #include <map>
 #include <thread>
 
-#include <diagnostic_msgs/msg/diagnostic_array.hpp>
-#include <geometry_msgs/msg/pose_with_covariance_stamped.hpp>
-#include <nav_msgs/msg/odometry.hpp>
-#include <tf2_msgs/msg/tf_message.hpp>
-#include <tf2_ros/transform_broadcaster.h>
+#include "diagnostic_msgs/msg/diagnostic_array.hpp"
+#include "geometry_msgs/msg/pose_with_covariance_stamped.hpp"
+#include "nav_msgs/msg/odometry.hpp"
+#include "tf2_msgs/msg/tf_message.hpp"
+#include "tf2_ros/transform_broadcaster.h"
 
-#include <glim_localization_ros2/localization_publisher.hpp>
+#include "glim_localization_ros2/localization_publisher.hpp"
 
 namespace
 {
@@ -63,7 +64,8 @@ Eigen::Isometry3d make_pose(double x, double y, double yaw)
   return T;
 }
 
-/// Moves at 1 m/s along x while turning. The map pose jumps by `jump` along x and y at frame kJumpAt.
+/// Moves at 1 m/s along x while turning. The map pose jumps by `jump` along x and y at frame
+/// kJumpAt.
 FrameEstimate make_frame(int k, double jump)
 {
   FrameEstimate frame;
@@ -125,7 +127,7 @@ public:
       "/" + name + "/pose", rclcpp::QoS(100),
       [this](geometry_msgs::msg::PoseWithCovarianceStamped::ConstSharedPtr msg) {
         poses.push_back(*msg);
-                                                                                                       });
+      });
     odometry_sub_ = observer_->create_subscription<nav_msgs::msg::Odometry>(
       "/" + name + "/odometry", rclcpp::QoS(100),
       [this](nav_msgs::msg::Odometry::ConstSharedPtr msg) {odometries.push_back(*msg);});
@@ -135,7 +137,7 @@ public:
       "/diagnostics", rclcpp::QoS(100),
       [this](diagnostic_msgs::msg::DiagnosticArray::ConstSharedPtr msg) {
         diagnostics.push_back(*msg);
-                                                                                                     });
+      });
     publisher = std::make_unique<LocalizationPublisher>(*node_, params);
   }
 
@@ -277,7 +279,8 @@ TEST(TfMode, ParsesNames) {
   EXPECT_THROW(glim_localization_ros2::parse_tf_mode("odom"), std::invalid_argument);
 }
 
-// odom->base has no jump across an external reset, and map->odom * odom->base is the pose at every frame.
+// odom->base has no jump across an external reset, and map->odom * odom->base is the pose at every
+// frame.
 TEST(LocalizationPublisher, InternalOdomHasNoOdomJumpAtAnExternalResetAndComposesToPose) {
   LocalizationPublisherParams params;
   params.tf_mode = TfMode::INTERNAL_ODOM;
@@ -291,9 +294,10 @@ TEST(LocalizationPublisher, InternalOdomHasNoOdomJumpAtAnExternalResetAndCompose
     fixture.feed(make_frame(k, 3.0));
   }
   ASSERT_TRUE(fixture.spin_until([&] {
-      return fixture.poses.size() >= kFrames && fixture.count("odom",
-      "base_link") >= kFrames && fixture.count("map", "odom") >= kFrames;
-                                                                                                                                                                         }));
+      return fixture.poses.size() >= kFrames &&
+             fixture.count("odom", "base_link") >= kFrames &&
+             fixture.count("map", "odom") >= kFrames;
+    }));
   ASSERT_EQ(fixture.poses.size(), static_cast<size_t>(kFrames));
 
   std::optional<Eigen::Isometry3d> previous_odom;
@@ -339,7 +343,7 @@ TEST(LocalizationPublisher, InternalOdomAbsorbsSmallJumpOfAnExternalReset) {
   }
   ASSERT_TRUE(fixture.spin_until([&] {
       return fixture.poses.size() >= kFrames && fixture.count("odom", "base_link") >= kFrames;
-                                                                                                                              }));
+    }));
 
   std::optional<Eigen::Isometry3d> previous;
   double largest_step = 0.0;
@@ -390,13 +394,13 @@ TEST(LocalizationPublisher, ExternalOdomUsesTheGivenOdomBase) {
     const tf2::TimePoint tp(std::chrono::nanoseconds(key(t.header.stamp)));
     ASSERT_TRUE(fixture.spin_until([&] {
         return fixture.publisher->tf_buffer()->canTransform("odom", "base_link", tp);
-                                                                                                                     }))
+      }))
       << "frame " << k;
     fixture.feed(frame);
   }
   ASSERT_TRUE(fixture.spin_until([&] {
       return fixture.poses.size() >= kFrames && fixture.count("map", "odom") >= kFrames;
-                                                                                                                        }));
+    }));
   EXPECT_EQ(fixture.publisher->tf_lookup_failures(), 0u);
   // Only the fake publishes odom->base
   EXPECT_EQ(fixture.count("odom", "base_link"), static_cast<size_t>(kFrames));
@@ -531,7 +535,7 @@ TEST(LocalizationPublisher, InitSearchResultIsReported) {
   fixture.publisher->on_status(no_candidate);
   ASSERT_TRUE(fixture.spin_until([&] {
       return fixture.statuses.size() >= 5 && fixture.diagnostics.size() >= 5;
-                                                                                                             }));
+    }));
 
   const auto & msg = fixture.statuses[0];
   EXPECT_EQ(msg.init_search, StatusMsg::INIT_SEARCH_ACCEPTED);
@@ -629,8 +633,8 @@ TEST(LocalizationPublisher, FrameReplacedBeforeItsStatusIsDroppedAndCounted) {
   EXPECT_EQ(fixture.publisher->unpaired_frames(), 1u);
 }
 
-// internal_odom: a LOST frame gives no pose, odometry or map->odom, only odom->base. The first LOST frame is
-// already suppressed, and the frame after it is published again.
+// internal_odom: a LOST frame gives no pose, odometry or map->odom, only odom->base. The first LOST
+// frame is already suppressed, and the frame after it is published again.
 TEST(LocalizationPublisher, LostFrameIsSuppressedExceptOdomBase) {
   Fixture fixture(LocalizationPublisherParams(), "publisher_lost");
   fixture.wait_for_discovery(1);
@@ -638,9 +642,9 @@ TEST(LocalizationPublisher, LostFrameIsSuppressedExceptOdomBase) {
   fixture.feed(make_frame(1, 0.0), LocalizationState::LOST);
   fixture.feed(make_frame(2, 0.0));
   ASSERT_TRUE(fixture.spin_until([&] {
-      return fixture.statuses.size() >= 3 && fixture.count("odom",
-      "base_link") >= 3 && fixture.odometries.size() >= 2;
-                                                                                                                                                       }));
+      return fixture.statuses.size() >= 3 && fixture.count("odom", "base_link") >= 3 &&
+             fixture.odometries.size() >= 2;
+    }));
   fixture.spin_for(200ms);
   ASSERT_EQ(fixture.poses.size(), 2u);
   EXPECT_EQ(key(fixture.poses[0].header.stamp), key(to_msg(kStart)));
@@ -680,7 +684,7 @@ TEST(LocalizationPublisher, ResumesAfterLostAndExternalResetWithoutOdomBaseStep)
   fixture.feed(make_frame_at(kStart + 5 * kDt, make_pose(40.0, 0.0, 0.0)));
   ASSERT_TRUE(fixture.spin_until([&] {
       return fixture.count("odom", "base_link") >= 6 && fixture.count("map", "odom") >= 4;
-                                                                                                                          }));
+    }));
   const auto last_lost = fixture.find("odom", "base_link", key(to_msg(kStart + 4 * kDt)));
   const auto resumed = fixture.find("odom", "base_link", key(to_msg(kStart + 5 * kDt)));
   ASSERT_TRUE(last_lost && resumed);
@@ -703,7 +707,7 @@ TEST(LocalizationPublisher, ExternalResetAfterALongPauseDoesNotStepOdomBase) {
     fixture.feed(make_frame_at(160.1, after));
     ASSERT_TRUE(fixture.spin_until([&] {
         return fixture.count("odom", "base_link") >= 3 && fixture.count("map", "odom") >= 3;
-                                                                                                                            }))
+      }))
       << name;
     const auto before_odom = fixture.find("odom", "base_link", key(to_msg(100.1)));
     const auto after_odom = fixture.find("odom", "base_link", key(to_msg(160.1)));
@@ -786,7 +790,8 @@ TEST(LocalizationPublisher, ImuGapResetDoesNotChangeMapOdom) {
   EXPECT_EQ(pose_step(*first, *last), 0.0);
 }
 
-// Pins the definition: a change of the estimate without a reset, such as a 90 deg correction, is in odom->base.
+// Pins the definition: a change of the estimate without a reset, such as a 90 deg correction, is in
+// odom->base.
 TEST(LocalizationPublisher, YawChangeWithoutResetGoesToOdomBase) {
   Fixture fixture(LocalizationPublisherParams(), "publisher_yaw");
   fixture.wait_for_discovery(1);
@@ -802,11 +807,13 @@ TEST(LocalizationPublisher, YawChangeWithoutResetGoesToOdomBase) {
   EXPECT_EQ(pose_step(*map_a, *map_b), 0.0);
 }
 
-// M4, N2: the twist of the base from the IMU's velocity and angular velocity, with a lever arm and a rotated T_base_imu.
+// M4, N2: the twist of the base from the IMU's velocity and angular velocity, with a lever arm and
+// a rotated T_base_imu.
 TEST(LocalizationPublisher, TwistOfASpinInPlaceHasNoLinearPartWithALeverArm) {
   LocalizationPublisherParams params;
   params.tf_mode = TfMode::NONE;
-  params.T_base_imu.translation() = Eigen::Vector3d(1.0, 0.0, 0.0);  // the IMU is 1 m ahead of the base
+  // the IMU is 1 m ahead of the base
+  params.T_base_imu.translation() = Eigen::Vector3d(1.0, 0.0, 0.0);
   Fixture fixture(params, "publisher_spin");
   fixture.wait_for_discovery(1);
   // The base spins at the origin at 1 rad/s, so the IMU moves along y at 1 m/s
@@ -904,7 +911,8 @@ TEST(LocalizationPublisher, ResetStatusIsStampedWithTheLastFrameStamp) {
   EXPECT_EQ(key(fixture.statuses[1].header.stamp), key(to_msg(kStart + 2 * kDt)));
 }
 
-// N1: the stamp loses ns at epoch scale; an odom sample at exactly the frame stamp must still be found.
+// N1: the stamp loses ns at epoch scale; an odom sample at exactly the frame stamp must still be
+// found.
 TEST(LocalizationPublisher, ExternalOdomFindsSamplesAtEpochScaleStamps) {
   LocalizationPublisherParams params;
   params.tf_mode = TfMode::EXTERNAL_ODOM;
@@ -928,7 +936,7 @@ TEST(LocalizationPublisher, ExternalOdomFindsSamplesAtEpochScaleStamps) {
       const tf2::TimePoint tp(std::chrono::nanoseconds(key(t.header.stamp)));
       ASSERT_TRUE(fixture.spin_until([&] {
           return fixture.publisher->tf_buffer()->canTransform("odom", "base_link", tp);
-                                                                                                                       }));
+        }));
     };
   // The sample before the first frame, so that no lookup needs extrapolation
   send(start - 0.1, -0.1);

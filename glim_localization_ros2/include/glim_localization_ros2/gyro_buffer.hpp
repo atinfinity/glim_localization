@@ -7,18 +7,20 @@
 #include <iterator>
 #include <utility>
 
-#include <Eigen/Core>
+#include "Eigen/Core"
 
 namespace glim_localization_ros2
 {
 
-/// The last second of raw gyro samples, to give each frame the angular velocity of its stamp (FrameEstimate::w_imu).
-/// Not thread-safe; the caller locks. Header only and free of ROS, so that it can be tested alone.
+/// The last second of raw gyro samples, to give each frame the angular velocity of its stamp
+/// (FrameEstimate::w_imu). Not thread-safe; the caller locks. Header only and free of ROS, so that
+/// it can be tested alone.
 class GyroBuffer {
 public:
-  /// A frame whose nearest gyro sample is farther than this [s] gets no angular velocity. About 2 periods of a 100 Hz IMU,
-  /// the slowest rate in common use; a faster IMU is held to the same bound. It also rejects a frame that the odometry
-  /// handles more than the window after the IMU data it has seen (the window is counted back from the newest sample).
+  /// A frame whose nearest gyro sample is farther than this [s] gets no angular velocity. About 2
+  /// periods of a 100 Hz IMU, the slowest rate in common use; a faster IMU is held to the same
+  /// bound. It also rejects a frame that the odometry handles more than the window after the IMU
+  /// data it has seen (the window is counted back from the newest sample).
   static constexpr double MAX_GAP = 0.02;
   static constexpr double WINDOW = 1.0;  ///< [s], counted back from the newest sample
 
@@ -28,7 +30,8 @@ public:
       return;
     }
     if (!samples_.empty() && stamp < samples_.back().first) {
-      samples_.clear();  // time went backwards (a bag played again): old samples are not neighbours any more
+      // time went backwards (a bag played again): old samples are not neighbours any more
+      samples_.clear();
     }
     samples_.emplace_back(stamp, gyro);
     while (samples_.front().first < stamp - WINDOW) {
@@ -36,7 +39,8 @@ public:
     }
   }
 
-  /// The sample nearest to stamp, if it is within MAX_GAP. Returns false for an empty buffer or a non-finite stamp.
+  /// The sample nearest to stamp, if it is within MAX_GAP. Returns false for an empty buffer or a
+  /// non-finite stamp.
   bool nearest(double stamp, Eigen::Vector3d & gyro) const
   {
     if (samples_.empty() || !std::isfinite(stamp)) {

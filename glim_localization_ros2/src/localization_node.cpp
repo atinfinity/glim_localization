@@ -3,19 +3,21 @@
 //
 // R2: glim_localization_node, an rclcpp_lifecycle node (also a component).
 //
-//   configure   reads the GLIM JSON config (config_path), loads the map (map_path) and publishes it on ~/map (latched);
-//               a bad map fails the transition
-//   activate    creates the odometry, the publisher and the subscriptions; estimation starts with the first data
+//   configure   reads the GLIM JSON config (config_path), loads the map (map_path) and publishes
+//               it on ~/map (latched); a bad map fails the transition
+//   activate    creates the odometry, the publisher and the subscriptions; estimation starts with
+//               the first data
 //   deactivate  drops the subscriptions and stops the odometry thread (pending input is discarded)
 //   cleanup     releases the map and the config
 //
-// The input handling (IMU and point cloud conversion, TimeKeeper, the QoS settings in config_ros.json) follows GlimROS.
-// Unlike GlimROS, the node holds the odometry module itself (no dlopen), so ~/initialize, ~/relocalize and /initialpose
-// call its reset() directly. Results go through EstimateBridge and LocalizationPublisher, as in R1.
+// The input handling (IMU and point cloud conversion, TimeKeeper, the QoS settings in
+// config_ros.json) follows GlimROS. Unlike GlimROS, the node holds the odometry module itself (no
+// dlopen), so ~/initialize, ~/relocalize and /initialpose call its reset() directly. Results go
+// through EstimateBridge and LocalizationPublisher, as in R1.
 //
-// With autostart:=true the node configures and activates itself once it is spinning (for launch files, also when it is
-// loaded as a component, where launch_ros cannot drive the lifecycle). A failed transition is logged and leaves the node
-// where it stopped; drive it by hand from there.
+// With autostart:=true the node configures and activates itself once it is spinning (for launch
+// files, also when it is loaded as a component, where launch_ros cannot drive the lifecycle). A
+// failed transition is logged and leaves the node where it stopped; drive it by hand from there.
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -27,33 +29,33 @@
 #include <string>
 #include <vector>
 
-#include <Eigen/Geometry>
+#include "Eigen/Geometry"
 
-#include <ament_index_cpp/get_package_share_directory.hpp>
-#include <geometry_msgs/msg/pose_with_covariance_stamped.hpp>
-#include <rclcpp/rclcpp.hpp>
-#include <rclcpp_components/register_node_macro.hpp>
-#include <lifecycle_msgs/msg/state.hpp>
-#include <rclcpp_lifecycle/lifecycle_node.hpp>
-#include <sensor_msgs/msg/imu.hpp>
-#include <sensor_msgs/msg/point_cloud2.hpp>
-#include <std_srvs/srv/trigger.hpp>
+#include "ament_index_cpp/get_package_share_directory.hpp"
+#include "geometry_msgs/msg/pose_with_covariance_stamped.hpp"
+#include "rclcpp/rclcpp.hpp"
+#include "rclcpp_components/register_node_macro.hpp"
+#include "lifecycle_msgs/msg/state.hpp"
+#include "rclcpp_lifecycle/lifecycle_node.hpp"
+#include "sensor_msgs/msg/imu.hpp"
+#include "sensor_msgs/msg/point_cloud2.hpp"
+#include "std_srvs/srv/trigger.hpp"
 
 #define GLIM_ROS2  // selects the ROS 2 message types in ros_cloud_converter.hpp
-#include <glim/odometry/async_odometry_estimation.hpp>
-#include <glim/preprocess/cloud_preprocessor.hpp>
-#include <glim/util/config.hpp>
-#include <glim/util/ros_cloud_converter.hpp>
-#include <glim/util/time_keeper.hpp>
+#include "glim/odometry/async_odometry_estimation.hpp"
+#include "glim/preprocess/cloud_preprocessor.hpp"
+#include "glim/util/config.hpp"
+#include "glim/util/ros_cloud_converter.hpp"
+#include "glim/util/time_keeper.hpp"
 
-#include <glim_localization/map/map_manager.hpp>
-#include <glim_localization/odometry/localization_backend.hpp>
-#include <glim_localization/odometry/odometry_estimation_localization.hpp>
-#include <glim_localization_msgs/srv/initialize.hpp>
-#include <glim_localization_ros2/estimate_bridge.hpp>
-#include <glim_localization_ros2/init_pose_delay.hpp>
-#include <glim_localization_ros2/localization_publisher.hpp>
-#include <glim_localization_ros2/map_publisher.hpp>
+#include "glim_localization/map/map_manager.hpp"
+#include "glim_localization/odometry/localization_backend.hpp"
+#include "glim_localization/odometry/odometry_estimation_localization.hpp"
+#include "glim_localization_msgs/srv/initialize.hpp"
+#include "glim_localization_ros2/estimate_bridge.hpp"
+#include "glim_localization_ros2/init_pose_delay.hpp"
+#include "glim_localization_ros2/localization_publisher.hpp"
+#include "glim_localization_ros2/map_publisher.hpp"
 
 namespace glim_localization_ros2
 {
@@ -90,8 +92,9 @@ bool init_qos_profile(const std::string & name, rmw_qos_profile_t & profile)
   return true;
 }
 
-/// The QoS of glim_ros.<param_name> in config_ros.json ({profile, depth, durability, reliability, history}), as GlimROS
-/// reads it: the profile defaults to sensor_data, and default_qos is used when nothing is configured.
+/// The QoS of glim_ros.<param_name> in config_ros.json ({profile, depth, durability, reliability,
+/// history}), as GlimROS reads it: the profile defaults to sensor_data, and default_qos is used
+/// when nothing is configured.
 rclcpp::QoS read_qos(
   const glim::Config & config, const std::string & param_name,
   const rclcpp::Logger & logger, const std::optional<rclcpp::QoS> & default_qos = {})
@@ -173,7 +176,8 @@ public:
       // One shot, from the executor: the transitions must not run inside the constructor
       autostart_timer_ = create_wall_timer(std::chrono::milliseconds(0), [this] {autostart();});
     }
-    // The core reports through static slots: connect once, before any odometry of this node starts (see EstimateBridge)
+    // The core reports through static slots: connect once, before any odometry of this node starts
+    // (see EstimateBridge)
     EstimateBridge::connect(bridge_);
   }
 
@@ -276,7 +280,8 @@ private:
       return false;
     }
 
-    // GLIM reads its settings from the process-wide GlobalConfig; replace it so that a new configure sees new files
+    // GLIM reads its settings from the process-wide GlobalConfig; replace it so that a new
+    // configure sees new files
     glim::GlobalConfig::instance(config_path, true);
     RCLCPP_INFO(get_logger(), "config_path: %s", config_path.c_str());
     const glim::Config config_ros(glim::GlobalConfig::get_config_path("config_ros"));
@@ -340,7 +345,8 @@ private:
       if (map_publisher_params.voxel_size <= 0.0 && num_map_points > kLargeMapCloudPoints) {
         RCLCPP_WARN(
           get_logger(),
-            "map_cloud_voxel is 0 and the map has %zu points: ~/map is large and slow to build and send; set map_cloud_voxel",
+          "map_cloud_voxel is 0 and the map has %zu points: "
+          "~/map is large and slow to build and send; set map_cloud_voxel",
           num_map_points);
       }
       map_publisher_ = std::make_unique<MapPublisher>(get_node_topics_interface(), get_clock(),
@@ -363,7 +369,7 @@ private:
       [this](const std::shared_ptr<TriggerSrv::Request>,
       std::shared_ptr<TriggerSrv::Response> res) {
         on_relocalize(*res);
-                                                                                                                         });
+      });
     return true;
   }
 
@@ -394,7 +400,8 @@ private:
         [this](const PointsMsg::ConstSharedPtr msg) {on_points(*msg);});
     initial_pose_sub_ = subscribe<PoseMsg>("/initialpose", rclcpp::QoS(10),
         [this](const PoseMsg::ConstSharedPtr msg) {on_initial_pose(*msg);});
-    // AsyncOdometryEstimation also queues its results for get_results(); the node publishes from the callbacks, so drop them
+    // AsyncOdometryEstimation also queues its results for get_results(); the node publishes from
+    // the callbacks, so drop them
     drain_timer_ = create_wall_timer(std::chrono::milliseconds(100), [this] {
           std::vector<glim::EstimationFrame::ConstPtr> results, marginalized;
           if (async_odometry_) {
@@ -403,9 +410,10 @@ private:
     });
   }
 
-  /// A subscription that logs each change of its matched publishers. A message sent before its publisher is matched is
-  /// lost (volatile), so "matched publishers on <topic>: N" tells whether a sender is connected yet; the launch tests
-  /// wait for it before playing a bag. Without matched events in the RMW, a plain subscription.
+  /// A subscription that logs each change of its matched publishers. A message sent before its
+  /// publisher is matched is lost (volatile), so "matched publishers on <topic>: N" tells whether a
+  /// sender is connected yet; the launch tests wait for it before playing a bag. Without matched
+  /// events in the RMW, a plain subscription.
   template<typename MsgT, typename CallbackT>
   typename rclcpp::Subscription<MsgT>::SharedPtr subscribe(
     const std::string & topic,
@@ -433,16 +441,17 @@ private:
     initial_pose_sub_.reset();
     points_sub_.reset();
     imu_sub_.reset();
-    async_odometry_.reset();  // stops and joins the odometry thread, so no callback comes after this
+    // stops and joins the odometry thread, so no callback comes after this
+    async_odometry_.reset();
     odometry_.reset();
     if (bridge_->attached()) {
-      // One line per active period, so that a test log tells which path lost frames. After the join, so the frames
-      // still queued in the odometry thread are counted too
+      // One line per active period, so that a test log tells which path lost frames. After the
+      // join, so the frames still queued in the odometry thread are counted too
       const auto drops = bridge_->drop_counts();
       RCLCPP_INFO(
         get_logger(),
-        "stopping: received %zu IMU samples and %zu point clouds (first cloud stamp %.3f); dropped frames: %zu without gyro, %zu unpaired, "
-        "%zu stale; %zu TF lookup failures",
+        "stopping: received %zu IMU samples and %zu point clouds (first cloud stamp %.3f); "
+        "dropped frames: %zu without gyro, %zu unpaired, %zu stale; %zu TF lookup failures",
         num_imu_.load(), num_points_.load(), first_points_stamp_.load(), drops.frames_without_gyro,
           drops.unpaired_frames, drops.stale_frames,
         drops.tf_lookup_failures);
@@ -531,16 +540,17 @@ private:
     if (!error.empty()) {
       return error;
     }
-    // Compared with the last frame the odometry thread took, estimated or dropped (not the last estimated frame: none
-    // is estimated before the first pose or while LOST)
+    // Compared with the last frame the odometry thread took, estimated or dropped (not the last
+    // estimated frame: none is estimated before the first pose or while LOST)
     const InitPoseDelay delay = check_init_pose_delay(min_stamp,
         odometry_->last_input_frame_stamp(), max_init_pose_delay_);
     if (!delay.accept) {
       char buf[192];
       std::snprintf(
         buf, sizeof(buf),
-          "too late: the pose is at least %.3f s older than the last frame taken by the odometry (max_init_pose_delay %.3f s)",
-          *delay.late_by,
+        "too late: the pose is at least %.3f s older than the last frame taken by the odometry "
+        "(max_init_pose_delay %.3f s)",
+        *delay.late_by,
         max_init_pose_delay_);
       return buf;
     }
@@ -581,22 +591,24 @@ private:
     }
   }
 
-  /// Restart from the newest estimate, moved to the next frame by its velocity (the core's relocalize()). Refused
-  /// unless TRACKING or DEGRADED, while a reset is pending (it would silently replace an accepted ~/initialize: the
-  /// latest request wins), and when the estimate is more than max_init_pose_delay older than the last input frame.
+  /// Restart from the newest estimate, moved to the next frame by its velocity (the core's
+  /// relocalize()). Refused unless TRACKING or DEGRADED, while a reset is pending (it would
+  /// silently replace an accepted ~/initialize: the latest request wins), and when the estimate is
+  /// more than max_init_pose_delay older than the last input frame.
   void on_relocalize(TriggerSrv::Response & res)
   {
     res.success = false;
     if (!odometry_) {
       res.message = "the localization is not active";
-    } else if (const std::string error = odometry_->relocalize(max_init_pose_delay_);
-      !error.empty())
-    {
-      res.message = error;
     } else {
-      res.success = true;
-      res.message = "accepted: restarting from the newest estimate at the next frame";
-      RCLCPP_INFO(get_logger(), "~/relocalize: reset requested from the newest estimate");
+      const std::string error = odometry_->relocalize(max_init_pose_delay_);
+      if (!error.empty()) {
+        res.message = error;
+      } else {
+        res.success = true;
+        res.message = "accepted: restarting from the newest estimate at the next frame";
+        RCLCPP_INFO(get_logger(), "~/relocalize: reset requested from the newest estimate");
+      }
     }
     if (!res.success) {
       RCLCPP_WARN(get_logger(), "~/relocalize rejected: %s", res.message.c_str());
@@ -619,8 +631,8 @@ private:
 
   // Set by activate
   double acc_scale_ = 0.0;
-  // Written by the subscription callbacks, read by stop(), which can also run from on_shutdown or the destructor on
-  // another thread
+  // Written by the subscription callbacks, read by stop(), which can also run from on_shutdown or
+  // the destructor on another thread
   std::atomic<size_t> num_imu_{0};
   std::atomic<size_t> num_points_{0};
   std::atomic<double> first_points_stamp_{0.0};

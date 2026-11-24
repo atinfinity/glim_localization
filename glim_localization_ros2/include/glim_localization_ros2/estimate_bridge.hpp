@@ -6,15 +6,15 @@
 #include <string>
 #include <vector>
 
-#include <Eigen/Geometry>
+#include "Eigen/Geometry"
 
-#include <geometry_msgs/msg/pose_with_covariance_stamped.hpp>
+#include "geometry_msgs/msg/pose_with_covariance_stamped.hpp"
 
-#include <glim/odometry/estimation_frame.hpp>
-#include <glim/util/config.hpp>
-#include <glim_localization/odometry/odometry_estimation_localization.hpp>
-#include <glim_localization_ros2/gyro_buffer.hpp>
-#include <glim_localization_ros2/localization_publisher.hpp>
+#include "glim/odometry/estimation_frame.hpp"
+#include "glim/util/config.hpp"
+#include "glim_localization/odometry/odometry_estimation_localization.hpp"
+#include "glim_localization_ros2/gyro_buffer.hpp"
+#include "glim_localization_ros2/localization_publisher.hpp"
 
 namespace glim_localization_ros2
 {
@@ -23,23 +23,26 @@ namespace glim_localization_ros2
 /// @throw std::invalid_argument if the size is not 7 or the values are not a valid pose
 Eigen::Isometry3d parse_pose7(const std::vector<double> & v, const std::string & name);
 
-/// Publisher settings from config_ros.json: map and odom frame names from "glim_ros", the rest from "localization_ros"
-/// (tf_mode, base_frame_id, T_base_imu, diagnostics_period). Shared by R1 and R2.
+/// Publisher settings from config_ros.json: map and odom frame names from "glim_ros", the rest from
+/// "localization_ros" (tf_mode, base_frame_id, T_base_imu, diagnostics_period). Shared by R1 and
+/// R2.
 /// @throw std::invalid_argument for a bad tf_mode or T_base_imu
 LocalizationPublisherParams read_publisher_params(const glim::Config & config_ros);
 
-/// Connects the core's callbacks to a LocalizationPublisher. Shared by the R1 extension and the R2 node.
+/// Connects the core's callbacks to a LocalizationPublisher. Shared by the R1 extension and the R2
+/// node.
 ///
-/// The core reports through static CallbackSlots, which are not thread-safe to modify while an odometry thread runs.
-/// So a bridge is connected once (connect()) and stays registered for the rest of the process; attach() and detach()
-/// switch the forwarding on and off under a mutex. Every connected bridge receives the callbacks of every odometry
-/// instance in the process, so run one localization (R1 or R2) per process.
+/// The core reports through static CallbackSlots, which are not thread-safe to modify while an
+/// odometry thread runs. So a bridge is connected once (connect()) and stays registered for the
+/// rest of the process; attach() and detach() switch the forwarding on and off under a mutex. Every
+/// connected bridge receives the callbacks of every odometry instance in the process, so run one
+/// localization (R1 or R2) per process.
 class EstimateBridge {
 public:
   using PoseMsg = geometry_msgs::msg::PoseWithCovarianceStamped;
 
-  /// Register bridge in OdometryEstimationCallbacks::on_insert_imu, on_update_new_frame and LocalizationCallbacks::on_status.
-  /// Call before the odometry starts.
+  /// Register bridge in OdometryEstimationCallbacks::on_insert_imu, on_update_new_frame and
+  /// LocalizationCallbacks::on_status. Call before the odometry starts.
   static void connect(const std::shared_ptr<EstimateBridge> & bridge);
 
   /// Start forwarding to publisher. Clears the gyro buffer.
@@ -50,7 +53,8 @@ public:
   void detach();
   bool attached() const;
 
-  /// Raw gyro of a sample given to the odometry (FrameEstimate::w_imu needs it; the core does not keep it on the frame)
+  /// Raw gyro of a sample given to the odometry (FrameEstimate::w_imu needs it; the core does not
+  /// keep it on the frame)
   void add_imu(double stamp, const Eigen::Vector3d & angular_vel);
   /// A corrected frame (on_update_new_frame). Stored by the publisher until its status arrives.
   void add_frame(const glim::EstimationFrame & frame);
@@ -58,9 +62,10 @@ public:
   void add_status(const glim_localization::LocalizationStatus & status);
 
 
-  /// Convert an initial pose of the base frame in the map frame to the IMU pose for the core's reset().
-  /// min_stamp is the message stamp (0 when unstamped, meaning the next frame).
-  /// @return an empty string on success, otherwise why the pose is rejected (not attached, wrong frame, invalid pose)
+  /// Convert an initial pose of the base frame in the map frame to the IMU pose for the core's
+  /// reset(). min_stamp is the message stamp (0 when unstamped, meaning the next frame).
+  /// @return an empty string on success, otherwise why the pose is rejected (not attached, wrong
+  /// frame, invalid pose)
   std::string to_T_map_imu(
     const PoseMsg & msg, Eigen::Isometry3d & T_map_imu,
     double & min_stamp) const;
