@@ -19,6 +19,12 @@ permissions:
   contents: read
 
 jobs:
+  # amd64. The repository ruleset requires this check by its name, so the job id stays as is.
+  # build-and-test-arm64 runs the same steps (YAML anchor build-and-test-steps) on an arm64 runner;
+  # the per-architecture values come from the job environment:
+  #   IMAGE_TAG_SUFFIX    appended to the GHCR tag (the amd64 tag has none, as before)
+  #   BUILDX_CACHE_SCOPE  scope of the buildx layer cache in the GitHub Actions cache
+  # The ccache keys start with runner.arch.
   build-and-test:
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: ubuntu-24.04
@@ -26,10 +32,13 @@ jobs:
     permissions:
       contents: read
       packages: read  # pull the prebuilt image while the package is private
+    env:
+      IMAGE_TAG_SUFFIX: ''
+      BUILDX_CACHE_SCOPE: image-amd64
     outputs:
       image: ${{ steps.image.outputs.ref }}
       missing: ${{ steps.pull.outputs.missing }}
-    steps:
+    steps: &build-and-test-steps
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           fetch-depth: 2  # The PR merge commit and its parents.
@@ -48,13 +57,14 @@ jobs:
           echo "docs_only=${docs_only}" >> "${GITHUB_OUTPUT}"
           echo "docs_only=${docs_only}"
       # The prebuilt image is tagged with the hash of the files it bakes in (the same list that
-      # scripts/ci_local.sh checks), so a pulled image always matches this tree.
+      # scripts/ci_local.sh checks), so a pulled image always matches this tree. Each architecture
+      # has its own single-platform tag (suffix IMAGE_TAG_SUFFIX), so a pull never gets the other one.
       - name: Resolve the prebuilt image
         id: image
         if: steps.changes.outputs.docs_only != 'true'
         run: |
           hash="$(scripts/image_inputs_hash.sh)"
-          ref="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/glim_localization:${hash}"
+          ref="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/glim_localization:${hash}${IMAGE_TAG_SUFFIX}"
           echo "hash=${hash}" >> "${GITHUB_OUTPUT}"
           echo "ref=${ref}" >> "${GITHUB_OUTPUT}"
           echo "image: ${ref}"
@@ -107,8 +117,8 @@ jobs:
           load: true
           tags: glim_localization:dev
           build-args: JOBS=2
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=${{ env.BUILDX_CACHE_SCOPE }}
+          cache-to: type=gha,scope=${{ env.BUILDX_CACHE_SCOPE }},mode=max
       # Only pushes to main save the compiler cache; PRs restore main's (same image, nearest sources).
       - name: Restore ccache
         id: ccache
@@ -116,11 +126,12 @@ jobs:
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
         with:
           path: ${{ runner.temp }}/ccache
-          key: ccache-${{ steps.image.outputs.hash }}-${{ hashFiles('glim_localization/**', 'glim_localization_msgs/**', 'glim_localization_ros2/**') }}
-          # ccache checks the compiler and hashes the headers itself, so another image's cache is safe.
+          key: ccache-${{ runner.arch }}-${{ steps.image.outputs.hash }}-${{ hashFiles('glim_localization/**', 'glim_localization_msgs/**', 'glim_localization_ros2/**') }}
+          # ccache checks the compiler and hashes the headers itself, so another image's cache is
+          # safe. Another architecture's cache would only miss, so it is never restored.
           restore-keys: |
-            ccache-${{ steps.image.outputs.hash }}-
-            ccache-
+            ccache-${{ runner.arch }}-${{ steps.image.outputs.hash }}-
+            ccache-${{ runner.arch }}-
       - name: Run checks
         if: steps.changes.outputs.docs_only != 'true'
         env:
@@ -138,6 +149,23 @@ jobs:
           path: ${{ runner.temp }}/ccache
           key: ${{ steps.ccache.outputs.cache-primary-key }}
 
+  # The same checks on arm64 (GitHub-hosted arm64 runner, free for public repositories), with the
+  # steps of build-and-test. A cold image build takes longer here, hence the longer timeout.
+  build-and-test-arm64:
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: read
+    env:
+      IMAGE_TAG_SUFFIX: -arm64
+      BUILDX_CACHE_SCOPE: image-arm64
+    outputs:
+      image: ${{ steps.image.outputs.ref }}
+      missing: ${{ steps.pull.outputs.missing }}
+    steps: *build-and-test-steps
+
   # The CUDA image needs an NVIDIA GPU machine to build and test (README, "CUDA variant"). Here only
   # docker/Dockerfile.cuda is parsed and linted (its check directive turns warnings into errors).
   cuda-dockerfile:
@@ -150,7 +178,8 @@ jobs:
         run: docker build --check -f docker/Dockerfile.cuda .
 
   # Pushes the image only after the checks passed on main, and only when it was not on GHCR yet.
-  # Never runs for PRs or forks, so only this job gets packages: write.
+  # Never runs for PRs or forks, so only the publish jobs get packages: write. publish-image-arm64
+  # runs the same steps for the arm64 image, built natively on an arm64 runner.
   publish-image:
     needs: build-and-test
     if: >-
@@ -161,7 +190,10 @@ jobs:
     permissions:
       contents: read
       packages: write
-    steps:
+    env:
+      IMAGE: ${{ needs.build-and-test.outputs.image }}
+      BUILDX_CACHE_SCOPE: image-amd64
+    steps: &publish-image-steps
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069  # v4.4.1
       - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550  # v4.8.0
@@ -181,7 +213,22 @@ jobs:
           context: .
           file: docker/Dockerfile
           push: true
-          tags: ${{ needs.build-and-test.outputs.image }}
+          tags: ${{ env.IMAGE }}
           labels: org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
           build-args: JOBS=2
-          cache-from: type=gha
+          cache-from: type=gha,scope=${{ env.BUILDX_CACHE_SCOPE }}
+
+  publish-image-arm64:
+    needs: build-and-test-arm64
+    if: >-
+      github.event_name == 'push' && github.ref == 'refs/heads/main' && !github.event.repository.fork
+      && needs.build-and-test-arm64.outputs.missing == 'true'
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+    env:
+      IMAGE: ${{ needs.build-and-test-arm64.outputs.image }}
+      BUILDX_CACHE_SCOPE: image-arm64
+    steps: *publish-image-steps
