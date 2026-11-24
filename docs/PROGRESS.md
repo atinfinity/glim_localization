@@ -607,3 +607,14 @@ Second step of [#2](https://github.com/atinfinity/glim_localization/issues/2): t
   - Docs: the flat-ground assumption, and that no noise filter is applied.
   - Re-verified in Docker on the development Mac: core ctest 247/247, Python tests 190.
 - **Open**: covariance recomputation for GLIM dumps moved to [#31](https://github.com/atinfinity/glim_localization/issues/31).
+
+## README demo animation (2026-11-25, [#25](https://github.com/atinfinity/glim_localization/issues/25))
+
+- **Renderer** (`scripts/render_demo.py`): a top-down view per estimated frame with the map points, the current scan moved to the map frame by `T_world_imu * inv(T_lidar_imu)`, the estimated trajectory so far, the ground truth (optional), and the state and inlier ratio from `frames.csv`. Rendered offscreen with matplotlib (Agg) and written as GIF or WebP with Pillow; both come with evo in the pinned requirements, so no dependency was added.
+  - Reads the map as a PCD (ascii or binary) and the scans from `points/*.bin`. A GLIM dump or a compiled map is not read: the synthetic data has the same scene as `map.pcd`.
+  - The GIF uses one 64-color palette from the middle frame for all frames, without dithering, to keep it small and the colors stable.
+  - A height band (`--z-min`, `--z-max`) hides the floor; without it the floor covers the top-down view.
+- **Media**: `docs/media/replay_synthetic.gif` from the synthetic end-to-end run (`run1` of `test_replay_e2e.sh`: 12 s, offset initial pose): 121 frames, 720 x 300 px, 10 fps, about 0.4 MB. Embedded near the top of the README; regeneration is in [Demo animation](replay.md#demo-animation).
+- **Test**: `scripts/tests/test_render_demo.py` on a tiny synthetic replay (4 frames, one dropped): the GIF has one frame per estimate, WebP and `--stride`, ascii and binary PCD agree, the scan transform with a non-identity `T_lidar_imu`, and bad inputs exit 2.
+- **Verification** (Docker on the development Mac): Python tests 195 pass.
+- **Open**: the official GLIM sample sequence (license check and credit first) and the yaw search demo ([#3](https://github.com/atinfinity/glim_localization/issues/3), after PR [#24](https://github.com/atinfinity/glim_localization/pull/24)) stay in [#25](https://github.com/atinfinity/glim_localization/issues/25).
