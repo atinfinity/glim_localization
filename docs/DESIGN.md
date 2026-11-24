@@ -200,7 +200,7 @@ Two stages: development and evaluation put an extension on the existing `glim_ro
 
 ### Core and ROS 2 boundary
 
-The core (`glim_localization/`) depends only on GLIM, gtsam_points and their libraries. ament is used only to export the package when it is found. The core has no rclcpp, message, parameter or TF code. All estimation, state and map logic lives in the core, so the offline tools and the core tests run without ROS. The ROS 2 packages have no estimation logic of their own: they convert messages, parameters and services and call the core API.
+The core (`glim_localization/`) depends only on GLIM, gtsam_points, nlohmann_json and the libraries they use. ament is used only to export the package when it is found. The core has no rclcpp, message, parameter or TF code. All estimation, state and map logic lives in the core, so the offline tools and the core tests run without ROS. The ROS 2 packages have no estimation logic of their own: they convert messages, parameters and services and call the core API.
 
 | Function | Core (ROS-independent) | ROS 2 (`glim_localization_ros2`, `glim_localization_msgs`) |
 | --- | --- | --- |
@@ -209,11 +209,11 @@ The core (`glim_localization/`) depends only on GLIM, gtsam_points and their lib
 | Sensor input | Preprocessed frames and IMU samples through GLIM's odometry interface | PointCloud2 and Imu conversion, TimeKeeper, QoS: glim_rosnode / glim_rosbag in R1, the GlimROS-based input of the node in R2 |
 | Initial pose and resets | `request_reset()` applies a stamped pose at the first frame at or after its stamp; IMU-gap self-reset; LOST | `/initialpose`, `~/initialize`, `~/relocalize`, the late-pose check (`max_init_pose_delay`) |
 | State and quality | `LocalizationStatus` struct, states INITIALIZING / TRACKING / DEGRADED / LOST, quality monitor, `on_status` callback | `~/status` (`LocalizationStatus.msg`) and `/diagnostics` |
-| Pose output | Frame estimates through GLIM's odometry callbacks | `~/pose`, `~/odometry` (twist from the gyro), TF with `tf_mode`, `base_frame_id` and `T_base_imu` (LocalizationPublisher) |
+| Pose output | Frame estimates through GLIM's odometry callbacks | `~/pose`, `~/odometry` (angular twist from the gyro), TF with `tf_mode`, `base_frame_id` and `T_base_imu` (LocalizationPublisher) |
 | Process and configuration | GLIM JSON configs (the odometry and map parameters) | R1 extension module, R2 lifecycle node and component, ROS parameters, launch files, RViz config |
-| Tools | `map_compiler` (GLIM dump, PCD or PLY input; the 2D occupancy grid as a map_server YAML + PGM file), `glim_localization_replay`, `glim_localization_mapper` | — (Nav2's map_server serves the 2D grid; this package does not publish it) |
+| Tools | `map_compiler` (GLIM dump, compiled map, PCD or PLY in; compiled map out; optional 2D occupancy grid as a map_server YAML + PGM file), `glim_localization_replay`, `glim_localization_mapper` | — (Nav2's map_server serves the 2D grid; this package does not publish it) |
 
-- **Status values:** the state and reset-reason values of the core status are part of the message. `LocalizationStatus.msg` repeats them as constants, and `scripts/test_interfaces.sh` pins both.
+- **Status values:** the state and reset-reason values of the core status are part of the message. `LocalizationStatus.msg` repeats them as constants. `scripts/test_interfaces.sh` pins the message definition, and `test_message_constants` (in `glim_localization_ros2`) checks that the core enums match it.
 - **Python tooling:** the tools in `scripts/` need no ROS installation. `bag_to_replay.py` and `replay_to_bag.py` read and write rosbag2 files with the pure-Python `rosbags` package, and `evaluate.py` uses evo.
 - **New code:** estimation, state and map logic goes in the core with a test that runs without ROS. The ROS 2 packages keep only conversion and ROS-facing checks. Their ROS-free helpers (`GyroBuffer`, the late-pose rule in `init_pose_delay.hpp`) are header-only and tested without ROS.
 
