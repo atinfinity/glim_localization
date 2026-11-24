@@ -83,6 +83,13 @@ if(GLIM_LOCALIZATION_WITH_CUDA)
   )
 endif()
 
+add_executable(test_localization_backend test_localization_backend.cpp)
+target_compile_definitions(test_localization_backend PRIVATE
+  GLIM_LOCALIZATION_CONFIG_DIR="${PROJECT_SOURCE_DIR}/config"
+)
+target_link_libraries(test_localization_backend PRIVATE glim_localization_synthetic GTest::gtest_main)
+gtest_discover_tests(test_localization_backend PROPERTIES TIMEOUT 120)
+
 if(TARGET map_compiler)
   add_executable(test_map_compiler test_map_compiler.cpp)
   target_compile_definitions(test_map_compiler PRIVATE MAP_COMPILER_PATH="$<TARGET_FILE:map_compiler>")

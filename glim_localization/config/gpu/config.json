@@ -1,0 +1,12 @@
+{
+  // GPU odometry (BUILD_WITH_CUDA=ON). Everything else is shared with the CPU config in the parent directory.
+  "global": {
+    "config_path": "",
+    "config_ros": "../config_ros.json",
+    "config_logging": "../config_logging.json",
+    "config_sensors": "../config_sensors.json",
+    "config_preprocess": "../config_preprocess.json",
+    "config_odometry": "../config_odometry_localization_gpu.json",
+    "config_sub_mapping": "../config_sub_mapping_none.json"
+  }
+}
