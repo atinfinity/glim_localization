@@ -26,7 +26,7 @@ docker compose -f docker/compose.yaml build   # build the image
 scripts/docker_run.sh scripts/ci.sh           # dependency check, build, all tests
 ```
 
-`scripts/ci.sh` is the same script that GitHub Actions runs. Each step (`scripts/build_core.sh`, `scripts/test_colcon.sh`, ...) can also be run alone with `scripts/docker_run.sh <script>`. See the [README](README.md#build-and-test) for details.
+`scripts/ci.sh` is the same script that GitHub Actions runs. Each step (`scripts/build_core.sh`, `scripts/test_colcon.sh`, ...) can also be run alone with `scripts/docker_run.sh <script>`. See [Build and test](docs/build.md#build-and-test) for details.
 
 ## Engineering rules
 

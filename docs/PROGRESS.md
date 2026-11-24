@@ -35,7 +35,7 @@ For each phase, record what was done, problems and workarounds, and open items.
 ### Open items and carry-overs
 
 - Whether the PPA debs are the same commits as GTSAM `2f3e56c` and gtsam_points `9d32e7d` cannot be confirmed from the debs.
-  - Resolved later (2026-11-24): installed headers match `2f3e56c` (tag `4.3a1`) and `9d32e7d` (tag `v1.2.2`) byte for byte, apart from generated config headers. Decision: keep the PPA. The Dockerfile pins the PPA key fingerprint and fails the build on a mismatch (checked with the real and a wrong fingerprint). Further hardening follows in #11. Details in `docs/DEPENDENCIES.md`.
+  - Resolved later (2026-11-24): installed headers match `2f3e56c` (tag `4.3a1`) and `9d32e7d` (tag `v1.2.2`) byte for byte, apart from generated config headers. Decision: keep the PPA. The Dockerfile pins the PPA key fingerprint and fails the build on a mismatch (checked with the real and a wrong fingerprint). Further hardening follows in [#11](https://github.com/atinfinity/glim_localization/issues/11). Details in `docs/DEPENDENCIES.md`.
 - The same check on amd64 was completed in the Phase 1 CI (below).
 - Upstream `config_ros.json` loads the viewer modules, and `config.json` points to the GPU config. A dlopen failure is only a warning, so when our own config is added, add a test that checks it does not include the 3 viewer modules.
 - In Phase 5, check with `ldd` that our extension does not link to Iridescence.
@@ -88,8 +88,8 @@ For each phase, record what was done, problems and workarounds, and open items.
 
 ### Open items and carry-overs
 
-- Not verified on a real GLIM dump (many frames, old dumps in the `points.bin` format, voxel generation time at real size). To be checked in #5.
-- Voxels for all tiles are generated sequentially at `load`. Lazy generation, parallelization and LRU are #2.
+- Not verified on a real GLIM dump (many frames, old dumps in the `points.bin` format, voxel generation time at real size). To be checked in [#5](https://github.com/atinfinity/glim_localization/issues/5).
+- Voxels for all tiles are generated sequentially at `load`. Lazy generation, parallelization and LRU are [#2](https://github.com/atinfinity/glim_localization/issues/2).
 
 ## Phase 3: CPU localization odometry (2026-11-24)
 
@@ -116,8 +116,8 @@ For each phase, record what was done, problems and workarounds, and open items.
 
 ### Open items and carry-overs
 
-- Not verified on real data. The bias on thin objects and the processing time at real size are checked in #5.
-- Multi-hypothesis refinement of `/initialpose` and global relocalization are #3. The GPU version is #2.
+- Not verified on real data. The bias on thin objects and the processing time at real size are checked in [#5](https://github.com/atinfinity/glim_localization/issues/5).
+- Multi-hypothesis refinement of `/initialpose` and global relocalization are [#3](https://github.com/atinfinity/glim_localization/issues/3). The GPU version is [#2](https://github.com/atinfinity/glim_localization/issues/2).
 - Detection of degenerate directions and covariance output are not implemented.
 
 ## Phase 4: offline replay (2026-11-24)
@@ -159,10 +159,10 @@ For each phase, record what was done, problems and workarounds, and open items.
 ### Carry-overs
 
 - Phase 5: a policy for IMU dropouts shared by online and replay (recovery by reset, `--on-imu-gap reset`). Replay currently only stops at a dropout.
-- An override option for real bags whose point times and header clock are offset (#5).
+- An override option for real bags whose point times and header clock are offset ([#5](https://github.com/atinfinity/glim_localization/issues/5)).
 - The |v| > 1000 guard only detects divergence and does not guarantee accuracy.
 
-### Rolling shutter deskew test (one item of #6)
+### Rolling shutter deskew test (one item of [#6](https://github.com/atinfinity/glim_localization/issues/6))
 
 - Added `SyntheticLidarParams::scan_duration` to the synthetic sensor. Each point is measured on the true trajectory at its own observation time (the point is in the IMU frame at that time) and has its offset from the stamp in `times`. The default 0 behaves as before.
 - `test_replay_deskew`: a 0.1 s sweep (moving about 0.2 m and a few degrees in 0.1 s). With per-point times: translation max 0.0111 m, rotation max 0.075 deg (after 3 s, criteria 0.1 m / 1 deg). Control with the times removed from the same points: 0.179 m, 2.53 deg, above the criteria.
@@ -177,10 +177,10 @@ For each phase, record what was done, problems and workarounds, and open items.
 
 ### Open items and carry-overs
 
-- Not verified on a real bag (#5). bag_to_replay was checked only with synthetic bags.
+- Not verified on a real bag ([#5](https://github.com/atinfinity/glim_localization/issues/5)). bag_to_replay was checked only with synthetic bags.
 - The increase in CI time has not been measured on amd64 GitHub Actions.
 
-## Real-data smoke test (first step of #5, 2026-11-24)
+## Real-data smoke test (first step of [#5](https://github.com/atinfinity/glim_localization/issues/5), 2026-11-24)
 
 A private Ouster OS1-128 recording (1153 frames, about 115 s, 10 Hz LiDAR) was converted with `bag_to_replay.py` and run with `scripts/smoke_os1_128.sh`. **The reference is GLIM's own trajectory, not ground truth. The numbers below are agreement with GLIM (consistency), not accuracy.** The bag and the map are not committed.
 
@@ -205,7 +205,7 @@ A private Ouster OS1-128 recording (1153 frames, about 115 s, 10 Hz LiDAR) was c
 
 ### Interpretation and limits
 
-- The reference is GLIM itself and uses the same sensor, the same preprocessing and the same extrinsics, so common errors (extrinsics, time offsets) do not show in the agreement. Accuracy is to be evaluated in a later step of #5 (an independent run and ground truth).
+- The reference is GLIM itself and uses the same sensor, the same preprocessing and the same extrinsics, so common errors (extrinsics, time offsets) do not show in the agreement. Accuracy is to be evaluated in a later step of [#5](https://github.com/atinfinity/glim_localization/issues/5) (an independent run and ground truth).
 - The initial pose is the GLIM trajectory pose at the start of the tail, with velocity 0.
 - Processing time with this CPU version (Docker, arm64) is slightly slower than real time (ratio 1.059). The spikes around 1.6 s at p99 have not been investigated (possibly tile loading). Real-time capability cannot be concluded from this measurement.
 - Self-localization over the whole range was run by forcing the branch with `TAIL_START=1000` (ATE rmse 0.0171 m, below). There was a revisit, so the main result is held-out.
@@ -242,7 +242,7 @@ A private Ouster OS1-128 recording (1153 frames, about 115 s, 10 Hz LiDAR) was c
 ## Phase 5 PR 2: msgs (2026-11-24)
 
 - `glim_localization_msgs`: `LocalizationStatus.msg` and `Initialize.srv` (English comments for all fields and constants). Added `scripts/test_interfaces.sh` to `ci.sh`; it checks the installed interfaces, a throwaway C++ consumer, and Python import and use.
-- `bool global` is a Python reserved word; `rosidl_generator_py` passed the build with only a warning, and the generated Python had a syntax error (not detectable by the build alone; found only at the Python import). Changed to `bool global_search`. `global_search=true` returns `success=false` and does not change the estimate until #3. An empty request (zero quaternion) is rejected and does not initialize with the identity pose.
+- `bool global` is a Python reserved word; `rosidl_generator_py` passed the build with only a warning, and the generated Python had a syntax error (not detectable by the build alone; found only at the Python import). Changed to `bool global_search`. `global_search=true` returns `success=false` and does not change the estimate until [#3](https://github.com/atinfinity/glim_localization/issues/3). An empty request (zero quaternion) is rejected and does not initialize with the identity pose.
 - `last_reset_reason` is `uint8` (`RESET_NONE=0`, `RESET_EXTERNAL=1`, `RESET_IMU_GAP=2`). `processing_time` and `last_reset_reason` are not in the core yet, and are 0 / `RESET_NONE` until the core fills them.
 - The initial pose from the config is not counted in `reset_count`: the constructor sets `init_T_world_imu` directly as the initial state (`odometry_estimation_localization_cpu.cpp:124-127`). The count is incremented in one place only, `apply_pending_reset` (same file, `:242`).
 - Updated the DESIGN 6 rows for `~/status` (number of tiles in use etc.) and `~/initialize` (`global_search`, empty request rejected).
@@ -340,7 +340,7 @@ A private Ouster OS1-128 recording (1153 frames, about 115 s, 10 Hz LiDAR) was c
 - `config/r2/`: its own `config_ros.json` (topics `/imu` and `/points`, sensor_data QoS with IMU depth 1000) and `config.json` pointing at the `config/r1` files for everything else.
 - `scripts/replay_to_bag.py --drop-imu START:DURATION` (repeatable) removes the IMU samples in `[first frame + START, + DURATION)`; removing nothing is an error. Tested in `scripts/tests/test_replay_to_bag.py`.
 - Launch tests, run by `scripts/test_colcon.sh` (which now also requires their xunit files): `test_r2_node.py` starts the node with a missing map (configure fails, the node stays unconfigured), sets `map_path`, configures and activates, plays the R1 bag with `ros2 bag play --clock` and `use_sim_time`, checks the R1 bounds, TF, the resets and the services, then deactivates and cleans up (details in the fixes below). `test_r2_imu_gap.py` plays a bag with no IMU for 0.3 s from 6.0 s and checks that the node resets itself once (`IMU_GAP`, `reset_count` 2), is TRACKING at the end, and is within 0.1 m and 1 deg from 3 s after the hole. Both use reliable, deep input QoS in a copied config, so DDS does not drop input.
-- Startup loss seen in the tests: the player starts paused and is resumed once its publishers are visible to the test plus 2 s. Even so, in the IMU gap test the node received nothing from about the first second of playback in 4 of 8 runs, two of them while two test runs overlapped by mistake (the first IMU logged about 1 s after resume), so a `/initialpose` at the first frame was lost and no pose came. The cause is not known (DDS matching of the new node is the guess). Confirmed in #20: see "R2 launch tests: lost start of the bag" below. The gap test therefore sets the pose of the frame at 2.0 s through `~/initialize` before playing, stamped with that frame; the gap bag has no `/initialpose`. `test_r2_node.py` did not show the loss in 8 runs; it now also sets its first pose through `~/initialize` and fails with a clear message (not on the deadline) when the bag ends and no pose came. A real robot should publish `/initialpose` after the node is active and matched, or use `~/initialize`.
+- Startup loss seen in the tests: the player starts paused and is resumed once its publishers are visible to the test plus 2 s. Even so, in the IMU gap test the node received nothing from about the first second of playback in 4 of 8 runs, two of them while two test runs overlapped by mistake (the first IMU logged about 1 s after resume), so a `/initialpose` at the first frame was lost and no pose came. The cause is not known (DDS matching of the new node is the guess). Confirmed in [#20](https://github.com/atinfinity/glim_localization/issues/20): see "R2 launch tests: lost start of the bag" below. The gap test therefore sets the pose of the frame at 2.0 s through `~/initialize` before playing, stamped with that frame; the gap bag has no `/initialpose`. `test_r2_node.py` did not show the loss in 8 runs; it now also sets its first pose through `~/initialize` and fails with a clear message (not on the deadline) when the bag ends and no pose came. A real robot should publish `/initialpose` after the node is active and matched, or use `~/initialize`.
 - Measured (3 runs in a row of `scripts/test_colcon.sh`, CPU, Docker on arm64): R2 node 121/121 poses, worst error 0.016 m and 0.090 deg after 3 s, 121 frames with both `map->odom` and `odom->base_link`, `reset_count` 2; IMU gap 98/121 poses (20 before the initial pose, the rest around the hole), `reset_count` 2 with reason IMU_GAP, worst error 0.011 m and 0.060 deg over 28 poses after recovery. R1 in the same runs: 117 to 118 of 121 poses. All three runs passed; each R2 launch test takes about 16 s.
 - Not verified: a multithreaded component container, the real-time CPU load, and real bags. glim_ros2 has no LICENSE file in the image; its `package.xml` says MIT.
 - Follow-up fixes:
@@ -362,7 +362,7 @@ A private Ouster OS1-128 recording (1153 frames, about 115 s, 10 Hz LiDAR) was c
   - Downsampling: off by default (`--voxel-size 0`); otherwise `gtsam_points::voxelgrid_sampling` around the bounding-box centre before covariance estimation.
   - Covariance estimation uses all hardware threads in the CLI.
 - Tests (synthetic only, no PCD committed): `test_pcd_map` (ascii and binary, F4 and F8, extra fields with COUNT, NaN points, CRLF, 13 broken or unsupported files, grid split invariants, flat-floor covariances, downsampling, bad parameters, round trip through `save_compiled_map` and `load_map`); `test_map_compiler` (CLI with binary and ascii PCD, options, bad options, broken PCD leaves no output); `test_replay_tool` `LocalizesOnAMapBuiltFromPcd` (3 s replay from a pose 0.3 m and 3 degrees off, every frame within 0.1 m and 1 degree after 1 s); `test_replay_e2e.sh` now also compiles `map.pcd` with `map_compiler` and passes `evaluate.py` (12 s, 0.1 m and 1 degree after 3 s).
-- Not done: PLY input and the 2D OccupancyGrid export (#4). Recompiling a compiled PCD map records `source: "glim_dump"`. Not tried on a real PCD map from another tool, such as one generated from a Gazebo world with sdf2map (#9).
+- Not done: PLY input and the 2D OccupancyGrid export ([#4](https://github.com/atinfinity/glim_localization/issues/4)). Recompiling a compiled PCD map records `source: "glim_dump"`. Not tried on a real PCD map from another tool, such as one generated from a Gazebo world with sdf2map ([#9](https://github.com/atinfinity/glim_localization/issues/9)).
 - Follow-up fixes:
   - The header bounds COUNT (2^20) and the point size (2^24 bytes and values), and does size arithmetic in size_t. POINTS is checked against the bytes left in the file before allocating, and WIDTH x HEIGHT is checked for overflow.
   - `--voxel-size` corrupted maps far from the origin: `voxelgrid_sampling` packs 21 bits per axis and merged a plane at (500000, 4000000) into 10 made-up points, with exit 0. Downsampling now runs around the bounding-box centre, and a cloud too wide for the voxel grid fails with an error. gtsam_points is not patched.
@@ -429,7 +429,7 @@ A private Ouster OS1-128 recording (1153 frames, about 115 s, 10 Hz LiDAR) was c
 > [!NOTE]
 > GitHub runners have 4 CPUs, so the core ctest gains less there. All 6 runs on the final test setup passed: 3 before the `-l` fix and the 3 above.
 
-## Phase 5: launch files, parameter YAML, RViz config and ~/map (2026-11-25, #1)
+## Phase 5: launch files, parameter YAML, RViz config and ~/map (2026-11-25, [#1](https://github.com/atinfinity/glim_localization/issues/1))
 
 - **Launch files** (`glim_localization_ros2/launch/`):
   - `localization.launch.py` (R2) runs `glim_localization_node` standalone, or with `use_composition:=true` as a component in a new `component_container`. `config_path` and `map_path` override `params_file` only when not empty.
@@ -449,7 +449,7 @@ A private Ouster OS1-128 recording (1153 frames, about 115 s, 10 Hz LiDAR) was c
   - `LocalizationCallbacks::loaded_map()`: the map of the oldest live localization odometry instance, so the R1 extension reuses the map the dlopen'd module loaded instead of loading it twice.
   - `OdometryEstimationLocalizationCPU::map()`.
   - Each has a core test.
-- **Deferred:** `~/aligned_points`. It needs a per-frame copy of the scan on the odometry callback and a rate and downsampling policy. Filed as #18.
+- **Deferred:** `~/aligned_points`. It needs a per-frame copy of the scan on the odometry callback and a rate and downsampling policy. Filed as [#18](https://github.com/atinfinity/glim_localization/issues/18).
 - **Tests:**
   - `test_map_publisher` (gtest) checks the map-frame transform, the voxel centroids, the skipping of non-finite points, the rejection of a bad voxel size, and delivery of the latched map to a late subscriber.
   - Three launch tests include the installed launch files headless with the synthetic fixtures. Each checks `~/pose`, TF that composes to the last pose, and the latched `~/map` received after it was published:
@@ -458,9 +458,9 @@ A private Ouster OS1-128 recording (1153 frames, about 115 s, 10 Hz LiDAR) was c
     - `test_launch_r2_component`: R2 as a component.
   - The R2 tests also check that autostart reaches active.
 - **Verification**: `scripts/ci.sh` in Docker passes: core ctest 218/218 and colcon test 11/11. Launch test times: R1 5.1 s, R2 16.1 s, R2 component 17.2 s.
-- **Not done**: a manual run on a real bag with the launch files and RViz on a display (part of #18).
+- **Not done**: a manual run on a real bag with the launch files and RViz on a display (part of [#18](https://github.com/atinfinity/glim_localization/issues/18)).
 
-### Review fixes for #1 (2026-11-25)
+### Review fixes for [#1](https://github.com/atinfinity/glim_localization/issues/1) (2026-11-25)
 
 - **`~/map` size**: the cloud size is computed in `size_t`. A cloud above 1 GiB (`kMaxMapCloudBytes`, about 89 million points), or above the uint32 `row_step` of the message, is refused with a warning and not published; before, `row_step` could wrap and the copy wrote past the buffer. `check_map_cloud_size()` is tested at the uint32 boundary, and `make_map_cloud()` with a small cap, so no large allocation is needed.
 - **`~/map` cost**: with `map_cloud_voxel: 0` the points go straight into the message (12 bytes per point, no per-point sums); with downsampling the build holds about 40 bytes per occupied voxel, and the voxel index is reserved. A map above 10 million points with voxel 0 gets a warning. The build stays where it was (R1 node start, R2 configure): it runs once, and moving it to a thread would need locking around the publisher for a small gain. The cost is documented in `config_ros.json`, the README and DESIGN §6.
@@ -471,9 +471,9 @@ A private Ouster OS1-128 recording (1153 frames, about 115 s, 10 Hz LiDAR) was c
 - **Verification**: `scripts/ci.sh` in Docker passes: core ctest 218/218, colcon test 12/12 (`test_launch_r1_live` 1.1 s), Python tests 175.
 - **`~/map` count across architectures**: GitHub Actions (amd64) got 9246 points where the local arm64 build gets 9245, so the four launch tests that asserted the exact count failed. Cause: the fixture floor (z = 0) and side walls (y = ±5 m) lie exactly on 0.5 m voxel planes with 1 cm noise. With about 40 points per metre of noise density at the plane and float coordinates near 15 m (ulp about 1e-6 m), a few of the tens of thousands of floor and wall points fall within rounding distance of a boundary. GCC contracts `a*b+c` into FMA on aarch64 by default but not on baseline x86-64, so `T_world_origin * p` differs by an ulp and `floor(p / voxel)` moves one point to the neighbouring voxel. Forcing identical rounding (`-ffp-contract=off` plus the same Eigen vectorization on both) would only hide the sensitivity of real maps, so the tests now accept 9245 within 1%. That is far below the change from another voxel size (0.4 m gives about 1.5 times the voxels on these surfaces) or from the raw map. Only arm64 can be checked locally; the amd64 result comes from the Actions run.
 
-## CUDA image and GPU build mode (2026-11-25, part of #2)
+## CUDA image and GPU build mode (2026-11-25, part of [#2](https://github.com/atinfinity/glim_localization/issues/2))
 
-First step of #2: a CUDA build environment. There is no GPU odometry module yet.
+First step of [#2](https://github.com/atinfinity/glim_localization/issues/2): a CUDA build environment. There is no GPU odometry module yet.
 
 - **Image** `docker/Dockerfile.cuda` (tag `glim_localization:dev-cuda`, compose service `dev-cuda`, `scripts/docker_run.sh --cuda`):
   - `ros:jazzy-ros-base` plus NVIDIA's CUDA 13.1 apt toolkit (`cuda-nvcc`, `cuda-cudart-dev`, `cuda-cccl`).
@@ -492,8 +492,8 @@ First step of #2: a CUDA build environment. There is no GPU odometry module yet.
   - `scripts/docker_run.sh --cuda scripts/ci.sh` passes in 276 s: dependency check, core ctest 220/220 (including `GpuSmoke.ListsDevices` 0.23 s and `GpuSmoke.BuildsGaussianVoxelMapGPU` 0.84 s, run with `GLIM_LOC_REQUIRE_GPU=1`), colcon test 12/12, Python tests 182, replay e2e.
   - The same image without `--gpus`: both GPU tests are reported as skipped and ctest passes. With `GLIM_LOC_REQUIRE_GPU=1` both fail.
   - Two image builds failed early on transient DNS errors resolving github.com on that machine; a retry passed. The build time is not recorded because later builds reused cached layers.
-- **CPU path**: `scripts/ci_local.sh --force` on the development Mac passes. One of three runs failed in `test_launch_r2_component` (71 poses for 121 frames, below the 90% bound); the next run on the same tree passed. This change does not touch that test or any ROS code, so the flake was there before; the cause is not known yet and is tracked in #20.
-- **Remaining for #2**: the GPU localization odometry module (`odometry_localization_gpu`), `GaussianVoxelMapGPU` tiles in MapManager, GPU memory management (LRU and prefetch), GPU replay evaluation and the CPU vs GPU comparison.
+- **CPU path**: `scripts/ci_local.sh --force` on the development Mac passes. One of three runs failed in `test_launch_r2_component` (71 poses for 121 frames, below the 90% bound); the next run on the same tree passed. This change does not touch that test or any ROS code, so the flake was there before; the cause is not known yet and is tracked in [#20](https://github.com/atinfinity/glim_localization/issues/20).
+- **Remaining for [#2](https://github.com/atinfinity/glim_localization/issues/2)**: the GPU localization odometry module (`odometry_localization_gpu`), `GaussianVoxelMapGPU` tiles in MapManager, GPU memory management (LRU and prefetch), GPU replay evaluation and the CPU vs GPU comparison.
 
 ### Review fixes for the CUDA variant (2026-11-25)
 
@@ -511,7 +511,7 @@ First step of #2: a CUDA build environment. There is no GPU odometry module yet.
   - The `ci.sh` tests in `test_ci_local.py` set the mode explicitly. In the CUDA image they had failed: the image sets `GLIM_LOC_BUILD_WITH_CUDA=ON`, and the new check was not stubbed.
   - `test_gpu_smoke` also checks the y range of the voxel means.
 - **build_colcon.sh** passes `-DBUILD_WITH_CUDA=ON` only in CUDA mode, so its CPU command line is the same as before the CUDA mode.
-- **Flaky `test_launch_r2_component`**: tracked in #20 (drop counters to log, single-threaded component container). Resolved: see "R2 launch tests: lost start of the bag" below.
+- **Flaky `test_launch_r2_component`**: tracked in [#20](https://github.com/atinfinity/glim_localization/issues/20) (drop counters to log, single-threaded component container). Resolved: see "R2 launch tests: lost start of the bag" below.
 - **Verification on the GPU machine** (same machine as above; default Docker runtime runc):
   - `ci.sh` with the image built before this fix fails at once on the stale check.
   - After a rebuild (2.55 GB), `scripts/docker_run.sh --cuda scripts/ci.sh` passes in 278 s. The image check matches, and the GPU is visible through the device reservation. Core ctest is 220/220, with the two GPU tests passing under `GLIM_LOC_REQUIRE_GPU=1`. colcon test is 12/12, the Python tests 186, and replay e2e passes.
@@ -521,9 +521,9 @@ First step of #2: a CUDA build environment. There is no GPU odometry module yet.
     - `cuda-cudart-13-1`, `cuda-cudart-dev-13-1`, `cuda-driver-dev-13-1` and `cuda-toolkit-13-1-config-common`: 13.1.80-1
     - `cuda-toolkit-13-config-common` and `cuda-toolkit-config-common`: 13.5.37-1
 
-## GPU localization odometry module (2026-11-25, part of #2)
+## GPU localization odometry module (2026-11-25, part of [#2](https://github.com/atinfinity/glim_localization/issues/2))
 
-Second step of #2: the GPU odometry module and backend selection. Design in DESIGN §5.7.
+Second step of [#2](https://github.com/atinfinity/glim_localization/issues/2): the GPU odometry module and backend selection. Design in DESIGN §5.7.
 
 - **Split**: the localization odometry is now a shared base `OdometryEstimationLocalization` (map factor bookkeeping, quality monitor and status, resets, fail-closed paths, IMU gap policy) with two backends. `OdometryEstimationLocalizationCPU` keeps its behavior and config; the CPU tests are unchanged apart from includes and a latency print. The replay runner, the publisher, the R1 extension and the R2 node use the base class.
 - **GPU module** `OdometryEstimationLocalizationGPU` (`libodometry_localization_gpu.so`, `BUILD_WITH_CUDA=ON` only), derived from GLIM's `odometry_estimation_gpu.cpp/.hpp`:
@@ -552,18 +552,18 @@ Second step of #2: the GPU odometry module and backend selection. Design in DESI
   - CPU means are above their p95 because of the first frames (initialization and the first factor builds); the GPU first frame includes the tile uploads (22 ms in replay).
   - These are small synthetic scans (about 4300 points); real-data timing on the GPU is not measured yet.
 - **CPU path**: `scripts/ci_local.sh --force` on the development Mac passes: core ctest 224/224, colcon test 12/12, Python tests 187, replay e2e (GPU replay reported as skipped).
-- **Review fixes** (PR #21 review):
+- **Review fixes** (PR [#21](https://github.com/atinfinity/glim_localization/pull/21) review):
   - Fail closed when CUDA is unusable. gtsam_points 1.2.2 only prints a warning on a CUDA error and goes on, so the GPU module checks `cudaGetDeviceCount` before construction and `cudaGetLastError` after creating its streams, and `GpuTileCache` synchronizes and checks it after each upload. A failure throws `std::runtime_error` (replay exit 1, R2 activation fails). `FailsClosedWithoutAVisibleDevice` hides every device (`CUDA_VISIBLE_DEVICES=`) and expects the constructor to throw. On the GPU machine it passes both in ctest and in the CUDA image started without `--gpus`, where `cudaGetDeviceCount` reports an insufficient driver.
   - `MapFactorMatchesTheCpuFactor` compares the GPU map factor with the CPU `IntegratedVGICPFactor` on the same tile, source and pose: error, Hessian and gradient within 1e-3 (relative) on every level.
   - `test_replay_e2e.sh` asserts that the CPU and GPU replays agree: same stamps, position within 1e-3 m, rotation within 0.05 degrees. Before, it only printed the figures.
   - `build_core.sh` requires `libodometry_localization_gpu.so` in CUDA mode and checks its links. A CPU build no longer installs the GPU headers (`PATTERN "*gpu*" EXCLUDE`), and `build_core.sh` checks this.
   - Documented in DESIGN §5.7: the unknown `keyframe_update_strategy` throws (upstream only logs), and with `ENTROPY` the entropy also sees the map factors (upstream: IMU and keyframe factors only).
   - The plugin GPU test restores the config and removes its temp dir through a scope guard.
-  - Re-verified on the GPU machine: core ctest 237/237 (one skip by design), colcon test 12/12, Python tests 187, replay e2e. The CPU and GPU replays differ by at most 1.1e-5 m and 3.4e-4 degrees over 121 poses (1.1e-6 m in the earlier run: the GPU sums are not deterministic). The first colcon run hit the #20 flake in `test_launch_r2` (71 of 121 poses) on that machine too; the rerun passed.
+  - Re-verified on the GPU machine: core ctest 237/237 (one skip by design), colcon test 12/12, Python tests 187, replay e2e. The CPU and GPU replays differ by at most 1.1e-5 m and 3.4e-4 degrees over 121 poses (1.1e-6 m in the earlier run: the GPU sums are not deterministic). The first colcon run hit the [#20](https://github.com/atinfinity/glim_localization/issues/20) flake in `test_launch_r2` (71 of 121 poses) on that machine too; the rerun passed.
 - **Behavior change for release notes**: the replay tool and the R2 node now read `so_name` and need exactly `libodometry_localization_cpu.so` or `libodometry_localization_gpu.so` (a file name). An empty or missing `so_name`, a full path, or another module is an error (replay exit 2, R2 configure fails). Before this change both ignored `so_name`. R1 is unchanged.
-- **Remaining for #2**: tile prefetch along the predicted path (uploads are synchronous today), a GPU memory budget in bytes instead of a tile count, streaming tiles from disk (the whole map stays in host memory), real-data accuracy and timing on the GPU, and GPU CI (GitHub-hosted runners have no GPU; verification stays manual).
+- **Remaining for [#23](https://github.com/atinfinity/glim_localization/issues/23)**: tile prefetch along the predicted path (uploads are synchronous today), a GPU memory budget in bytes instead of a tile count, streaming tiles from disk (the whole map stays in host memory), real-data accuracy and timing on the GPU, and GPU CI (GitHub-hosted runners have no GPU; verification stays manual).
 
-## R2 launch tests: lost start of the bag (2026-11-25, #20)
+## R2 launch tests: lost start of the bag (2026-11-25, [#20](https://github.com/atinfinity/glim_localization/issues/20))
 
 `test_launch_r2` and `test_launch_r2_component` sometimes got 71 of 121 poses (bound: 90%).
 
@@ -582,5 +582,5 @@ Second step of #2: the GPU odometry module and backend selection. Design in DESI
   - After (on top of the GPU odometry merge): 40 runs, 0 failed. All 80 R2 launch tests got the first cloud at stamp 0.000. The node logged its last matched line 2 ms after the player's first log line (`Set rate`, written once its publishers exist; median, max 2.9 s). The max is above the old 2 s margin, which alone could be too short.
   - The evidence for the fix is mainly the first cloud at 0.000 in all 80 tests, where the failure needs a first cloud near 1.8 s. 0 failures in 40 runs alone is weak: at a 5% failure rate, 0 of 40 still happens about 13% of the time.
   - In both loops, a few R2 launch tests got 120 of 121 poses (before: 1 of 40; after: 2 of 80). Frame 0.0 is missing because the first `/points` callback ran about 3 ms before the `/initialpose` callback, so the core dropped that frame as before any pose. There is no ordering across topics, the cost is at most one frame, and it is within the bound.
-- **Review fixes** (PR #22): the stop line is logged after the odometry thread is joined, so frames still queued are counted; the counters read by `stop()` are atomic; the node logs when the RMW has no matched events (the tests then time out on the matched line); the wait for the three matched lines shares one deadline; the comment on `DISCOVERY_MARGIN_S` says why it stays (the player's writers must match the node's readers too); the coverage report is printed only on failure.
+- **Review fixes** (PR [#22](https://github.com/atinfinity/glim_localization/pull/22)): the stop line is logged after the odometry thread is joined, so frames still queued are counted; the counters read by `stop()` are atomic; the node logs when the RMW has no matched events (the tests then time out on the matched line); the wait for the three matched lines shares one deadline; the comment on `DISCOVERY_MARGIN_S` says why it stays (the player's writers must match the node's readers too); the coverage report is printed only on failure.
 - **Docs**: the "Early messages can be lost" note in DESIGN ("R2 node: differences from the plan") now names the cause and the new log lines.
