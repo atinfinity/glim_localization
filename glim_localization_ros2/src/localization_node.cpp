@@ -16,6 +16,7 @@
 // With autostart:=true the node configures and activates itself once it is spinning (for launch files, also when it is
 // loaded as a component, where launch_ros cannot drive the lifecycle). A failed transition is logged and leaves the node
 // where it stopped; drive it by hand from there.
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -363,27 +364,30 @@ private:
     try {
       return create_subscription<MsgT>(topic, qos, callback, options);
     } catch (const rclcpp::UnsupportedEventTypeException&) {
+      RCLCPP_INFO(get_logger(), "matched events not supported on %s by this RMW; matched publishers are not logged", topic.c_str());
       return create_subscription<MsgT>(topic, qos, std::forward<CallbackT>(callback));
     }
   }
 
   /// Stop estimation. Idempotent.
   void stop() {
-    if (bridge_->attached()) {
-      // One line per active period, so that a test log tells which path lost frames
-      const auto drops = bridge_->drop_counts();
-      RCLCPP_INFO(
-        get_logger(),
-        "stopping: received %zu IMU samples and %zu point clouds (first cloud stamp %.3f); dropped frames: %zu without gyro, %zu unpaired, "
-        "%zu stale; %zu TF lookup failures",
-        num_imu_, num_points_, first_points_stamp_, drops.frames_without_gyro, drops.unpaired_frames, drops.stale_frames, drops.tf_lookup_failures);
-    }
     drain_timer_.reset();
     initial_pose_sub_.reset();
     points_sub_.reset();
     imu_sub_.reset();
     async_odometry_.reset();  // stops and joins the odometry thread, so no callback comes after this
     odometry_.reset();
+    if (bridge_->attached()) {
+      // One line per active period, so that a test log tells which path lost frames. After the join, so the frames
+      // still queued in the odometry thread are counted too
+      const auto drops = bridge_->drop_counts();
+      RCLCPP_INFO(
+        get_logger(),
+        "stopping: received %zu IMU samples and %zu point clouds (first cloud stamp %.3f); dropped frames: %zu without gyro, %zu unpaired, "
+        "%zu stale; %zu TF lookup failures",
+        num_imu_.load(), num_points_.load(), first_points_stamp_.load(), drops.frames_without_gyro, drops.unpaired_frames, drops.stale_frames,
+        drops.tf_lookup_failures);
+    }
     bridge_->detach();
     preprocessor_.reset();
     time_keeper_.reset();
@@ -537,9 +541,11 @@ private:
 
   // Set by activate
   double acc_scale_ = 0.0;
-  size_t num_imu_ = 0;
-  size_t num_points_ = 0;
-  double first_points_stamp_ = 0.0;
+  // Written by the subscription callbacks, read by stop(), which can also run from on_shutdown or the destructor on
+  // another thread
+  std::atomic<size_t> num_imu_{0};
+  std::atomic<size_t> num_points_{0};
+  std::atomic<double> first_points_stamp_{0.0};
   std::unique_ptr<glim::TimeKeeper> time_keeper_;
   std::unique_ptr<glim::CloudPreprocessor> preprocessor_;
   std::shared_ptr<glim_localization::OdometryEstimationLocalization> odometry_;
