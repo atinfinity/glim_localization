@@ -389,7 +389,7 @@ TEST_F(MapCompilerTest, WritesOccupancyGrid) {
   std::ifstream yaml(dir_ / "grid" / "floor2d.yaml");
   const std::string text((std::istreambuf_iterator<char>(yaml)), std::istreambuf_iterator<char>());
   EXPECT_EQ(text,
-            "image: floor2d.pgm\n"
+            "image: \"floor2d.pgm\"\n"
             "mode: trinary\n"
             "resolution: 0.500000000\n"
             "origin: [100.000000000, -50.000000000, 0.0]\n"
@@ -445,6 +445,7 @@ TEST_F(MapCompilerTest, RejectsBadOccupancyOptions) {
          {grid + " --occupancy-z-min 12 --occupancy-z-max 10", "must be below"},
          {grid + " --occupancy-z-min 10 --occupancy-z-max 12 --occupancy-resolution 0.001", "resolution"},
          {"--occupancy-z-min 10 --occupancy-z-max 12", "need --occupancy-grid"},
+         {"--occupancy-grid '" + (dir_ / "sub").string() + "/' --occupancy-z-min 10 --occupancy-z-max 12", "has no file name"},
          // Every point is at z >= 10, so nothing is below this band's top.
          {grid + " --occupancy-z-min 1 --occupancy-z-max 2", "no points below occupancy z_max"}}) {
     EXPECT_EQ(compile(ply, output_, options), 1) << options;
@@ -459,6 +460,16 @@ TEST_F(MapCompilerTest, RejectsBadOccupancyOptions) {
   EXPECT_FALSE(fs::exists(output_));
   EXPECT_FALSE(fs::exists(dir_ / "grid.pgm"));
   EXPECT_NE(last_log().find("already exists"), std::string::npos) << last_log();
+
+  // A non-empty output directory is refused up front too, so no grid is written next to a map that was not.
+  fs::remove(dir_ / "grid.yaml");
+  fs::create_directories(output_);
+  std::ofstream(output_ / "keep.txt") << "keep";
+  EXPECT_EQ(compile(ply, output_, grid + " --occupancy-z-min 10.2 --occupancy-z-max 12"), 1);
+  EXPECT_FALSE(fs::exists(dir_ / "grid.pgm"));
+  EXPECT_FALSE(fs::exists(output_ / "map_index.json"));
+  EXPECT_NE(last_log().find("not an empty directory"), std::string::npos) << last_log();
+  EXPECT_FALSE(fs::exists(dir_ / "sub" / ".pgm"));
 }
 
 TEST_F(MapCompilerTest, RejectsBrokenJson) {

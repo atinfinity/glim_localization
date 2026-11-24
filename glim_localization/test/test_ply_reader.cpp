@@ -114,6 +114,21 @@ TEST_F(PlyReaderTest, ReadsCrlfHeaderSizedTypesAndDropsNonFinitePoints) {
   EXPECT_EQ(points[1], Eigen::Vector4d(4.0, 5.0, 6.0, 1.0));
 }
 
+TEST_F(PlyReaderTest, ReadsBinaryWithACrlfHeader) {
+  // The data starts right after "end_header\r\n"; the \r must not be taken as the first data byte.
+  const std::string header =
+    "ply\r\nformat binary_little_endian 1.0\r\nelement vertex 2\r\nproperty uchar label\r\nproperty float x\r\nproperty float y\r\n"
+    "property double z\r\nend_header\r\n";
+  const std::string data = bytes_of(uint8_t(13)) + bytes_of(1.5f) + bytes_of(-2.0f) + bytes_of(3.25) +  //
+                           bytes_of(uint8_t(10)) + bytes_of(4.0f) + bytes_of(5.0f) + bytes_of(-6.5);
+  const fs::path path = write_bytes("crlf_binary.ply", header + data);
+  PcdPoints points;
+  ASSERT_TRUE(read_ply(path.string(), points));
+  ASSERT_EQ(points.size(), 2u);
+  EXPECT_EQ(points[0], Eigen::Vector4d(1.5, -2.0, 3.25, 1.0));
+  EXPECT_EQ(points[1], Eigen::Vector4d(4.0, 5.0, -6.5, 1.0));
+}
+
 TEST_F(PlyReaderTest, ReadsAnEmptyVertexElement) {
   const fs::path path = write_bytes("empty.ply", "ply\nformat binary_little_endian 1.0\nelement vertex 0\nproperty float x\nproperty float y\nproperty float z\nend_header\n");
   PcdPoints points(1);
@@ -144,6 +159,9 @@ TEST_F(PlyReaderTest, RejectsUnsupportedOrMalformedHeaders) {
     {"ply\nformat ascii 1.0\nelement vertex 1\nproperty float\n", "invalid property line"},
     {"ply\nformat ascii 1.0\nelement blank 1\nelement vertex 1\n" + xyz + "end_header\n", "element blank in"},
     {"ply\nformat ascii 1.0\nvertex 1\n", "unknown PLY header line"},
+    // Headers are capped at 64 KiB: a long comment, and a file with no newline at all.
+    {"ply\nformat ascii 1.0\ncomment " + std::string(70000, 'c') + "\nelement vertex 1\n" + xyz + "end_header\n0 0 0\n", "longer than 65536 bytes"},
+    {std::string(70000, 'p'), "longer than 65536 bytes"},
   };
   for (size_t i = 0; i < cases.size(); i++) {
     SCOPED_TRACE(cases[i].first);
@@ -177,6 +195,8 @@ TEST_F(PlyReaderTest, RejectsTruncatedOrBrokenData) {
     {ascii + "element vertex 1\n" + xyz + "end_header\n1 2 3 4\n", "has 4 values, expected 3"},
     {ascii + "element vertex 1\n" + xyz + "end_header\n1          2\n", "too few values"},  // Padded past the size check
     {ascii + "element vertex 1\n" + xyz + "end_header\n1 2 abc\n", "invalid value abc"},
+    // Values other than x, y, z are checked too.
+    {ascii + "element vertex 1\n" + xyz + "property uchar red\nend_header\n1 2 3 red\n", "invalid value red"},
     {ascii + "element vertex 1\n" + xyz + "property list uchar int l\nend_header\n1 2 3 4 0\n", "invalid list length 4"},
     {ascii + "element vertex 1\n" + xyz + "property list uchar int l\nend_header\n1 2 3 -1\n", "invalid list length -1"},
   };

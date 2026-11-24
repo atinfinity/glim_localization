@@ -148,6 +148,18 @@ def test_occupancy_grid_loads_like_map_server(map_compiler, tmp_path):
     assert data.count(OCCUPIED) == 1 and data.count(UNKNOWN) == 1 and data.count(FREE) == 22
 
 
+def test_occupancy_grid_name_with_yaml_syntax(map_compiler, tmp_path):
+    # Without quoting, "image: 1.5: #x.pgm" would not parse as the file name.
+    prefix = tmp_path / '1.5: #x "q"'
+    result = compile_map(map_compiler, tmp_path, "--occupancy-grid", str(prefix), "--occupancy-resolution", "0.5",
+                         "--occupancy-z-min", "5.5", "--occupancy-z-max", "8")
+    assert result.returncode == 0, result.stdout + result.stderr
+    with open(str(prefix) + ".yaml") as handle:
+        assert yaml.safe_load(handle)["image"] == '1.5: #x "q".pgm'
+    info, data = load_like_map_server(str(prefix) + ".yaml")
+    assert info["width"] == 6 and info["height"] == 4 and data.count(OCCUPIED) == 1
+
+
 def test_occupancy_grid_requires_the_band(map_compiler, tmp_path):
     result = compile_map(map_compiler, tmp_path, "--occupancy-grid", str(tmp_path / "floor"))
     assert result.returncode == 1

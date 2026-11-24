@@ -117,6 +117,17 @@ TEST_F(OccupancyGridTest, TheBandIncludesZMinAndExcludesZMax) {
   EXPECT_EQ(grid.data, (std::vector<int8_t>{kOccupancyOccupied, kOccupancyFree, kOccupancyFree}));
 }
 
+TEST_F(OccupancyGridTest, PointsOnACellEdgeBelongToTheCellAbove) {
+  // Cells are [k r, (k + 1) r): x = -0.5 is in cell -1 and x = 0 in cell 0 (floor, not truncation toward zero).
+  const PcdPoints points = {Eigen::Vector4d(-0.5, 0.0, 0.5, 1.0), Eigen::Vector4d(0.0, 0.0, -0.1, 1.0), Eigen::Vector4d(-0.25, 0.25, 3.0, 1.0)};
+  OccupancyGrid grid;
+  ASSERT_TRUE(build_occupancy_grid(make_submaps(points, false), params_, grid));
+  ASSERT_EQ(grid.width, 2);
+  ASSERT_EQ(grid.height, 1);
+  EXPECT_EQ(grid.origin, Eigen::Vector2d(-0.5, 0.0));
+  EXPECT_EQ(grid.data, (std::vector<int8_t>{kOccupancyOccupied, kOccupancyFree}));
+}
+
 TEST_F(OccupancyGridTest, CellEdgesAreMultiplesOfTheResolution) {
   // Far from the origin, as with UTM coordinates
   PcdPoints points;
@@ -211,13 +222,33 @@ TEST_F(OccupancyGridTest, SavesPgmWithTheTopRowAtTheHighestY) {
   EXPECT_EQ(pixels, expected);
 
   EXPECT_EQ(read_file(dir_ / "nested" / "floor.yaml"),
-            "image: floor.pgm\n"
+            "image: \"floor.pgm\"\n"
             "mode: trinary\n"
             "resolution: 0.500000000\n"
             "origin: [-1.000000000, 1.500000000, 0.0]\n"
             "negate: 0\n"
             "occupied_thresh: 0.65\n"
             "free_thresh: 0.1\n");
+}
+
+TEST_F(OccupancyGridTest, QuotesTheImageNameAndRejectsPrefixesWithoutAName) {
+  EXPECT_EQ(check_occupancy_grid_prefix("map"), "");
+  EXPECT_EQ(check_occupancy_grid_prefix("out/map 2d"), "");
+  for (const std::string prefix : std::vector<std::string>{"", "out/", ".", "out/.", "out/..", "a\nb", "tab\there"}) {
+    EXPECT_NE(check_occupancy_grid_prefix(prefix), "") << prefix;
+  }
+
+  OccupancyGrid grid;
+  ASSERT_TRUE(build_occupancy_grid(make_submaps(points_), params_, grid));
+  EXPECT_FALSE(save_occupancy_grid((dir_ / "sub").string() + "/", grid));
+  EXPECT_FALSE(fs::exists(dir_ / "sub" / ".pgm"));
+
+  // Quotes, backslashes and YAML syntax in the name stay a plain string.
+  const std::string name = "a \"b\" c\\d: #e";
+  ASSERT_TRUE(save_occupancy_grid((dir_ / name).string(), grid));
+  EXPECT_TRUE(fs::exists(dir_ / (name + ".pgm")));
+  const std::string yaml = read_file(dir_ / (name + ".yaml"));
+  EXPECT_EQ(yaml.substr(0, yaml.find('\n')), "image: \"a \\\"b\\\" c\\\\d: #e.pgm\"");
 }
 
 TEST_F(OccupancyGridTest, SaveRefusesExistingFiles) {
