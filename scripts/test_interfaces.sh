@@ -62,7 +62,15 @@ float64 processing_time
 uint8 RESET_NONE=0
 uint8 RESET_EXTERNAL=1
 uint8 RESET_IMU_GAP=2
-uint8 last_reset_reason'
+uint8 last_reset_reason
+uint8 INIT_SEARCH_NONE=0
+uint8 INIT_SEARCH_ACCEPTED=1
+uint8 INIT_SEARCH_REJECTED=2
+uint8 init_search
+int32 init_search_candidates
+float64 init_search_score
+float64 init_search_yaw_offset
+float64 init_search_time'
 [[ "${status_api}" == "${expected_status}" ]] || fail "LocalizationStatus changed:
 $(diff <(echo "${expected_status}") <(echo "${status_api}") || true)"
 initialize_api="$(show_api glim_localization_msgs/srv/Initialize)" || fail "cannot show Initialize"
@@ -149,6 +157,8 @@ status = LocalizationStatus()
 status.state = LocalizationStatus.DEGRADED
 status.last_reset_reason = LocalizationStatus.RESET_EXTERNAL
 status.processing_time = 0.02
+status.init_search = LocalizationStatus.INIT_SEARCH_REJECTED
+status.init_search_candidates = 24
 request = Initialize.Request()
 request.global_search = True
 request.pose.pose.pose.position.x = 1.0
@@ -161,6 +171,7 @@ from rclpy.serialization import deserialize_message, serialize_message
 status_copy = deserialize_message(serialize_message(status), LocalizationStatus)
 assert status_copy.state == 2 and status_copy.last_reset_reason == 1
 assert abs(status_copy.processing_time - 0.02) < 1e-12
+assert status_copy.init_search == 2 and status_copy.init_search_candidates == 24
 request_copy = deserialize_message(serialize_message(request), Initialize.Request)
 assert request_copy.global_search is True and request_copy.pose.pose.pose.position.x == 1.0
 response_copy = deserialize_message(serialize_message(response), Initialize.Response)
