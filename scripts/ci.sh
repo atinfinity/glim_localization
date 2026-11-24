@@ -14,6 +14,22 @@ for arg in "$@"; do
   esac
 done
 
+# CUDA mode in the CUDA image (docker/Dockerfile.cuda sets GLIM_LOC_BUILD_WITH_CUDA=ON): the core is
+# configured with BUILD_WITH_CUDA=ON and the GPU tests are built. They skip when no GPU is visible; when
+# nvidia-smi lists one, a skip is a failure (GLIM_LOC_REQUIRE_GPU=1, unless the caller set it).
+if [[ "${GLIM_LOC_BUILD_WITH_CUDA:-OFF}" == ON ]]; then
+  gpus="$(nvidia-smi -L 2>/dev/null || true)"
+  if [[ -n "${gpus}" ]]; then
+    echo "ci: CUDA mode, GPU visible:"
+    echo "${gpus}"
+    export GLIM_LOC_REQUIRE_GPU="${GLIM_LOC_REQUIRE_GPU:-1}"
+  else
+    echo "ci: CUDA mode, no GPU visible (the GPU tests skip)"
+  fi
+else
+  echo "ci: CPU mode"
+fi
+
 # Per-run compiler cache statistics when ccache is enabled (CI).
 if [[ -n "${CCACHE_DIR:-}" ]]; then
   ccache --zero-stats >/dev/null

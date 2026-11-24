@@ -13,10 +13,16 @@ if [[ -n "${CCACHE_DIR:-}" ]]; then
   launcher=(-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache)
 fi
 
+# CUDA mode: the CUDA image sets GLIM_LOC_BUILD_WITH_CUDA=ON (docker/Dockerfile.cuda). Set on every
+# configure, like the launcher, and the same in build_colcon.sh.
+with_cuda="${GLIM_LOC_BUILD_WITH_CUDA:-OFF}"
+[[ "${with_cuda}" == ON || "${with_cuda}" == OFF ]] || { echo "FAIL: GLIM_LOC_BUILD_WITH_CUDA must be ON or OFF, got ${with_cuda}" >&2; exit 1; }
+
 # build_colcon.sh reuses this build directory and configures it with colcon's install prefix, so the
 # prefix is set here too: the plain configure is the same whether colcon ran before or not.
 cmake -S "${repo_root}/glim_localization" -B "${build_dir}" \
   -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=ON -DGLIM_LOCALIZATION_USE_AMENT=OFF \
+  -DBUILD_WITH_CUDA="${with_cuda}" \
   -DCMAKE_INSTALL_PREFIX="${install_dir}" "${launcher[@]}"
 cmake --build "${build_dir}"
 # Parallel jobs: CTEST_JOBS, default the CPU count (test temp dirs are per-PID).
@@ -27,6 +33,10 @@ test -f "${install_dir}/lib/cmake/glim_localization/glim_localization-config.cma
 
 test -f "${install_dir}/lib/libodometry_localization_cpu.so"
 test -x "${install_dir}/lib/glim_localization/glim_localization_replay"
+if [[ "${with_cuda}" == ON ]]; then
+  grep -q '^BUILD_WITH_CUDA:BOOL=ON$' "${build_dir}/CMakeCache.txt" || { echo "FAIL: the core is not configured with BUILD_WITH_CUDA=ON" >&2; exit 1; }
+  test -x "${build_dir}/test/test_gpu_smoke"
+fi
 
 for library in "${build_dir}/libglim_localization.so" "${build_dir}/libodometry_localization_cpu.so" "${build_dir}/tools/glim_localization_replay"; do
   libraries="$(ldd "${library}")"

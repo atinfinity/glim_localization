@@ -19,9 +19,31 @@ echo "== Pinned versions"
 actual="$(dpkg-query -W -f='${Version}' libgtsam-notbb-dev)"
 [[ "${actual}" == "${GTSAM_VERSION}"* ]] || fail "libgtsam-notbb-dev is ${actual}"
 echo "libgtsam-notbb-dev ${actual}"
-actual="$(dpkg-query -W -f='${Version}' libgtsam-points-dev)"
-[[ "${actual}" == "${GTSAM_POINTS_VERSION}"* ]] || fail "libgtsam-points-dev is ${actual}"
-echo "libgtsam-points-dev ${actual}"
+# The CUDA image (GLIM_LOC_BUILD_WITH_CUDA=ON, docker/Dockerfile.cuda) installs the PPA's CUDA 13.1 build
+# of gtsam_points instead of libgtsam-points-dev; both install the same files, so exactly one may be present.
+with_cuda="${GLIM_LOC_BUILD_WITH_CUDA:-OFF}"
+gtsam_points_package=libgtsam-points-dev
+other_package=libgtsam-points-cuda13.1-dev
+if [[ "${with_cuda}" == ON ]]; then
+  gtsam_points_package=libgtsam-points-cuda13.1-dev
+  other_package=libgtsam-points-dev
+fi
+actual="$(dpkg-query -W -f='${Version}' "${gtsam_points_package}")"
+[[ "${actual}" == "${GTSAM_POINTS_VERSION}"* ]] || fail "${gtsam_points_package} is ${actual}"
+echo "${gtsam_points_package} ${actual}"
+if dpkg-query -W -f='${db:Status-Abbrev}' "${other_package}" 2>/dev/null | grep -q '^ii'; then
+  fail "${other_package} is installed next to ${gtsam_points_package}"
+fi
+if [[ "${with_cuda}" == ON ]]; then
+  CUDA_VERSION=13.1
+  grep -Eq '^#define GTSAM_POINTS_USE_CUDA$|^#define GTSAM_POINTS_USE_CUDA 1$' /usr/local/include/gtsam_points/config.hpp \
+    || fail "gtsam_points is not built with CUDA"
+  actual="$(nvcc --version | sed -n 's/.*release \([0-9.]*\),.*/\1/p')"
+  [[ "${actual}" == "${CUDA_VERSION}" ]] || fail "nvcc is CUDA ${actual}, expected ${CUDA_VERSION}"
+  echo "nvcc ${actual}"
+  [[ -f /opt/glim/lib/libodometry_estimation_gpu.so ]] || fail "GLIM was built without CUDA (no libodometry_estimation_gpu.so)"
+  echo "libodometry_estimation_gpu.so installed"
+fi
 actual="$(git -c safe.directory=/opt/glim_ws/src/glim -C /opt/glim_ws/src/glim rev-parse HEAD)"
 [[ "${actual}" == "${GLIM_COMMIT}" ]] || fail "glim is at ${actual}"
 echo "glim ${actual}"
