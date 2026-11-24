@@ -272,14 +272,18 @@ The search runs for the configured `init_T_world_imu`, `/initialpose`, `~/initia
 | `init_yaw_search` | `false` | Turn the search on |
 | `init_yaw_search_range_deg` | `180.0` | Candidates from -range to +range around the given yaw (180 covers the full turn) |
 | `init_yaw_search_step_deg` | `15.0` | Spacing of the candidates; 180 / 15 gives 24 candidates |
-| `init_yaw_search_min_inlier_ratio` | `0.5` | The best candidate must reach this inlier ratio (finest map voxels, after registration) |
-| `init_yaw_search_time_budget` | `2.0` | Seconds; no candidate is started after it (the given yaw itself is always scored) |
+| `init_yaw_search_min_inlier_ratio` | `0.7` | The best candidate must reach this inlier ratio (finest map voxels, after registration) |
+| `init_yaw_search_min_score_gap` | `0.05` | The best must beat the runner-up (the best candidate more than two steps away in yaw) by more than this |
+| `init_yaw_search_time_budget` | `10.0` | Seconds for the whole search; a search cut short by it is rejected |
 | `init_yaw_search_max_iterations` | `10` | Levenberg-Marquardt iterations of each registration |
+| `init_yaw_search_min_points` | `100` | Frames with fewer points are dropped while the search is pending |
 
-When no candidate reaches the minimum inlier ratio, the given pose is rejected: the state goes to LOST, frames are dropped and nothing is published until a new pose is given. It is never accepted silently. `~/status` reports the result (`init_search`: NONE, ACCEPTED or REJECTED), the number of candidates scored, the best inlier ratio, the yaw correction applied [rad] and the search time; `/diagnostics` and the replay `summary.json` carry the same values.
+The given pose is accepted only when all three hold: every candidate was scored within the time budget, the best reaches the minimum inlier ratio, and the runner-up is more than the minimum score gap below it. Otherwise it is rejected: the state goes to LOST, frames are dropped and nothing is published until a new pose is given. It is never accepted silently. A truncated search is rejected because the candidates not scored could have been better or equally good; a close runner-up means the scene looks alike from two yaws (for example a symmetric room), so the search cannot choose. With the search range set to 0 only the given yaw is scored, which turns the search into a check of the given pose.
+
+`~/status` reports the result (`init_search`: NONE, ACCEPTED or REJECTED), the candidates scored and generated (`init_search_candidates`, `init_search_candidates_total`), the best inlier ratio, the yaw correction applied [rad], the runner-up's inlier ratio and yaw, and the search time; `/diagnostics` (whose message says why a pose was rejected) and the replay `summary.json` (with `truncated`) carry the same values.
 
 > [!NOTE]
-> The search runs on the first scan, in the estimation thread: about 0.85 s for 24 candidates on the synthetic data (Docker, arm64, 2 threads). Scans that arrive meanwhile are queued. On a loaded machine the time budget can stop it early (11 of 24 candidates under parallel tests); the candidates nearest the given yaw are scored first. Real scans are larger than the synthetic ones, so check `init_search_candidates` and raise the budget or narrow the range if it is cut short. The search uses only the position and yaw of the given pose; roll, pitch and height are taken as given and refined by the registration.
+> The search runs on the first scan with enough points, in the estimation thread, so the first pose is published later by the search time. Scans that arrive meanwhile are queued. Measured on the synthetic data with 2 threads: about 30 ms per candidate on arm64 (24 candidates in about 0.8 s) and 70 to 80 ms per candidate on x86 (1.7 to 1.9 s), with the CPU or the GPU module (the search uses CPU factors in both). Real scans are larger and their timing is not measured; the 10 s default leaves room for that and for a loaded machine. If `init_search_candidates` is below `init_search_candidates_total`, raise the budget or narrow the range. The search uses only the position and yaw of the given pose; roll, pitch and height are taken as given and refined by the registration.
 
 ## Limitations
 

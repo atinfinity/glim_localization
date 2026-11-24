@@ -118,15 +118,20 @@ Phase 3 implements 1 and `reset` with an externally given pose; #3 adds the yaw 
 
 Yaw search (`glim_localization/relocalization/`, ROS-independent):
 
-- Which poses: a pose from outside, that is the configured `init_T_world_imu` and resets with reason EXTERNAL that are not `from_current` (`/initialpose`, `~/initialize`, `LocalizationCallbacks::request_reset`, the replay `--init-pose`). `relocalize()` and the IMU gap self-reset start from the estimate and are not searched. A pending search runs on the first non-empty frame after the pose is applied, before the upstream `insert_frame`.
+- Which poses: a pose from outside, that is the configured `init_T_world_imu` and resets with reason EXTERNAL that are not `from_current` (`/initialpose`, `~/initialize`, `LocalizationCallbacks::request_reset`, the replay `--init-pose`). `relocalize()` and the IMU gap self-reset start from the estimate and are not searched. A pending search runs on the first frame with at least `init_yaw_search_min_points` (100) points after the pose is applied, before the upstream `insert_frame`; smaller frames are dropped meanwhile (upstream only warns on an empty frame and would start the estimation from it).
 - Candidates: `PoseCandidateGenerator::generate(CandidateQuery{hint, frame, map})` returns a list of `PoseCandidate{T_world_imu, yaw_offset}`. `YawCandidateGenerator` turns the hint about world z by 0, +s, -s, +2s, ... up to `init_yaw_search_range_deg` (at 180 deg, +180 is kept and -180 dropped as the same yaw), at the same position. A global relocalizer will implement the same interface with no hint (`set_candidate_generator`); the scoring and selection below stay as they are.
 - Scan: the first frame as upstream builds it for the first estimate: points in the IMU frame, covariances from the preprocessed neighbours, no deskewing.
-- Scoring (`score_candidate`): the unary VGICP map factors of §5.2 on all voxel levels of the tiles that overlap at the candidate pose (`create_map_factors`), solved alone for the pose with Levenberg-Marquardt (`init_yaw_search_max_iterations`, 10). The score is the inlier ratio of §5.4 at the registered pose (finest voxels), so it means the same as the inlier ratio on `~/status`. A candidate with no overlapping tile, or a non-finite solution, scores 0. Neighbouring candidates often converge to the same pose, so the reported yaw correction is that of the registered pose, not the candidate's offset.
-- Selection (`search_candidates`, `select_best_candidate`): candidates are scored in order (nearest yaw first) until `init_yaw_search_time_budget` runs out; the first one, the hint itself, is always scored. The highest score that reaches `init_yaw_search_min_inlier_ratio` wins, ties to the earlier (nearer) candidate, and NaN never passes.
-- Accepted: the estimation starts from the registered 6-DoF pose of the winner (`MapInitialStateEstimation::set_state`), with the given velocity turned by the same yaw.
+- Scoring (`score_candidate`): the unary VGICP map factors of §5.2 on all voxel levels of the tiles that overlap at the candidate pose (`create_map_factors`), solved alone for the pose with Levenberg-Marquardt (`init_yaw_search_max_iterations`, 10). The tiles are then selected again at the registered pose, and the score is the inlier ratio of §5.4 there (finest voxels), so it means the same as the inlier ratio on `~/status`. A candidate with no overlapping tile, or a non-finite solution, scores 0. Neighbouring candidates often converge to the same pose, so the reported yaw correction is that of the registered pose, not the candidate's offset. The factors are the CPU ones (`IntegratedVGICPFactor`) also in the GPU module: the search runs once per given pose, and CPU factors avoid uploading tiles for poses that are then dropped.
+- Selection (`search_candidates`): candidates are scored in order (nearest yaw first). The time budget covers the whole search and is checked inside each registration (`termination_criteria` of the optimizer), so a slow registration cannot overrun it by much; the first candidate, the hint itself, is always scored to the end. The outcome is one of:
+  - TRUNCATED: the budget ran out before every candidate was scored. Rejected, since an unscored candidate could be better or as good as the best one.
+  - LOW_SCORE: the best score is below `init_yaw_search_min_inlier_ratio` (0.7), or NaN.
+  - AMBIGUOUS: the runner-up, the best candidate whose registered yaw is more than two search steps from the best one's, is within `init_yaw_search_min_score_gap` (0.05) of it. Rejected because the scene looks alike from two yaws.
+  - ACCEPTED otherwise; ties go to the earlier (nearer) candidate.
+- Thresholds: on the synthetic corridor map the right yaw scores 0.997 and the runner-up (the 180 deg flip) 0.87 to 0.89; a wrong yaw registered alone scores 0.55 to 0.61, so 0.7 separates them. In a symmetric synthetic room the two half-turn poses score 0.932 and 0.930 and the gap check rejects them. The inlier ratio was kept as the score: a Mahalanobis-gated count and a nearest-neighbour count at 0.2 m did not separate the right yaw better on these maps.
+- Budget: 10 s by default. One candidate costs about 30 ms on arm64 and 70 to 80 ms on x86 (synthetic scans, 2 threads; the same on the CPU and the GPU module), so 24 candidates take 0.8 to 1.9 s. Real scans are larger and their timing is not measured; the margin is for them and for a loaded machine (parallel ctest slowed the search 2.5 times). The search is once per given pose, and a truncated search is rejected rather than accepted from a partial result. The step is at least 0.5 deg, which caps the candidates at 720.
+- Accepted: the estimation starts from the registered 6-DoF pose of the winner (`MapInitialStateEstimation::set_state`), with the given velocity turned by the same yaw. The first pose is published later by the search time.
 - Rejected: the state goes to LOST (`publish_lost`), and every frame is dropped (IMU trimmed as while waiting for a first pose) until the next reset. A bad pose is never accepted silently.
-- Status: `init_search` (NONE, ACCEPTED, REJECTED), `init_search_candidates` (scored), `init_search_score`, `init_search_yaw_offset` (rad) and `init_search_time` in `LocalizationStatus`, cleared by every reset; the same fields in the ROS message, the diagnostics and the replay `summary.json`.
-- Cost: about 35 ms per candidate on the synthetic data (24 candidates in about 0.85 s, Docker on arm64, 2 threads), once per given pose, in the estimation thread. Under parallel ctest load the default 2 s budget stopped at 11 candidates, so the tests that count candidates raise the budget. Real-scan timing is not measured yet.
+- Status: `init_search` (NONE, ACCEPTED, REJECTED), `init_search_candidates` (scored), `init_search_candidates_total` (generated), `init_search_score`, `init_search_yaw_offset` (rad), `init_search_runner_up_score`, `init_search_runner_up_yaw_offset` and `init_search_time` in `LocalizationStatus`, cleared by every reset; the same fields in the ROS message, the diagnostics (whose message gives the reason for a rejection) and the replay `summary.json` (with `truncated`).
 
 Pose reset at runtime: `reset(T_world_imu, v_world_imu, min_stamp)` (thread-safe). Only the latest request is kept, and it is applied at the start of the next `insert_frame`. It rebuilds the frames, the smoother and the local model, returns the state to INITIALIZING and increments `reset_count`. Frames older than `min_stamp` are dropped. Frame ids go back to 0, so downstream uses `reset_count` to tell runs apart. An invalid pose (non-finite, not a rigid transform) is rejected and the current estimate continues. The IMU bias carries over the previous estimate. Frames in the smoother are discarded without being passed to the marginalization callback. A reset can also be requested from outside through `LocalizationCallbacks::request_reset` (safe from any thread), and the state is received through `on_status`.
 
@@ -155,8 +160,11 @@ Pose reset at runtime: `reset(T_world_imu, v_world_imu, min_stamp)` (thread-safe
     "init_yaw_search": false,
     "init_yaw_search_range_deg": 180.0,
     "init_yaw_search_step_deg": 15.0,
-    "init_yaw_search_min_inlier_ratio": 0.5,
-    "init_yaw_search_time_budget": 2.0,
+    "init_yaw_search_min_inlier_ratio": 0.7,
+    "init_yaw_search_min_score_gap": 0.05,
+    "init_yaw_search_time_budget": 10.0,
+    "init_yaw_search_max_iterations": 10,
+    "init_yaw_search_min_points": 100,
     "degraded_inlier_ratio": 0.3,
     "lost_frames": 50,
     "smoother_lag": 5.0
@@ -230,7 +238,7 @@ glim_localization/                  # repository
 | Name | Type | Content |
 | --- | --- | --- |
 | points / imu (subscribed) | sensor_msgs/PointCloud2, Imu | Topic names and QoS are exposed as parameters, with the same keys as GLIM's `config_ros` |
-| /initialpose (subscribed) | geometry_msgs/PoseWithCovarianceStamped | RViz 2D Pose Estimate. Used as the initial guess for scan-to-map registration (no yaw search yet; multi-yaw refinement is planned, #3) |
+| /initialpose (subscribed) | geometry_msgs/PoseWithCovarianceStamped | RViz 2D Pose Estimate. Used as the initial guess for scan-to-map registration, refined by the yaw search of §5.3 when `init_yaw_search` is on |
 | ~/initialize (service, R2) | glim_localization_msgs/srv/Initialize | Initialization with a given pose. global_search=true requests global relocalization (returns success=false until #3 implements it). An empty request is rejected. Returns success and score |
 | ~/relocalize (service, R2) | std_srvs/Trigger | Relocalization with the current pose as the initial value |
 | ~/pose | geometry_msgs/PoseWithCovarianceStamped | base_frame pose in map coordinates (LiDAR rate) |
