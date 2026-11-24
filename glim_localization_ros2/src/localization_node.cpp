@@ -3,7 +3,8 @@
 //
 // R2: glim_localization_node, an rclcpp_lifecycle node (also a component).
 //
-//   configure   reads the GLIM JSON config (config_path) and loads the map (map_path); a bad map fails the transition
+//   configure   reads the GLIM JSON config (config_path), loads the map (map_path) and publishes it on ~/map (latched);
+//               a bad map fails the transition
 //   activate    creates the odometry, the publisher and the subscriptions; estimation starts with the first data
 //   deactivate  drops the subscriptions and stops the odometry thread (pending input is discarded)
 //   cleanup     releases the map and the config
@@ -11,6 +12,10 @@
 // The input handling (IMU and point cloud conversion, TimeKeeper, the QoS settings in config_ros.json) follows GlimROS.
 // Unlike GlimROS, the node holds the odometry module itself (no dlopen), so ~/initialize, ~/relocalize and /initialpose
 // call its reset() directly. Results go through EstimateBridge and LocalizationPublisher, as in R1.
+//
+// With autostart:=true the node configures and activates itself once it is spinning (for launch files, also when it is
+// loaded as a component, where launch_ros cannot drive the lifecycle). A failed transition is logged and leaves the node
+// where it stopped; drive it by hand from there.
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -26,6 +31,7 @@
 #include <geometry_msgs/msg/pose_with_covariance_stamped.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_components/register_node_macro.hpp>
+#include <lifecycle_msgs/msg/state.hpp>
 #include <rclcpp_lifecycle/lifecycle_node.hpp>
 #include <sensor_msgs/msg/imu.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
@@ -44,6 +50,7 @@
 #include <glim_localization_ros2/estimate_bridge.hpp>
 #include <glim_localization_ros2/init_pose_delay.hpp>
 #include <glim_localization_ros2/localization_publisher.hpp>
+#include <glim_localization_ros2/map_publisher.hpp>
 
 namespace glim_localization_ros2 {
 
@@ -145,6 +152,10 @@ public:
     declare_parameter<std::string>("config_path", "config/r2");
     declare_parameter<std::string>("map_path", "");
     declare_parameter<double>("max_init_pose_delay", 0.2);
+    if (declare_parameter<bool>("autostart", false)) {
+      // One shot, from the executor: the transitions must not run inside the constructor
+      autostart_timer_ = create_wall_timer(std::chrono::milliseconds(0), [this] { autostart(); });
+    }
     // The core reports through static slots: connect once, before any odometry of this node starts (see EstimateBridge)
     EstimateBridge::connect(bridge_);
   }
@@ -199,6 +210,17 @@ public:
   }
 
 private:
+  void autostart() {
+    autostart_timer_->cancel();
+    if (rclcpp_lifecycle::LifecycleNode::configure().id() != lifecycle_msgs::msg::State::PRIMARY_STATE_INACTIVE) {
+      RCLCPP_ERROR(get_logger(), "autostart: configure failed; the node stays unconfigured");
+      return;
+    }
+    if (rclcpp_lifecycle::LifecycleNode::activate().id() != lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE) {
+      RCLCPP_ERROR(get_logger(), "autostart: activate failed; the node stays inactive");
+    }
+  }
+
   bool configure() {
     std::string config_path = get_parameter("config_path").as_string();
     if (config_path.empty() || config_path[0] != '/') {
@@ -239,6 +261,7 @@ private:
     imu_qos_ = read_qos(config_ros, "imu_qos", get_logger(), default_imu_qos);
     points_qos_ = read_qos(config_ros, "points_qos", get_logger());
     publisher_params_ = read_publisher_params(config_ros);
+    const MapPublisherParams map_publisher_params = read_map_publisher_params(config_ros);
 
     odometry_params_ = std::make_unique<OdometryParams>();
     const std::string map_path = get_parameter("map_path").as_string();
@@ -258,6 +281,11 @@ private:
     }
     map_ = map;
     RCLCPP_INFO(get_logger(), "loaded the map '%s' (%zu tiles)", odometry_params_->map_path.c_str(), map_->size());
+    if (map_publisher_params.enabled) {
+      map_publisher_ = std::make_unique<MapPublisher>(get_node_topics_interface(), get_clock(), publisher_params_.map_frame, map_publisher_params.voxel_size);
+      const size_t num_points = map_publisher_->publish(map_->tiles());
+      RCLCPP_INFO(get_logger(), "published ~/map: %zu points (voxel %.3f m)", num_points, map_publisher_params.voxel_size);
+    }
 
     initialize_srv_ = create_service<InitializeSrv>(
       "~/initialize", [this](const std::shared_ptr<InitializeSrv::Request> req, std::shared_ptr<InitializeSrv::Response> res) { on_initialize(*req, *res); });
@@ -310,6 +338,7 @@ private:
   void release() {
     initialize_srv_.reset();
     relocalize_srv_.reset();
+    map_publisher_.reset();
     map_.reset();
     odometry_params_.reset();
     imu_qos_.reset();
@@ -444,6 +473,7 @@ private:
   std::shared_ptr<const glim_localization::MapManager> map_;
   rclcpp::Service<InitializeSrv>::SharedPtr initialize_srv_;
   rclcpp::Service<TriggerSrv>::SharedPtr relocalize_srv_;
+  std::unique_ptr<MapPublisher> map_publisher_;
 
   // Set by activate
   double acc_scale_ = 0.0;
@@ -455,6 +485,7 @@ private:
   rclcpp::Subscription<PointsMsg>::SharedPtr points_sub_;
   rclcpp::Subscription<PoseMsg>::SharedPtr initial_pose_sub_;
   rclcpp::TimerBase::SharedPtr drain_timer_;
+  rclcpp::TimerBase::SharedPtr autostart_timer_;
 };
 
 }  // namespace glim_localization_ros2

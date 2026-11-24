@@ -3,8 +3,8 @@
 // EstimateBridge adapts glim::EstimationFrame (via OdometryEstimationCallbacks) to FrameEstimate and drives
 // LocalizationPublisher. A frame is published together with its status (LocalizationCallbacks::on_status), so a LOST
 // frame gives no ~/pose. It subscribes to /initialpose and forwards it to the odometry with
-// LocalizationCallbacks::request_reset. Settings come from the "localization_ros" section of config_ros.json
-// (see config/r1/config_ros.json).
+// LocalizationCallbacks::request_reset, and publishes the map that the odometry module loaded on ~/map (latched).
+// Settings come from the "localization_ros" section of config_ros.json (see config/r1/config_ros.json).
 #include <memory>
 #include <string>
 #include <vector>
@@ -21,6 +21,7 @@
 #include <glim_localization/odometry/odometry_estimation_localization_cpu.hpp>
 #include <glim_localization_ros2/estimate_bridge.hpp>
 #include <glim_localization_ros2/localization_publisher.hpp>
+#include <glim_localization_ros2/map_publisher.hpp>
 
 namespace glim_localization_ros2 {
 
@@ -47,6 +48,18 @@ public:
     // The slots are not thread-safe: register before the first frame, which cannot come before this constructor chain is done.
     EstimateBridge::connect(bridge_);
 
+    // ~/map: glim_ros2 creates the odometry module (which loads the map) before the extensions, so the map is there
+    const MapPublisherParams map_params = read_map_publisher_params(config);
+    if (map_params.enabled) {
+      if (const auto map = glim_localization::LocalizationCallbacks::loaded_map()) {
+        map_publisher_ = std::make_unique<MapPublisher>(node.get_node_topics_interface(), node.get_clock(), params.map_frame, map_params.voxel_size);
+        const size_t num_points = map_publisher_->publish(map->tiles());
+        spdlog::info("[glim_localization] published ~/map: {} points from {} tiles (voxel {} m)", num_points, map->size(), map_params.voxel_size);
+      } else {
+        spdlog::warn("[glim_localization] no localization odometry is loaded, so ~/map is not published");
+      }
+    }
+
     const auto bridge = bridge_;
     return {std::make_shared<glim::TopicSubscription<PoseMsg>>(
       "/initialpose", "geometry_msgs/msg/PoseWithCovarianceStamped", [bridge](const std::shared_ptr<const PoseMsg>& msg) { handle_initial_pose(*bridge, *msg); })};
@@ -66,6 +79,7 @@ private:
   }
 
   std::shared_ptr<EstimateBridge> bridge_;
+  std::unique_ptr<MapPublisher> map_publisher_;
 };
 
 }  // namespace glim_localization_ros2

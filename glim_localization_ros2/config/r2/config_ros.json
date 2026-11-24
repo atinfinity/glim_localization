@@ -17,10 +17,14 @@
   // tf_mode          : internal_odom | external_odom | none (see docs/DESIGN.md section 6)
   // base_frame_id    : frame of ~/pose and the TF child
   // T_base_imu       : pose of the IMU in base_frame_id, [x, y, z, qx, qy, qz, qw]
+  // publish_map      : publish the loaded map once on ~/map (latched: reliable, transient local)
+  // map_cloud_voxel  : ~/map keeps one point (the centroid) per voxel of this size [m]; 0 keeps every point
   "localization_ros": {
     "tf_mode": "internal_odom",
     "base_frame_id": "base_link",
     "T_base_imu": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0],
-    "diagnostics_period": 1.0
+    "diagnostics_period": 1.0,
+    "publish_map": true,
+    "map_cloud_voxel": 0.5
   }
 }

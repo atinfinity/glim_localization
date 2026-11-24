@@ -99,16 +99,17 @@ def stamp_s(t):
 class R2Client:
     """A test node that drives the lifecycle of glim_localization and records its outputs."""
 
-    def __init__(self, name, data_dir):
+    def __init__(self, name, data_dir, target=NODE):
+        """`target`: the fully qualified name of the node under test (GLIM's R1 node is /glim_ros)."""
         self.node = rclpy.create_node(name)
         qos = QoSProfile(depth=5000, reliability=ReliabilityPolicy.RELIABLE)
         self.poses, self.statuses, self.transforms = [], [], []
-        self.node.create_subscription(PoseWithCovarianceStamped, f"{NODE}/pose", self.poses.append, qos)
-        self.node.create_subscription(LocalizationStatus, f"{NODE}/status", self.statuses.append, qos)
+        self.node.create_subscription(PoseWithCovarianceStamped, f"{target}/pose", self.poses.append, qos)
+        self.node.create_subscription(LocalizationStatus, f"{target}/status", self.statuses.append, qos)
         self.node.create_subscription(TFMessage, "/tf", lambda m: self.transforms.extend(m.transforms), qos)
-        self.change_state = self.node.create_client(ChangeState, f"{NODE}/change_state")
-        self.get_state = self.node.create_client(GetState, f"{NODE}/get_state")
-        self.set_parameters = self.node.create_client(SetParameters, f"{NODE}/set_parameters")
+        self.change_state = self.node.create_client(ChangeState, f"{target}/change_state")
+        self.get_state = self.node.create_client(GetState, f"{target}/get_state")
+        self.set_parameters = self.node.create_client(SetParameters, f"{target}/set_parameters")
         self.resume_player = self.node.create_client(Resume, "/rosbag2_player/resume")
         self.gt = read_tum(os.path.join(data_dir, "traj_gt.txt"))
         self.gt_stamps = [row[0] for row in self.gt]

@@ -1,0 +1,33 @@
+# ROS parameters of glim_ros2's glim_rosnode / glim_rosbag (node glim_ros) running the R1 extension, read by
+# launch/localization_r1.launch.py (params_file).
+#
+# config_path is not here: the launch file always sets it (launch argument config_path, default
+# share/glim_localization_ros2/config/r1; a relative path would be taken from glim's share directory). The map path is
+# odometry_estimation.map_path in the JSON config; the launch argument map_path sets it in a temporary copy.
+# Everything else (topics, frames, tf_mode, ~/map) is in the GLIM JSON files.
+#
+# The launch file reads this file itself (the /** section, then a glim_ros section if there is one) and passes the
+# values as `-p name:=value`: glim_rosbag would take a --params-file path for a bag. Plain values only (no lists).
+/**:
+  ros__parameters:
+    # GlimROS: verbose logging, also to the fixed file /tmp/glim_log.log
+    debug: false
+    # GlimROS: save a dump when the node is unloaded. Nothing is mapped in R1 (global mapping is off)
+    dump_on_unload: false
+    # glim_rosnode / glim_rosbag: where the dump is saved on exit (nothing is mapped in R1)
+    dump_path: /tmp/dump
+
+    # glim_rosbag only (launch argument bag) ----------------------------------------------------------------
+    # Quit at the end of the bag. false: keep the node (and its latched ~/map) alive until Ctrl-C
+    auto_quit: true
+    # Wait this long [s] before reading the bag, for subscribers to connect
+    delay: 0.0
+    # Skip this much [s] from the start of the bag
+    start_offset: 0.0
+    # Play only this much [s] of the bag; 0 plays to the end
+    playback_duration: 0.0
+    # Stop at this bag time [s since the epoch]; 0 plays to the end
+    playback_until: 0.0
+
+    # Use /clock. Usually false: glim_rosbag stamps everything with the bag time itself
+    use_sim_time: false
