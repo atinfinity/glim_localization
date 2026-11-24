@@ -27,9 +27,9 @@ scripts/docker_run.sh scripts/ci.sh              # dependency check, build, all 
 > [!NOTE]
 > `test_colcon.sh` unsets `ROS_DOMAIN_ID`. Each ROS test reserves a free domain ID for its run, so parallel tests do not see each other's topics.
 
-`scripts/ci_local.sh [--force]` is a host-side wrapper of the same checks that reuses a recorded pass for the same tree and image, and skips docs-only changes.
+`scripts/ci_local.sh [--force]` is an optional host-side wrapper of the same checks that reuses a recorded pass for the same tree and image, and skips docs-only changes. It is not required: GitHub Actions is the CI.
 
-GitHub Actions runs `scripts/ci.sh` in an image tagged with `scripts/image_inputs_hash.sh`, the hash of the repository files the image bakes in. It pulls `ghcr.io/<owner>/glim_localization:<hash>` when it exists and builds it otherwise; pushes to `main` publish a missing image after the checks pass. The published image is rebuilt from the layer cache, not copied from the tested run. The tag identifies the image inputs, not the image content, so base image and apt updates reach it only when an input changes (or after the tag is deleted on GHCR). The C++ builds use a ccache saved from `main` (at most 500 MB). Draft pull requests are skipped until they are marked ready for review.
+GitHub Actions runs `scripts/ci.sh` on amd64 (`build-and-test`) and on arm64 (`build-and-test-arm64`, an `ubuntu-24.04-arm` runner), each in an image tagged with `scripts/image_inputs_hash.sh`, the hash of the repository files the image bakes in. It pulls `ghcr.io/<owner>/glim_localization:<hash>` (amd64) or `<hash>-arm64` (arm64) when it exists and builds it otherwise; pushes to `main` publish a missing image after the checks of that architecture pass. The published image is rebuilt from the layer cache, not copied from the tested run. The tag identifies the image inputs, not the image content, so base image and apt updates reach it only when an input changes (or after the tag is deleted on GHCR). The C++ builds use a ccache saved from `main` (at most 500 MB, one per architecture). Draft pull requests are skipped until they are marked ready for review.
 
 To use ccache locally, set `GLIM_LOC_CCACHE_DIR` to a host directory when calling `scripts/docker_run.sh`. It is mounted as given, so its files are owned by the container user (root), and the path must not contain `:`.
 
@@ -37,7 +37,7 @@ Unless prefixed with `scripts/docker_run.sh`, the commands in these docs run ins
 
 ## CUDA variant
 
-`docker/Dockerfile.cuda` is a second image for a Linux amd64 host with an NVIDIA GPU, a driver that supports CUDA 13.1 or later, and the NVIDIA Container Toolkit. It is the CPU image plus the CUDA 13.1 toolkit from NVIDIA's apt repository, the CUDA 13.1 build of gtsam_points 1.2.2 from the same PPA, and GLIM and glim_ros2 built with `BUILD_WITH_CUDA=ON`. The CPU image stays the default; the Mac (arm64) and GitHub Actions use only the CPU image.
+`docker/Dockerfile.cuda` is a second image for a Linux amd64 host with an NVIDIA GPU, a driver that supports CUDA 13.1 or later, and the NVIDIA Container Toolkit. It is the CPU image plus the CUDA 13.1 toolkit from NVIDIA's apt repository, the CUDA 13.1 build of gtsam_points 1.2.2 from the same PPA, and GLIM and glim_ros2 built with `BUILD_WITH_CUDA=ON`. The CPU image stays the default and is the only one built on arm64 and in GitHub Actions.
 
 ```bash
 docker compose -f docker/compose.yaml build dev-cuda   # glim_localization:dev-cuda
