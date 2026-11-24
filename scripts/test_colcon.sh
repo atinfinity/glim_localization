@@ -45,10 +45,11 @@ expected=(test_message_constants test_localization_publisher test_map_publisher 
 expected_launch=(test_r1_extension test_r2_node test_r2_imu_gap test_launch_r1 test_launch_r1_live test_launch_r2 test_launch_r2_component)
 # Every ament linter test that must run (ament_lint_auto, see CONTRIBUTING.md), per package. cpplint_derived
 # is the cpplint run on the file derived from glim_ros2 (glim_localization_ros2/CMakeLists.txt). The
-# messages package has no C++ or Python sources, so only the linters of its CMake and XML files run there.
+# messages package has no C++ or Python sources, so only the linters of its CMake and XML files are
+# expected there (its copyright test also runs, but checks no file: ament_copyright skips .msg files).
 lint_packages=(glim_localization_ros2 glim_localization_msgs)
 expected_lint_glim_localization_ros2=(copyright cppcheck cpplint cpplint_derived flake8 lint_cmake pep257 uncrustify xmllint)
-expected_lint_glim_localization_msgs=(copyright lint_cmake xmllint)
+expected_lint_glim_localization_msgs=(lint_cmake xmllint)
 
 # A build with BUILD_TESTING off registers no tests, and old results must not count.
 for pkg in "${lint_packages[@]}"; do

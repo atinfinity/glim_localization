@@ -96,7 +96,7 @@ if(BUILD_TESTING)
   # own (cpplint_derived) with every check but the line length; the other linters check it as usual.
   set(ament_cmake_cpplint_ADDITIONAL_EXCLUDE src/localization_node.cpp)
   ament_lint_auto_find_test_dependencies()
-  ament_cpplint(TESTNAME cpplint_derived FILTERS -whitespace/line_length src/localization_node.cpp)
+  ament_cpplint(src/localization_node.cpp TESTNAME cpplint_derived FILTERS -whitespace/line_length)
 
   find_package(ament_cmake_gtest REQUIRED)
   # ROS isolation for parallel tests (colcon test passes ctest -j): each test that uses ROS runs through
