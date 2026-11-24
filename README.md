@@ -7,15 +7,16 @@ LiDAR-IMU localization on a prebuilt 3D map, built on top of [GLIM](https://gith
 ## Overview
 
 - Replaces GLIM's odometry module with a localization module that adds scan-to-map VGICP factors (unary factors against fixed map submaps) to GLIM's tightly coupled LiDAR-IMU fixed-lag smoother.
-- Loads maps directly from GLIM dump directories, or from maps compiled by `map_compiler` (from a GLIM dump or a PCD file).
+- Loads maps directly from GLIM dump directories, or from maps compiled by `map_compiler` (from a GLIM dump, a PCD file or a PLY file). `map_compiler` can also export a 2D occupancy grid (map_server PGM + YAML) for Nav2.
 - ROS 2 integration via a GLIM extension module (R1, for evaluation) and a dedicated lifecycle node (R2, for deployment).
 - GLIM itself is not modified; this repository links against it.
 
 ```mermaid
 flowchart LR
   dump["GLIM dump"] --> compiler["map_compiler"]
-  pcd["PCD file"] --> compiler
+  pcd["PCD / PLY file"] --> compiler
   compiler --> map["compiled map"]
+  compiler -.->|--occupancy-grid| grid2d["2D grid<br/>(PGM + YAML)"]
   dump --> core
   map --> core["localization core<br/>(libglim_localization)"]
   bag["rosbag2"] -->|bag_to_replay.py| dataset["replay dataset"]
@@ -36,7 +37,7 @@ Design: [docs/DESIGN.md](docs/DESIGN.md). Plan: [docs/IMPLEMENTATION_PLAN.md](do
 | 4 | Offline replay, bag conversion, evaluation, evaluation mapper | Done |
 | 5 | ROS 2: glim_ros2 layer, msgs, IMU gap policy, publisher and TF, R1 extension, R2 lifecycle node | Done |
 | 5 | Launch files, YAML parameter files, RViz config, `~/map` | Done |
-| 6 | `map_compiler` PCD input | Done |
+| 6 | `map_compiler` PCD and PLY input, 2D occupancy grid export | Done |
 | 6 | README | This file |
 | 6 | GPU (CUDA) odometry module, selected by the odometry config (CUDA image) | Done; tile prefetch open (#2) |
 
@@ -44,7 +45,7 @@ Not done yet (open issues):
 
 - GPU follow-ups (#2): tile prefetch and a GPU memory budget, real-data timing on the GPU. The GPU module itself is in place ([CUDA variant](#cuda-variant)).
 - Relocalizer: multi-hypothesis refinement of `/initialpose` and global relocalization (#3).
-- `map_compiler` PLY input and 2D OccupancyGrid export (#4); PCD follow-ups such as `binary_compressed` input (#12).
+- `map_compiler` PCD follow-ups such as `binary_compressed` input (#12).
 - Evaluation on real data against an independent reference (#5) and in simulation (#9).
 - Optional wheel odometry fusion (#14).
 - Follow-ups for robustness, the IMU gap policy, the publisher and the R2 node (#6, #8, #10, #13).
@@ -117,17 +118,18 @@ The build argument `CUDA_ARCHITECTURES` (default `75`, Turing; for example `"75;
 
 ## Map preparation
 
-Localization takes either a GLIM dump directory (from a GLIM mapping run) or a compiled map. `map_compiler` writes a compiled map: a slimmed dump without frame data plus a `map_index.json` with the submap poses and bounding boxes. It is also the way to build a map from a PCD file:
+Localization takes either a GLIM dump directory (from a GLIM mapping run) or a compiled map. `map_compiler` writes a compiled map: a slimmed dump without frame data plus a `map_index.json` with the submap poses and bounding boxes. It is also the way to build a map from a PCD or PLY file:
 
 ```bash
 # From a GLIM dump (or a compiled map)
 /ws/build/core/tools/map_compiler /ws/out/glim_dump /ws/out/map
 
-# From a PCD file (x, y, z in the map frame)
+# From a PCD or PLY file (x, y, z in the map frame)
 /ws/build/core/tools/map_compiler /ws/out/map.pcd /ws/out/map --grid-size 50 --voxel-size 0.1
+/ws/build/core/tools/map_compiler /ws/out/map.ply /ws/out/map --grid-size 50 --voxel-size 0.1
 ```
 
-PCD options (rejected for dump input):
+Point cloud options (`.pcd` and `.ply`; rejected for dump input):
 
 | Option | Meaning | Default |
 | --- | --- | --- |
@@ -135,7 +137,26 @@ PCD options (rejected for dump input):
 | `--voxel-size <m>` | Voxel downsampling before tiling, 0 disables it, otherwise at least 0.01 | 0 |
 | `--k-neighbors <n>` | Neighbours for covariance estimation, 5 to 1000 | 10 |
 
-PCD input reads `DATA ascii` and `binary` with x, y, z as F4 or F8; other fields are ignored. Localization uses up to `map_max_submaps` (default 5) tiles nearest to the robot, so 20 m tiles cover only about 40 x 40 m. For long-range LiDAR use `--grid-size` 50 to 100, or raise `map_max_submaps`.
+PCD input reads `DATA ascii` and `binary` with x, y, z as F4 or F8; other fields are ignored. PLY input reads `format ascii` and `binary_little_endian` with vertex x, y, z as `float` or `double`; other properties (intensity, normals, colors, lists) and other elements (faces) are ignored, and big-endian PLY is rejected. The same points give the same map from either format. Localization uses up to `map_max_submaps` (default 5) tiles nearest to the robot, so 20 m tiles cover only about 40 x 40 m. For long-range LiDAR use `--grid-size` 50 to 100, or raise `map_max_submaps`.
+
+### 2D occupancy grid for Nav2
+
+`--occupancy-grid <prefix>` also writes `<prefix>.pgm` and `<prefix>.yaml` in the `map_server` format, from any input. The obstacle band is required and is in map-frame z:
+
+```bash
+# Ground at about z = -1.8 in the map frame (GLIM's z = 0 is the first sensor pose): obstacles from 0.2 m to 2 m above it
+/ws/build/core/tools/map_compiler /ws/out/map.ply /ws/out/map --voxel-size 0.1 \
+  --occupancy-grid /ws/out/map_2d --occupancy-resolution 0.05 --occupancy-z-min -1.6 --occupancy-z-max 0.2
+```
+
+| Option | Meaning | Default |
+| --- | --- | --- |
+| `--occupancy-grid <prefix>` | Write `<prefix>.pgm` and `<prefix>.yaml`; refused if either exists | off |
+| `--occupancy-resolution <m>` | Cell edge, at least 0.01 | 0.05 |
+| `--occupancy-z-min <m>` | Lower bound of the obstacle band (map-frame z) | required |
+| `--occupancy-z-max <m>` | Upper bound of the obstacle band (map-frame z) | required |
+
+A cell is occupied if it holds a point with `z-min <= z < z-max`, free if it holds only points below `z-min` (the ground), and unknown otherwise; points at or above `z-max` are ignored. One point is enough for occupied, so clean or downsample noisy maps first. The YAML uses `mode: trinary`, `negate: 0`, `occupied_thresh: 0.65` and `free_thresh: 0.1`, with `origin` at the lower-left corner of the grid. Load it with `nav2_map_server` (`yaml_filename`); details in [DESIGN 5.1](docs/DESIGN.md#51-mapmanager).
 
 ## Offline replay and evaluation
 
@@ -270,7 +291,7 @@ States: `INITIALIZING` (started or reset) -> `TRACKING` -> `DEGRADED` (low inlie
 - Right after the node becomes active, the first messages can be missed (cause not confirmed; DDS discovery is suspected). In R2 set the first pose with `~/initialize`, which replies; otherwise publish `/initialpose` after the node is matched, or resend it.
 - IMU gaps in ROS (`on_imu_gap: reset` in the shipped config): a gap up to `imu_gap_reset_max` (0.5 s) resets the estimate from its own prediction; a longer gap goes LOST until an external initialization. The replay tool defaults to `--on-imu-gap abort` (exit code 3).
 - Degenerate directions are not detected, and pose covariance is not estimated. Objects thinner than a voxel can bias the estimate.
-- Map input: no PLY, no compressed PCD, no 2D map export (#4, #12).
+- Map input: no compressed PCD (#12). The 2D occupancy grid is checked against map_server's loading rules in a test, but not with a running Nav2 stack.
 
 ## License
 

@@ -3,7 +3,7 @@
 Development, builds, and tests run in a headless Docker container with Ubuntu 24.04 + ROS 2 Jazzy (`docker/`). The container covers **the CPU core, offline evaluation, and the ROS 2 packages**. The GPU build (`BUILD_WITH_CUDA=ON`) and real-robot evaluation need a Linux machine with an NVIDIA GPU and come later.
 When a phase meets its completion criteria, its results are recorded in `docs/PROGRESS.md`.
 
-Status: Phases 0 to 4 are done. Phase 5 is done except the `~/aligned_points` topic (#18). Phase 6 is partly done (PCD input for map_compiler, README).
+Status: Phases 0 to 4 are done. Phase 5 is done except the `~/aligned_points` topic (#18). Phase 6 is partly done (PCD and PLY input and 2D occupancy grid export for map_compiler, README).
 
 ## Phase 0: Environment and repository (done)
 
@@ -59,7 +59,7 @@ In the CPU version, `use_keyframes` means relative pose factors from the local m
 ## Phase 6: Finishing (optional, partly done)
 
 - Relocalizer (multiple yaw hypotheses, FPFH + RANSAC/GNC): planned (#3).
-- PCD input for map_compiler: done. PLY input and 2D OccupancyGrid output: planned (#4).
+- PCD input for map_compiler: done. PLY input and 2D OccupancyGrid output: done (#4).
 - Write the GPU version (`OdometryEstimationLocalizationGPU`); build it in a CUDA environment: done (CUDA image, `config/gpu`). Tile prefetch and a GPU memory budget: planned (#2).
 - README (build steps, usage, limitations): done.
 
