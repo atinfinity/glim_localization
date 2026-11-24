@@ -1,3 +1,9 @@
+# Copyright (c) 2026 atinfinity
+#
+# Use of this source code is governed by an MIT-style
+# license that can be found in the LICENSE file or at
+# https://opensource.org/licenses/MIT.
+
 """
 R1: glim_ros2's glim_rosnode (live topics) or glim_rosbag (a bag) with the localization extension.
 

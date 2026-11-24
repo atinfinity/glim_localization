@@ -1,3 +1,9 @@
+# Copyright (c) 2026 atinfinity
+#
+# Use of this source code is governed by an MIT-style
+# license that can be found in the LICENSE file or at
+# https://opensource.org/licenses/MIT.
+
 """
 Shared parts of the R2 launch tests (test_r2_node.py, test_r2_imu_gap.py).
 

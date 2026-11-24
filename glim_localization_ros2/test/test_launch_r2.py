@@ -1,3 +1,9 @@
+# Copyright (c) 2026 atinfinity
+#
+# Use of this source code is governed by an MIT-style
+# license that can be found in the LICENSE file or at
+# https://opensource.org/licenses/MIT.
+
 """
 Test the installed R2 launch file (launch/localization.launch.py) as a process.
 

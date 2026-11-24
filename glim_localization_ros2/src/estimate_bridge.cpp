@@ -1,3 +1,9 @@
+// Copyright (c) 2026 atinfinity
+//
+// Use of this source code is governed by an MIT-style
+// license that can be found in the LICENSE file or at
+// https://opensource.org/licenses/MIT.
+
 #include "glim_localization_ros2/estimate_bridge.hpp"
 
 #include <algorithm>

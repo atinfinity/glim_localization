@@ -1,3 +1,9 @@
+// Copyright (c) 2026 atinfinity
+//
+// Use of this source code is governed by an MIT-style
+// license that can be found in the LICENSE file or at
+// https://opensource.org/licenses/MIT.
+
 // In-process test of ~/map: the map cloud conversion and its latched publication. No bag, no
 // display.
 #include <gtest/gtest.h>

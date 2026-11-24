@@ -1,6 +1,12 @@
 // Derived from koide3/glim_ros2 src/glim_ros/glim_ros.cpp at commit 4d4ec524ccf1b02aa09b0af2af767ecc54343798 (MIT License, Copyright (c) 2024 koide3)
 // Derived from koide3/glim_ros2 src/glim_ros/ros_qos.cpp at commit 4d4ec524ccf1b02aa09b0af2af767ecc54343798 (MIT License, Copyright (c) 2024 koide3)
 //
+// Copyright (c) 2026 atinfinity
+//
+// Use of this source code is governed by an MIT-style
+// license that can be found in the LICENSE file or at
+// https://opensource.org/licenses/MIT.
+//
 // R2: glim_localization_node, an rclcpp_lifecycle node (also a component).
 //
 //   configure   reads the GLIM JSON config (config_path), loads the map (map_path) and publishes

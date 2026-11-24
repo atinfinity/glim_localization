@@ -1,3 +1,9 @@
+# Copyright (c) 2026 atinfinity
+#
+# Use of this source code is governed by an MIT-style
+# license that can be found in the LICENSE file or at
+# https://opensource.org/licenses/MIT.
+
 """
 R2 end to end: glim_localization_node driven through its lifecycle, over a synthetic bag.
 
