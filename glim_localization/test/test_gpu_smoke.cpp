@@ -99,7 +99,8 @@ TEST(GpuSmoke, BuildsGaussianVoxelMapGPU) {
   const long total = std::accumulate(num_points.begin(), num_points.end(), 0L);
   EXPECT_EQ(total, static_cast<long>(cloud->size()));
 
-  // The slab covers 10 x 10 x 1 voxels (up to 2 x 11 x 11 with boundary effects), as on the CPU.
+  // Points in [0, 10) x [0, 10) x [0, 1) with 1 m voxels occupy at most 10 x 10 x 1 voxels; the GPU map
+  // must find the same occupied voxels as the CPU one.
   gtsam_points::GaussianVoxelMapCPU voxelmap_cpu(resolution);
   voxelmap_cpu.insert(*cloud);
   long occupied = 0;
@@ -111,6 +112,8 @@ TEST(GpuSmoke, BuildsGaussianVoxelMapGPU) {
     const Eigen::Vector3f& mean = means[i];
     EXPECT_GE(mean.x(), -1e-3f);
     EXPECT_LE(mean.x(), 10.0f + 1e-3f);
+    EXPECT_GE(mean.y(), -1e-3f);
+    EXPECT_LE(mean.y(), 10.0f + 1e-3f);
     EXPECT_GE(mean.z(), -1e-3f);
     EXPECT_LE(mean.z(), 1.0f + 1e-3f);
   }

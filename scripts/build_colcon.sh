@@ -37,13 +37,19 @@ if [[ "$(readlink "${base}/build/glim_localization" || true)" != "${core_build}"
 fi
 rm -f "${core_build}/cmake_args.last"
 
-# CUDA mode: the same BUILD_WITH_CUDA as build_core.sh, so make finds the core up to date.
+# CUDA mode: the same BUILD_WITH_CUDA=ON as build_core.sh, so make finds the core up to date. colcon
+# passes --cmake-args to every package, so the CPU mode passes nothing (the core keeps the OFF that
+# build_core.sh configured) and the other packages get no unused variable.
 with_cuda="${GLIM_LOC_BUILD_WITH_CUDA:-OFF}"
 [[ "${with_cuda}" == ON || "${with_cuda}" == OFF ]] || { echo "FAIL: GLIM_LOC_BUILD_WITH_CUDA must be ON or OFF, got ${with_cuda}" >&2; exit 1; }
+cuda_args=()
+if [[ "${with_cuda}" == ON ]]; then
+  cuda_args=(-DBUILD_WITH_CUDA=ON)
+fi
 
 colcon --log-base "${base}/log" build "${paths[@]}" --parallel-workers 2 \
   --cmake-args -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=ON -DBUILD_TESTING=ON -DGLIM_LOCALIZATION_USE_AMENT=ON \
-  -DBUILD_WITH_CUDA="${with_cuda}" "${launcher[@]}"
+  ${cuda_args[@]+"${cuda_args[@]}"} "${launcher[@]}"
 
 # The downstream packages found the core through its ament package config, not a plain CMake one.
 grep -q '^GLIM_LOCALIZATION_USE_AMENT:BOOL=ON$' "${core_build}/CMakeCache.txt" \
