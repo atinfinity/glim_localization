@@ -31,11 +31,13 @@ ARG CUDA_ARCHITECTURES=75
 SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
 
 # CUDA: the toolkit for every consumer of gtsam_points (its config runs find_dependency(CUDAToolkit)),
-# and the device visibility used by the NVIDIA Container Toolkit at run time.
+# and the driver capabilities the NVIDIA Container Toolkit injects: compute for CUDA, utility for
+# nvidia-smi, which scripts/ci.sh uses to decide that a GPU test must not skip. NVIDIA_VISIBLE_DEVICES
+# is deliberately not set: GPUs come only from a device request (compose dev-cuda, docker run --gpus),
+# also on a host whose default Docker runtime is nvidia.
 ENV PATH=/usr/local/cuda/bin:${PATH} \
     CUDAToolkit_ROOT=/usr/local/cuda \
     CUDAARCHS=${CUDA_ARCHITECTURES} \
-    NVIDIA_VISIBLE_DEVICES=all \
     NVIDIA_DRIVER_CAPABILITIES=compute,utility \
     GLIM_LOC_BUILD_WITH_CUDA=ON
 

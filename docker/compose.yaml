@@ -30,7 +30,15 @@ services:
       args:
         JOBS: ${JOBS:-4}
         CUDA_ARCHITECTURES: ${CUDA_ARCHITECTURES:-75}
-    gpus: all
+    # All GPUs. The device reservation form instead of `gpus: all`: Compose before v2.30 rejects the
+    # `gpus` key while validating the whole file, which would break the CPU service too.
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
     working_dir: /ws/src/glim_localization
     environment:
       - CTEST_JOBS
