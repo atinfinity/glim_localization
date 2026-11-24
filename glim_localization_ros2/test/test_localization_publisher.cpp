@@ -446,18 +446,31 @@ TEST(LocalizationPublisher, InitSearchResultIsReported) {
   fixture.publisher->on_status(accepted);
   auto truncated = frame_status(1, LocalizationState::LOST, 2);
   truncated.init_search = glim_localization::InitSearchResult::REJECTED;
+  truncated.init_search_reason = glim_localization::InitSearchReason::TRUNCATED;
   truncated.init_search_candidates = 1;
   truncated.init_search_candidates_total = 24;
   truncated.init_search_score = 0.6;
   fixture.publisher->on_status(truncated);
   auto ambiguous = frame_status(2, LocalizationState::LOST, 3);
   ambiguous.init_search = glim_localization::InitSearchResult::REJECTED;
+  ambiguous.init_search_reason = glim_localization::InitSearchReason::AMBIGUOUS;
   ambiguous.init_search_candidates = 24;
   ambiguous.init_search_candidates_total = 24;
   ambiguous.init_search_score = 0.93;
   ambiguous.init_search_runner_up_score = 0.92;
   fixture.publisher->on_status(ambiguous);
-  ASSERT_TRUE(fixture.spin_until([&] { return fixture.statuses.size() >= 3 && fixture.diagnostics.size() >= 3; }));
+  auto low_score = frame_status(3, LocalizationState::LOST, 4);
+  low_score.init_search = glim_localization::InitSearchResult::REJECTED;
+  low_score.init_search_reason = glim_localization::InitSearchReason::LOW_SCORE;
+  low_score.init_search_candidates = 24;
+  low_score.init_search_candidates_total = 24;
+  low_score.init_search_score = 0.41;
+  fixture.publisher->on_status(low_score);
+  auto no_candidate = frame_status(4, LocalizationState::LOST, 5);
+  no_candidate.init_search = glim_localization::InitSearchResult::REJECTED;
+  no_candidate.init_search_reason = glim_localization::InitSearchReason::NO_CANDIDATE;
+  fixture.publisher->on_status(no_candidate);
+  ASSERT_TRUE(fixture.spin_until([&] { return fixture.statuses.size() >= 5 && fixture.diagnostics.size() >= 5; }));
 
   const auto& msg = fixture.statuses[0];
   EXPECT_EQ(msg.init_search, StatusMsg::INIT_SEARCH_ACCEPTED);
@@ -470,6 +483,11 @@ TEST(LocalizationPublisher, InitSearchResultIsReported) {
   EXPECT_DOUBLE_EQ(msg.init_search_time, 0.8);
   EXPECT_EQ(fixture.statuses[1].init_search, StatusMsg::INIT_SEARCH_REJECTED);
   EXPECT_EQ(fixture.statuses[1].init_search_candidates, 1);
+  EXPECT_EQ(msg.init_search_reason, StatusMsg::INIT_SEARCH_REASON_NONE);
+  EXPECT_EQ(fixture.statuses[1].init_search_reason, StatusMsg::INIT_SEARCH_REASON_TRUNCATED);
+  EXPECT_EQ(fixture.statuses[2].init_search_reason, StatusMsg::INIT_SEARCH_REASON_AMBIGUOUS);
+  EXPECT_EQ(fixture.statuses[3].init_search_reason, StatusMsg::INIT_SEARCH_REASON_LOW_SCORE);
+  EXPECT_EQ(fixture.statuses[4].init_search_reason, StatusMsg::INIT_SEARCH_REASON_NO_CANDIDATE);
   EXPECT_EQ(fixture.statuses[1].init_search_candidates_total, 24);
 
   const auto value_of = [](const diagnostic_msgs::msg::DiagnosticStatus& status, const std::string& key) {
@@ -482,6 +500,7 @@ TEST(LocalizationPublisher, InitSearchResultIsReported) {
   };
   const auto& first = fixture.diagnostics[0].status.at(0);
   EXPECT_EQ(value_of(first, "init_search"), "ACCEPTED");
+  EXPECT_EQ(value_of(first, "init_search_reason"), "NONE");
   EXPECT_EQ(value_of(first, "init_search_candidates"), "24");
   EXPECT_EQ(value_of(first, "init_search_candidates_total"), "24");
   EXPECT_NEAR(std::stod(value_of(first, "init_search_yaw_offset_deg")), -90.0, 1e-3);
@@ -492,8 +511,19 @@ TEST(LocalizationPublisher, InitSearchResultIsReported) {
   EXPECT_EQ(value_of(second, "init_search"), "REJECTED");
   EXPECT_NE(second.message.find("rejected"), std::string::npos) << second.message;
   EXPECT_NE(second.message.find("time budget ran out after 1 of 24 candidates"), std::string::npos) << second.message;
+  EXPECT_EQ(value_of(second, "init_search_reason"), "TRUNCATED");
   const auto& third = fixture.diagnostics[2].status.at(0);
   EXPECT_NE(third.message.find("best inlier ratio 0.930, runner-up 0.920"), std::string::npos) << third.message;
+  EXPECT_EQ(value_of(third, "init_search_reason"), "AMBIGUOUS");
+  const auto& fourth = fixture.diagnostics[3].status.at(0);
+  EXPECT_NE(fourth.message.find("best inlier ratio 0.410 is below the minimum"), std::string::npos) << fourth.message;
+  EXPECT_EQ(fourth.message.find("runner-up"), std::string::npos) << fourth.message;
+  EXPECT_EQ(value_of(fourth, "init_search_reason"), "LOW_SCORE");
+  const auto& fifth = fixture.diagnostics[4].status.at(0);
+  EXPECT_NE(fifth.message.find("no candidate to score"), std::string::npos) << fifth.message;
+  EXPECT_EQ(fifth.message.find("0.000"), std::string::npos) << fifth.message;
+  EXPECT_EQ(fifth.message.find("runner-up"), std::string::npos) << fifth.message;
+  EXPECT_EQ(value_of(fifth, "init_search_reason"), "NO_CANDIDATE");
 }
 
 // The pose of a frame is published only with the status of the same frame.

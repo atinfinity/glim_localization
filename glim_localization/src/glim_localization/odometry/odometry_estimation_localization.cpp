@@ -54,7 +54,39 @@ const char* to_string(InitSearchResult result) {
   return "UNKNOWN";
 }
 
+const char* to_string(InitSearchReason reason) {
+  switch (reason) {
+    case InitSearchReason::NONE:
+      return "NONE";
+    case InitSearchReason::TRUNCATED:
+      return "TRUNCATED";
+    case InitSearchReason::LOW_SCORE:
+      return "LOW_SCORE";
+    case InitSearchReason::AMBIGUOUS:
+      return "AMBIGUOUS";
+    case InitSearchReason::NO_CANDIDATE:
+      return "NO_CANDIDATE";
+  }
+  return "UNKNOWN";
+}
+
 namespace {
+
+InitSearchReason to_init_search_reason(CandidateSearchOutcome outcome) {
+  switch (outcome) {
+    case CandidateSearchOutcome::ACCEPTED:
+      return InitSearchReason::NONE;
+    case CandidateSearchOutcome::NO_CANDIDATE:
+      return InitSearchReason::NO_CANDIDATE;
+    case CandidateSearchOutcome::TRUNCATED:
+      return InitSearchReason::TRUNCATED;
+    case CandidateSearchOutcome::LOW_SCORE:
+      return InitSearchReason::LOW_SCORE;
+    case CandidateSearchOutcome::AMBIGUOUS:
+      return InitSearchReason::AMBIGUOUS;
+  }
+  return InitSearchReason::NONE;
+}
 
 // IMU history kept before the first estimated frame, for the scan that starts it.
 constexpr double kImuHistoryWhileWaiting = 1.0;
@@ -236,9 +268,12 @@ glim::EstimationFrame::ConstPtr OdometryEstimationLocalization::insert_frame(
   }
   if (init_search_pending_ && frames.empty() && frame->size() < localization_params().init_yaw_search.min_points) {
     // Upstream would build the first frame from the unsearched pose even when it is empty, so the search would never
-    // run: keep it pending and wait for a frame that can be scored
-    spdlog::warn("dropping the frame at {:.3f} s: {} points are too few for the initial pose search (init_yaw_search_min_points {})", frame->stamp, frame->size(),
-      localization_params().init_yaw_search.min_points);
+    // run: keep it pending and wait for a frame that can be scored. Warned once per pending search.
+    if (!init_search_sparse_warned_) {
+      spdlog::warn("dropping the frame at {:.3f} s: {} points are too few for the initial pose search (init_yaw_search_min_points {}); later sparse frames are dropped silently until the search runs",
+        frame->stamp, frame->size(), localization_params().init_yaw_search.min_points);
+      init_search_sparse_warned_ = true;
+    }
     trim_imu_queue(frame->stamp);
     trim_imu_stamps(frame->stamp - kImuHistoryWhileWaiting);
     return nullptr;
@@ -428,13 +463,14 @@ bool OdometryEstimationLocalization::run_init_search(const glim::PreprocessedFra
   search_params.scorer.max_iterations = p.init_yaw_search.max_iterations;
   search_params.min_score = p.init_yaw_search.min_inlier_ratio;
   search_params.min_score_gap = p.init_yaw_search.min_score_gap;
-  search_params.distinct_yaw = 2.0 * p.init_yaw_search.step;
+  search_params.distinct_yaw = distinct_yaw_for_step(p.init_yaw_search.step);
   search_params.time_budget = p.init_yaw_search.time_budget;
   const CandidateSearchResult result = search_candidates(*map_, cloud, candidates, search_params);
 
   {
     std::lock_guard<std::mutex> lock(status_mutex_);
     status_.init_search = result.accepted ? InitSearchResult::ACCEPTED : InitSearchResult::REJECTED;
+    status_.init_search_reason = to_init_search_reason(result.outcome);
     status_.init_search_candidates = result.num_evaluated;
     status_.init_search_candidates_total = result.num_candidates;
     status_.init_search_score = result.best ? result.best->score : 0.0;
@@ -622,6 +658,7 @@ void OdometryEstimationLocalization::apply_pending_reset(double frame_stamp) {
   // Only a pose given from outside is searched: relocalize() and an IMU gap self-reset start from the estimate
   init_search_pending_ = p.init_yaw_search.enabled && pending->reason == ResetReason::EXTERNAL && !pending->from_current;
   init_search_rejected_ = false;
+  init_search_sparse_warned_ = false;
   init_hint_T_world_imu_ = pending->T_world_imu;
   init_hint_v_world_imu_ = pending->v_world_imu;
 

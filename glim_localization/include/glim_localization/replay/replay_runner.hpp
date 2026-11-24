@@ -98,7 +98,8 @@ struct ReplaySummary {
   /// The most recent initial pose search (init_yaw_search), if the odometry ran one
   struct InitSearch {
     InitSearchResult result = InitSearchResult::NONE;
-    int candidates = 0;        ///< Scored; fewer than candidates_total means the time budget ran out
+    InitSearchReason reason = InitSearchReason::NONE;  ///< Why it was rejected; NONE if accepted
+    int candidates = 0;       ///< Scored; fewer than candidates_total means the time budget ran out
     int candidates_total = 0;  ///< Generated
     double score = 0.0;
     double yaw_offset = 0.0;  ///< [rad]

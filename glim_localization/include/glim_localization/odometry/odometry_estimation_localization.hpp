@@ -40,6 +40,18 @@ enum class InitSearchResult : uint8_t {
 
 const char* to_string(InitSearchResult result);
 
+/// Why the yaw search rejected the given pose. The values are part of the ROS message
+/// glim_localization_msgs/LocalizationStatus (INIT_SEARCH_REASON_*).
+enum class InitSearchReason : uint8_t {
+  NONE = 0,          ///< Not searched, or accepted
+  TRUNCATED = 1,     ///< The time budget ran out before every candidate was scored
+  LOW_SCORE = 2,     ///< The best inlier ratio is below init_yaw_search_min_inlier_ratio
+  AMBIGUOUS = 3,     ///< The runner-up is within init_yaw_search_min_score_gap of the best
+  NO_CANDIDATE = 4   ///< The candidate generator returned nothing to score
+};
+
+const char* to_string(InitSearchReason reason);
+
 struct LocalizationStatus {
   LocalizationState state = LocalizationState::INITIALIZING;
   double stamp = 0.0;
@@ -54,11 +66,13 @@ struct LocalizationStatus {
 
   // Yaw search of the current run (init_yaw_search). Cleared by a reset, set when the search runs on the first frame.
   InitSearchResult init_search = InitSearchResult::NONE;
-  int init_search_candidates = 0;        ///< Candidates scored; fewer than init_search_candidates_total means truncated
+  InitSearchReason init_search_reason = InitSearchReason::NONE;  ///< Set when init_search is REJECTED
+  int init_search_candidates = 0;       ///< Candidates scored; fewer than init_search_candidates_total means truncated
   int init_search_candidates_total = 0;  ///< Candidates generated
   double init_search_score = 0.0;        ///< Inlier ratio of the best candidate, also when it was rejected
   double init_search_yaw_offset = 0.0;   ///< Yaw of the best registered pose relative to the given pose [rad]
-  /// Inlier ratio of the best candidate whose registered yaw is more than two steps from the best one (0 if none)
+  /// Inlier ratio of the best candidate whose registered yaw is more than distinct_yaw_for_step(step) (two steps, at
+  /// most 90 deg) from the best one (0 if none)
   double init_search_runner_up_score = 0.0;
   double init_search_runner_up_yaw_offset = 0.0;  ///< Its yaw relative to the given pose [rad]
   double init_search_time = 0.0;                  ///< Wall-clock seconds of the search
@@ -106,7 +120,8 @@ struct OdometryEstimationLocalizationParams : public glim::OdometryEstimationIMU
   /// candidates around the given pose by scan-to-map registration and start from the best one. Not applied to
   /// relocalize() or an IMU gap self-reset, which start from the estimate. The pose is rejected (LOST) if the time
   /// budget runs out before every candidate is scored, if the best inlier ratio is below min_inlier_ratio, or if a
-  /// candidate more than two steps away in yaw scores within min_score_gap of the best.
+  /// candidate more than two steps (at most 90 deg) away in yaw scores within min_score_gap of the best. With a range
+  /// of 0 or one too small to reach that far, only the inlier ratio threshold applies.
   struct InitYawSearch {
     bool enabled = false;
     double range = M_PI;                ///< Half width [rad] (config: init_yaw_search_range_deg)
@@ -255,6 +270,7 @@ private:
   /// points are dropped meanwhile: upstream would start from the unsearched pose on an empty frame.
   bool init_search_pending_ = false;
   bool init_search_rejected_ = false;  ///< No candidate passed; frames are dropped until reset()
+  bool init_search_sparse_warned_ = false;  ///< A sparse frame was already reported for the pending search
   Eigen::Isometry3d init_hint_T_world_imu_ = Eigen::Isometry3d::Identity();
   Eigen::Vector3d init_hint_v_world_imu_ = Eigen::Vector3d::Zero();
 

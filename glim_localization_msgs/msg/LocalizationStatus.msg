@@ -56,6 +56,18 @@ uint8 INIT_SEARCH_ACCEPTED=1
 uint8 INIT_SEARCH_REJECTED=2
 uint8 init_search
 
+# Why the search rejected the given pose; NONE unless init_search is INIT_SEARCH_REJECTED.
+uint8 INIT_SEARCH_REASON_NONE=0
+# The time budget ran out before every candidate was scored.
+uint8 INIT_SEARCH_REASON_TRUNCATED=1
+# The best candidate is below the minimum inlier ratio.
+uint8 INIT_SEARCH_REASON_LOW_SCORE=2
+# The runner-up is within the minimum score gap of the best.
+uint8 INIT_SEARCH_REASON_AMBIGUOUS=3
+# There was no candidate to score.
+uint8 INIT_SEARCH_REASON_NO_CANDIDATE=4
+uint8 init_search_reason
+
 # Number of candidates scored before the time budget ran out.
 int32 init_search_candidates
 
@@ -68,7 +80,8 @@ float64 init_search_score
 # Yaw of the best candidate's registered pose relative to the given pose [rad], in [-pi, pi].
 float64 init_search_yaw_offset
 
-# Inlier ratio of the best candidate more than two search steps away in yaw from the best, in [0, 1]; 0 if none.
+# Inlier ratio of the best candidate more than two search steps (at most 90 deg) away in yaw from the best, in [0, 1];
+# 0 if none.
 float64 init_search_runner_up_score
 
 # Its yaw relative to the given pose [rad], in [-pi, pi].

@@ -67,6 +67,12 @@ uint8 INIT_SEARCH_NONE=0
 uint8 INIT_SEARCH_ACCEPTED=1
 uint8 INIT_SEARCH_REJECTED=2
 uint8 init_search
+uint8 INIT_SEARCH_REASON_NONE=0
+uint8 INIT_SEARCH_REASON_TRUNCATED=1
+uint8 INIT_SEARCH_REASON_LOW_SCORE=2
+uint8 INIT_SEARCH_REASON_AMBIGUOUS=3
+uint8 INIT_SEARCH_REASON_NO_CANDIDATE=4
+uint8 init_search_reason
 int32 init_search_candidates
 int32 init_search_candidates_total
 float64 init_search_score

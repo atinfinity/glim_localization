@@ -111,14 +111,27 @@ diagnostic_msgs::msg::KeyValue key_value(const std::string& key, const std::stri
   return kv;
 }
 
-/// Why the search rejected the pose, as far as the message tells: a search cut short is recognized by its counts;
-/// otherwise the scores are given (the thresholds are in the odometry config, not in the message).
+/// Why the search rejected the pose, with the numbers that matter for that reason (the thresholds are in the
+/// odometry config, not in the message).
 std::string init_search_rejection_reason(const glim_localization_msgs::msg::LocalizationStatus& msg) {
+  using glim_localization_msgs::msg::LocalizationStatus;
   char text[160];
-  if (msg.init_search_candidates < msg.init_search_candidates_total) {
-    std::snprintf(text, sizeof(text), "time budget ran out after %d of %d candidates", msg.init_search_candidates, msg.init_search_candidates_total);
-  } else {
-    std::snprintf(text, sizeof(text), "best inlier ratio %.3f, runner-up %.3f", msg.init_search_score, msg.init_search_runner_up_score);
+  switch (msg.init_search_reason) {
+    case LocalizationStatus::INIT_SEARCH_REASON_TRUNCATED:
+      std::snprintf(text, sizeof(text), "time budget ran out after %d of %d candidates", msg.init_search_candidates, msg.init_search_candidates_total);
+      break;
+    case LocalizationStatus::INIT_SEARCH_REASON_LOW_SCORE:
+      std::snprintf(text, sizeof(text), "best inlier ratio %.3f is below the minimum", msg.init_search_score);
+      break;
+    case LocalizationStatus::INIT_SEARCH_REASON_AMBIGUOUS:
+      std::snprintf(text, sizeof(text), "ambiguous: best inlier ratio %.3f, runner-up %.3f", msg.init_search_score, msg.init_search_runner_up_score);
+      break;
+    case LocalizationStatus::INIT_SEARCH_REASON_NO_CANDIDATE:
+      std::snprintf(text, sizeof(text), "no candidate to score");
+      break;
+    default:
+      std::snprintf(text, sizeof(text), "reason %d", static_cast<int>(msg.init_search_reason));
+      break;
   }
   return text;
 }
@@ -318,6 +331,7 @@ void LocalizationPublisher::on_status(const glim_localization::LocalizationStatu
   msg.processing_time = status.processing_time;
   msg.last_reset_reason = to_message_reason(status.last_reset_reason);
   msg.init_search = static_cast<uint8_t>(status.init_search);  // Same values, pinned by test_message_constants
+  msg.init_search_reason = static_cast<uint8_t>(status.init_search_reason);  // Same values, see test_message_constants
   msg.init_search_candidates = status.init_search_candidates;
   msg.init_search_candidates_total = status.init_search_candidates_total;
   msg.init_search_score = status.init_search_score;
@@ -376,6 +390,8 @@ void LocalizationPublisher::publish_diagnostics(const LocalizationStatus& msg) {
   status.values.push_back(key_value("residual", std::to_string(msg.residual)));
   status.values.push_back(key_value("processing_time", std::to_string(msg.processing_time)));
   status.values.push_back(key_value("init_search", glim_localization::to_string(static_cast<glim_localization::InitSearchResult>(msg.init_search))));
+  status.values.push_back(
+    key_value("init_search_reason", glim_localization::to_string(static_cast<glim_localization::InitSearchReason>(msg.init_search_reason))));
   status.values.push_back(key_value("init_search_candidates", std::to_string(msg.init_search_candidates)));
   status.values.push_back(key_value("init_search_candidates_total", std::to_string(msg.init_search_candidates_total)));
   status.values.push_back(key_value("init_search_score", std::to_string(msg.init_search_score)));

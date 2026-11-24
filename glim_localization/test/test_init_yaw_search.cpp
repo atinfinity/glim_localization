@@ -170,6 +170,7 @@ TEST_F(InitYawSearchTest, WithoutSearchLargeYawErrorDoesNotConverge) {
   const auto status = odometry.status();
   print("no search, yaw error 75 deg", stats, status);
   EXPECT_EQ(status.init_search, InitSearchResult::NONE);
+  EXPECT_EQ(status.init_search_reason, InitSearchReason::NONE);
   EXPECT_EQ(status.init_search_candidates, 0);
   // The registration stays in the wrong minimum: the pose is far off, or the quality monitor never trusts it
   EXPECT_TRUE(stats.last_rotation_deg > 10.0 || stats.last_translation > 1.0 || status.state != LocalizationState::TRACKING)
@@ -191,6 +192,7 @@ TEST_F(InitYawSearchTest, ConfiguredPoseWithLargeYawErrorConverges) {
     EXPECT_EQ(stats.estimated, static_cast<int>(frames_->size()));
     EXPECT_EQ(status.state, LocalizationState::TRACKING) << to_string(status.state);
     EXPECT_EQ(status.init_search, InitSearchResult::ACCEPTED);
+    EXPECT_EQ(status.init_search_reason, InitSearchReason::NONE);
     EXPECT_EQ(status.init_search_candidates, 24);
     EXPECT_EQ(status.init_search_candidates_total, 24);
     EXPECT_GT(status.init_search_score, 0.9);
@@ -201,6 +203,29 @@ TEST_F(InitYawSearchTest, ConfiguredPoseWithLargeYawErrorConverges) {
     EXPECT_LT(stats.max_translation, kMaxTranslationError);
     EXPECT_LT(stats.max_rotation_deg, kMaxRotationErrorDeg);
   }
+}
+
+TEST_F(InitYawSearchTest, CoarseStepStillReportsARunnerUp) {
+  // With a 90 deg step, two steps (180 deg) would leave no candidate far enough away for the ambiguity check;
+  // distinct_yaw is capped at 90 deg, so the half-turn flip of the corridor is still the runner-up
+  auto p = params(true);
+  p.estimate_init_state = false;
+  p.init_T_world_imu = perturbed_pose(0.0, 75.0 * kDeg);
+  p.init_v_world_imu.setZero();
+  p.init_yaw_search.step = 90.0 * kDeg;
+  OdometryEstimationLocalizationCPU odometry(p, *map_);
+
+  size_t imu_cursor = 0;
+  const auto stats = run(odometry, imu_cursor, 0, 30);
+  const auto status = odometry.status();
+  print("search, step 90 deg, yaw error 75 deg", stats, status);
+  EXPECT_EQ(status.init_search, InitSearchResult::ACCEPTED);
+  EXPECT_EQ(status.init_search_candidates_total, 4);
+  EXPECT_NEAR(status.init_search_yaw_offset / kDeg, -75.0, 1.0);
+  EXPECT_GT(status.init_search_runner_up_score, 0.0) << "no runner-up: the ambiguity check could not run";
+  EXPECT_GT(std::abs(std::remainder(status.init_search_runner_up_yaw_offset - status.init_search_yaw_offset, 2.0 * M_PI)), 90.0 * kDeg);
+  EXPECT_LT(status.init_search_runner_up_score, status.init_search_score - p.init_yaw_search.min_score_gap);
+  EXPECT_EQ(status.state, LocalizationState::TRACKING) << to_string(status.state);
 }
 
 TEST_F(InitYawSearchTest, ResetWithLargeYawErrorConvergesAndRelocalizeDoesNotSearch) {
@@ -230,6 +255,7 @@ TEST_F(InitYawSearchTest, ResetWithLargeYawErrorConvergesAndRelocalizeDoesNotSea
   status = odometry.status();
   EXPECT_EQ(status.reset_count, 2);
   EXPECT_EQ(status.init_search, InitSearchResult::NONE);
+  EXPECT_EQ(status.init_search_reason, InitSearchReason::NONE);
   EXPECT_EQ(status.init_search_candidates, 0);
   EXPECT_LT(after.max_translation, kMaxTranslationError);
 }
@@ -256,6 +282,7 @@ TEST_F(InitYawSearchTest, PoseOffTheMapIsRejectedUntilANewPose) {
   EXPECT_EQ(rejected.estimated, 0);
   EXPECT_EQ(status.state, LocalizationState::LOST);
   EXPECT_EQ(status.init_search, InitSearchResult::REJECTED);
+  EXPECT_EQ(status.init_search_reason, InitSearchReason::LOW_SCORE);
   EXPECT_EQ(status.init_search_candidates, 24);
   EXPECT_EQ(status.init_search_score, 0.0);
   for (const auto state : states) {
@@ -268,6 +295,7 @@ TEST_F(InitYawSearchTest, PoseOffTheMapIsRejectedUntilANewPose) {
   const auto recovered = run(odometry, imu_cursor, index, index + 40);
   status = odometry.status();
   print("search, new pose after a rejection, yaw error 60 deg", recovered, status);
+  EXPECT_EQ(status.init_search_reason, InitSearchReason::NONE);
   EXPECT_EQ(recovered.estimated, 40);
   EXPECT_EQ(status.init_search, InitSearchResult::ACCEPTED);
   EXPECT_EQ(status.state, LocalizationState::TRACKING) << to_string(status.state);
@@ -291,6 +319,7 @@ TEST_F(InitYawSearchTest, TruncatedSearchIsRejected) {
   EXPECT_EQ(stats.estimated, 0);
   EXPECT_EQ(status.state, LocalizationState::LOST);
   EXPECT_EQ(status.init_search, InitSearchResult::REJECTED);
+  EXPECT_EQ(status.init_search_reason, InitSearchReason::TRUNCATED);
   EXPECT_EQ(status.init_search_candidates, 1);
   EXPECT_EQ(status.init_search_candidates_total, 24);
 }
@@ -311,6 +340,7 @@ TEST_F(InitYawSearchTest, WrongYawOnTheMapIsRejectedWithoutASearchRange) {
   EXPECT_EQ(stats.estimated, 0);
   EXPECT_EQ(status.state, LocalizationState::LOST);
   EXPECT_EQ(status.init_search, InitSearchResult::REJECTED);
+  EXPECT_EQ(status.init_search_reason, InitSearchReason::LOW_SCORE);
   EXPECT_EQ(status.init_search_candidates, 1);
   EXPECT_EQ(status.init_search_candidates_total, 1);
   EXPECT_GT(status.init_search_score, 0.0) << "the pose is on the map";
@@ -443,10 +473,18 @@ TEST_F(InitYawSearchTest, NonIdentityLidarImuExtrinsic) {
     }
     lidar_frames.push_back(copy);
   }
+  // The fixture's frames are shared by the suite: swap them back even if run() throws
+  struct SwapBack {
+    std::vector<glim::PreprocessedFrame::Ptr>& a;
+    std::vector<glim::PreprocessedFrame::Ptr>& b;
+    ~SwapBack() { std::swap(a, b); }
+  };
   std::swap(*frames_, lidar_frames);
   size_t imu_cursor = 0;
-  const auto stats = run(odometry, imu_cursor, 0, 60);
-  std::swap(*frames_, lidar_frames);
+  const auto stats = [&] {
+    SwapBack swap_back{*frames_, lidar_frames};
+    return run(odometry, imu_cursor, 0, 60);
+  }();
   const auto status = odometry.status();
   print("search, non-identity T_lidar_imu, yaw error 75 deg", stats, status);
   EXPECT_EQ(status.init_search, InitSearchResult::ACCEPTED);

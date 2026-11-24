@@ -521,6 +521,7 @@ TEST_F(ReplayToolTest, InitYawSearchCorrectsAWrongInitialYaw) {
   EXPECT_DOUBLE_EQ(summary.at("tracking_ratio").get<double>(), 1.0);
   const auto& search = summary.at("init_search");
   EXPECT_EQ(search.at("result"), "ACCEPTED");
+  EXPECT_EQ(search.at("reason"), "NONE");
   EXPECT_EQ(search.at("candidates"), 24);
   EXPECT_EQ(search.at("candidates_total"), 24);
   EXPECT_EQ(search.at("truncated"), false);

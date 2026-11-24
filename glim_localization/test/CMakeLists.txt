@@ -146,7 +146,7 @@ add_executable(test_replay_runner test_replay_runner.cpp)
 target_compile_definitions(test_replay_runner PRIVATE
   GLIM_LOCALIZATION_CONFIG_DIR="${PROJECT_SOURCE_DIR}/config"
 )
-target_link_libraries(test_replay_runner PRIVATE glim_localization_synthetic GTest::gtest_main)
+target_link_libraries(test_replay_runner PRIVATE glim_localization_synthetic nlohmann_json::nlohmann_json GTest::gtest_main)
 gtest_discover_tests(test_replay_runner PROPERTIES TIMEOUT 180)
 
 add_executable(test_replay_deskew test_replay_deskew.cpp)

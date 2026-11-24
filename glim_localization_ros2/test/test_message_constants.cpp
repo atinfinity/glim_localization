@@ -6,6 +6,7 @@
 #include <glim_localization_msgs/msg/localization_status.hpp>
 
 namespace {
+using glim_localization::InitSearchReason;
 using glim_localization::InitSearchResult;
 using glim_localization::LocalizationState;
 using glim_localization::ResetReason;
@@ -22,6 +23,14 @@ TEST(MessageConstants, InitSearchResultMatchesMessage) {
   EXPECT_EQ(static_cast<int>(InitSearchResult::NONE), Msg::INIT_SEARCH_NONE);
   EXPECT_EQ(static_cast<int>(InitSearchResult::ACCEPTED), Msg::INIT_SEARCH_ACCEPTED);
   EXPECT_EQ(static_cast<int>(InitSearchResult::REJECTED), Msg::INIT_SEARCH_REJECTED);
+}
+
+TEST(MessageConstants, InitSearchReasonMatchesMessage) {
+  EXPECT_EQ(static_cast<int>(InitSearchReason::NONE), Msg::INIT_SEARCH_REASON_NONE);
+  EXPECT_EQ(static_cast<int>(InitSearchReason::TRUNCATED), Msg::INIT_SEARCH_REASON_TRUNCATED);
+  EXPECT_EQ(static_cast<int>(InitSearchReason::LOW_SCORE), Msg::INIT_SEARCH_REASON_LOW_SCORE);
+  EXPECT_EQ(static_cast<int>(InitSearchReason::AMBIGUOUS), Msg::INIT_SEARCH_REASON_AMBIGUOUS);
+  EXPECT_EQ(static_cast<int>(InitSearchReason::NO_CANDIDATE), Msg::INIT_SEARCH_REASON_NO_CANDIDATE);
 }
 
 TEST(MessageConstants, StateMatchesMessage) {

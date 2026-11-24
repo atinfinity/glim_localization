@@ -214,6 +214,7 @@ ReplaySummary ReplayRunner::run(const std::function<void(const ReplayFrameRecord
     if (status.init_search != InitSearchResult::NONE) {
       summary.init_search = ReplaySummary::InitSearch{
         status.init_search,
+        status.init_search_reason,
         status.init_search_candidates,
         status.init_search_candidates_total,
         status.init_search_score,
@@ -307,6 +308,7 @@ void ReplayOutputWriter::write_summary(const ReplaySummary& summary, double map_
     const auto& search = *summary.init_search;
     json["init_search"] = {
       {"result", to_string(search.result)},
+      {"reason", to_string(search.reason)},
       {"candidates", search.candidates},
       {"candidates_total", search.candidates_total},
       {"truncated", search.candidates < search.candidates_total},
