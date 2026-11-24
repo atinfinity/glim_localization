@@ -13,9 +13,13 @@ import r2_helpers  # the test files put this directory on sys.path
 
 MAP_TIMEOUT_S = 60.0  # fails the test; not a success path
 MIN_POSE_RATIO = 0.9  # as in the R1 and R2 tests
-# Points of ~/map for the synthetic fixture map of scripts/test_colcon.sh (5 tiles) at the shipped map_cloud_voxel 0.5.
-# Another count means the launch file picked up another map or voxel size.
+# Points of ~/map for the synthetic fixture map of scripts/test_colcon.sh (5 tiles) at the shipped map_cloud_voxel 0.5:
+# 9245 on arm64, 9246 on amd64. The fixture floor (z = 0) and walls (y = +-5 m) lie on 0.5 m voxel planes with 1 cm
+# noise, so a few points sit within float rounding of a voxel boundary, and the FMA contraction GCC does on aarch64 (not
+# on baseline x86-64) moves one of them across. Hence a band: 1% is far below the change from another voxel size
+# (0.4 m gives about 1.5 times the voxels on these surfaces) or from the raw map, and still catches another map.
 EXPECTED_MAP_POINTS = 9245
+MAP_POINTS_TOLERANCE = 0.01
 
 
 def include_launch(file_name, arguments):
@@ -46,7 +50,9 @@ def wait_for_latched_map(node, topic, timeout=MAP_TIMEOUT_S):
 def check_map(test, cloud):
     """The latched ~/map of the fixture map at the shipped map_cloud_voxel (0.5 m)."""
     test.assertEqual(cloud.header.frame_id, "map")
-    test.assertEqual(cloud.width * cloud.height, EXPECTED_MAP_POINTS, "not the fixture map at map_cloud_voxel 0.5")
+    test.assertAlmostEqual(
+        cloud.width * cloud.height, EXPECTED_MAP_POINTS, delta=EXPECTED_MAP_POINTS * MAP_POINTS_TOLERANCE,
+        msg="not the fixture map at map_cloud_voxel 0.5")
     test.assertEqual([f.name for f in cloud.fields], ["x", "y", "z"])
     test.assertEqual(len(cloud.data), cloud.row_step * cloud.height)
 
