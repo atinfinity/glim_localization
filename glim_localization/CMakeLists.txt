@@ -31,7 +31,9 @@ add_library(glim_localization SHARED
   src/glim_localization/version.cpp
   src/glim_localization/map/map_io.cpp
   src/glim_localization/map/map_manager.cpp
+  src/glim_localization/map/occupancy_grid.cpp
   src/glim_localization/map/pcd_map.cpp
+  src/glim_localization/map/ply_reader.cpp
   src/glim_localization/odometry/map_factor_builder.cpp
   src/glim_localization/odometry/localization_backend.cpp
   src/glim_localization/odometry/map_initial_state_estimation.cpp

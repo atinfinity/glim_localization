@@ -13,7 +13,7 @@ Measurements and the history behind these items are in [PROGRESS.md](PROGRESS.md
 | 4 | Offline replay, bag conversion, evaluation, evaluation mapper | Done |
 | 5 | ROS 2: glim_ros2 layer, msgs, IMU gap policy, publisher and TF, R1 extension, R2 lifecycle node | Done |
 | 5 | Launch files, YAML parameter files, RViz config, `~/map` | Done |
-| 6 | `map_compiler` PCD input | Done |
+| 6 | `map_compiler` PCD and PLY input, 2D occupancy grid export | Done |
 | 6 | README and user docs | Done |
 | 6 | GPU (CUDA) odometry module, selected by the odometry config (CUDA image) | Done; tile prefetch open ([#23](https://github.com/atinfinity/glim_localization/issues/23)) |
 
@@ -23,7 +23,7 @@ Not done yet (open issues):
 
 - GPU follow-ups ([#23](https://github.com/atinfinity/glim_localization/issues/23)): tile prefetch and a GPU memory budget, real-data timing on the GPU. The GPU module itself is in place ([CUDA variant](build.md#cuda-variant)).
 - Relocalizer ([#3](https://github.com/atinfinity/glim_localization/issues/3)): global relocalization (no pose given), and a better use of the yaw search (accumulated scans, roll and pitch from gravity, height from the map). The yaw search around a given pose is in place ([Initial pose yaw search](ros2.md#initial-pose-yaw-search)).
-- `map_compiler` PLY input and 2D OccupancyGrid export ([#4](https://github.com/atinfinity/glim_localization/issues/4)); PCD follow-ups such as `binary_compressed` input ([#12](https://github.com/atinfinity/glim_localization/issues/12)).
+- `map_compiler`: covariance recomputation for GLIM dumps ([#31](https://github.com/atinfinity/glim_localization/issues/31)); PCD follow-ups such as `binary_compressed` input ([#12](https://github.com/atinfinity/glim_localization/issues/12)).
 - Evaluation on real data against an independent reference ([#5](https://github.com/atinfinity/glim_localization/issues/5)) and in simulation ([#9](https://github.com/atinfinity/glim_localization/issues/9)).
 - Optional wheel odometry fusion ([#14](https://github.com/atinfinity/glim_localization/issues/14)).
 - Follow-ups for robustness, the IMU gap policy, the publisher and the R2 node ([#6](https://github.com/atinfinity/glim_localization/issues/6), [#8](https://github.com/atinfinity/glim_localization/issues/8), [#10](https://github.com/atinfinity/glim_localization/issues/10), [#13](https://github.com/atinfinity/glim_localization/issues/13)).
@@ -37,4 +37,4 @@ Not done yet (open issues):
 - Right after the node becomes active, the first messages can be missed (cause not confirmed; DDS discovery is suspected). In R2 set the first pose with `~/initialize`, which replies; otherwise publish `/initialpose` after the node is matched, or resend it.
 - IMU gaps in ROS (`on_imu_gap: reset` in the shipped config): a gap up to `imu_gap_reset_max` (0.5 s) resets the estimate from its own prediction; a longer gap goes LOST until an external initialization. The replay tool defaults to `--on-imu-gap abort` (exit code 3).
 - Degenerate directions are not detected, and pose covariance is not estimated. Objects thinner than a voxel can bias the estimate.
-- Map input: no PLY, no compressed PCD, no 2D map export ([#4](https://github.com/atinfinity/glim_localization/issues/4), [#12](https://github.com/atinfinity/glim_localization/issues/12)).
+- Map input: no compressed PCD ([#12](https://github.com/atinfinity/glim_localization/issues/12)). The 2D occupancy grid uses one height band for the whole map, so it suits roughly flat sites; it is checked against map_server's loading rules in a test, but not with a running Nav2 stack.

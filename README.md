@@ -7,7 +7,7 @@ LiDAR-IMU localization on a prebuilt 3D map, built on top of [GLIM](https://gith
 ## Features
 
 - Replaces GLIM's odometry module with a localization module that adds scan-to-map VGICP factors (unary factors against fixed map submaps) to GLIM's tightly coupled LiDAR-IMU fixed-lag smoother.
-- Loads maps directly from GLIM dump directories, or from maps compiled by `map_compiler` (from a GLIM dump or a PCD file).
+- Loads maps directly from GLIM dump directories, or from maps compiled by `map_compiler` (from a GLIM dump, a PCD file or a PLY file). `map_compiler` can also export a 2D occupancy grid (map_server PGM + YAML) for Nav2.
 - ROS 2 integration via a GLIM extension module (R1, for evaluation) and a dedicated lifecycle node (R2, for deployment).
 - GLIM itself is not modified; this repository links against it.
 - Quality monitoring with the states INITIALIZING, TRACKING, DEGRADED and LOST, published on `~/status` and `/diagnostics`.
@@ -17,8 +17,9 @@ LiDAR-IMU localization on a prebuilt 3D map, built on top of [GLIM](https://gith
 ```mermaid
 flowchart LR
   dump["GLIM dump"] --> compiler["map_compiler"]
-  pcd["PCD file"] --> compiler
+  pcd["PCD / PLY file"] --> compiler
   compiler --> map["compiled map"]
+  compiler -.->|"--occupancy-grid"| grid2d["2D grid<br/>(PGM + YAML)"]
   dump --> core
   map --> core["localization core<br/>(libglim_localization)"]
   bag["rosbag2"] -->|bag_to_replay.py| dataset["replay dataset"]
@@ -54,7 +55,7 @@ The step-by-step guide, including real bags and setting the initial pose, is [do
 | --- | --- |
 | [Getting started](docs/getting_started.md) | Step-by-step first run: build, tests, synthetic replay, your own map and bag, live ROS 2 |
 | [Build and test](docs/build.md) | Requirements, Docker image, CI scripts, ccache, CUDA variant and GPU configs |
-| [Map preparation](docs/maps.md) | GLIM dumps, `map_compiler` and its PCD options |
+| [Map preparation](docs/maps.md) | GLIM dumps, `map_compiler` and its PCD and PLY options, 2D occupancy grid export for Nav2 |
 | [Offline replay and evaluation](docs/replay.md) | Replay datasets, bag conversion, `glim_localization_replay`, `evaluate.py` |
 | [ROS 2](docs/ros2.md) | Launch files, R1 extension, R2 lifecycle node, parameters, topics, services, TF |
 | [Status and limitations](docs/status.md) | Progress, open work and known limitations |
@@ -69,7 +70,7 @@ The step-by-step guide, including real bags and setting the initial pose, is [do
 - Real-time capability and accuracy on real data are not established; the GPU module is tested on synthetic data only.
 - No global relocalization ([#3](https://github.com/atinfinity/glim_localization/issues/3)). The [initial pose yaw search](docs/ros2.md#initial-pose-yaw-search) is off by default, needs a position close to the true one and is verified on synthetic data only.
 - `~/aligned_points` ([#18](https://github.com/atinfinity/glim_localization/issues/18)) and an IMU-rate odometry are not published; pose covariance is not estimated.
-- Map input: no PLY, no compressed PCD, no 2D map export ([#4](https://github.com/atinfinity/glim_localization/issues/4), [#12](https://github.com/atinfinity/glim_localization/issues/12)).
+- Map input: no compressed PCD ([#12](https://github.com/atinfinity/glim_localization/issues/12)). The 2D occupancy grid uses one height band for the whole map, so it suits roughly flat sites; it is checked against map_server's loading rules in a test, but not with a running Nav2 stack.
 - A LiDAR with an IMU is required; LiDAR-only input is not supported.
 
 The full list is in [Status and limitations](docs/status.md#limitations).

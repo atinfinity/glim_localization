@@ -71,7 +71,7 @@ With the CPU default (`use_keyframes: false`), the map factors are the only scan
 | MapFactorBuilder | New | Unary constructor of `IntegratedVGICPFactor` | Map factor generation, overlap and inlier ratios, weight control | Implemented (CPU) |
 | Relocalizer | New | Unary `IntegratedVGICPFactor`, `LevenbergMarquardtOptimizerExt` (later RANSAC / GNC of gtsam_points) | Multi-hypothesis yaw refinement for /initialpose, optional global relocalization | Yaw search around a given pose implemented (§5.3, opt-in). Global relocalization planned ([#3](https://github.com/atinfinity/glim_localization/issues/3)) |
 | ROS 2 package | New | `ExtensionModuleROS2`, `OdometryEstimationCallbacks`, input handling of `GlimROS` (modified) | R1 (extension) and R2 (lifecycle node) | Implemented (no launch, YAML parameter or RViz files yet) |
-| map_compiler | New | `SubMap::load`, `PointCloudCPU::save_compact` | Slimming and indexing GLIM dumps, building maps from PCD | Implemented. PLY input and 2D map export are planned ([#4](https://github.com/atinfinity/glim_localization/issues/4)) |
+| map_compiler | New | `SubMap::load`, `PointCloudCPU::save_compact` | Slimming and indexing GLIM dumps, building maps from PCD or PLY, 2D occupancy grid export | Implemented |
 | Tests and evaluation | New | Offline replay tool, evo | Accuracy and processing time evaluation | Implemented. GLIM is pinned to a fixed commit; CI against newer GLIM versions is not set up |
 | Config files | Modified | `config.json`, `config_odometry_cpu.json` | Adds map parameters, disables sub/global mapping | Implemented (CPU) |
 | glim / gtsam_points / glim_ros2 | Reused | — | Used as is, as dependencies | — |
@@ -81,7 +81,7 @@ With the CPU default (`use_keyframes: false`), the map factors are the only scan
 ### 5.1 MapManager
 
 - Input: a GLIM dump. `%06d/` is read with `SubMap::load()`, and `T_world_origin` is overwritten with `X(i)` from `values.bin`.
-- `map_compiler` (offline): strips frame data, keeps the covariances from the dump (recomputation is planned, [#4](https://github.com/atinfinity/glim_localization/issues/4)), and writes `map_index.json` (center coordinates, BBox). A mode that splits a PCD into a grid and writes the same format is also provided (PLY input is planned).
+- `map_compiler` (offline): strips frame data, keeps the covariances from the dump (they are not recomputed), and writes `map_index.json` (center coordinates, BBox). A mode that splits a PCD or PLY point cloud into a grid and writes the same format is also provided, and any input can also be exported as a 2D occupancy grid for Nav2.
 - Voxels: multi-resolution `GaussianVoxelMap` per submap (e.g. 0.5 / 1.0 / 2.0 m).
 - Selection: get the submaps within radius R (e.g. 60 m) of the predicted pose with a KD-tree, and take up to K (e.g. 5) nearest first. Submaps whose overlap ratio (`gtsam_points::overlap`) is below a threshold are excluded.
 - Memory: the whole map is loaded and stays resident in host memory. The GPU module uploads tiles on first use into a bounded LRU (§5.7); prefetch and streaming tiles from disk are planned ([#23](https://github.com/atinfinity/glim_localization/issues/23)).
@@ -97,7 +97,17 @@ Points settled by the Phase 2 implementation:
   - Bounds: `--grid-size` >= 1 m, `--voxel-size` 0 (off) or >= 0.01 m, `--k-neighbors` 5 to 1000, all finite. Repeated field names (other than PCL's `_` padding) are rejected, and binary reading requires a little-endian host (`static_assert`). A missing `.pcd` path is reported as "file not found".
   - Downsampling runs around the cloud's bounding-box centre, because `gtsam_points::voxelgrid_sampling` packs voxel coordinates into 21 bits per axis and silently merges points beyond about ±2^20 voxels from the origin (±105 km at 0.1 m) into made-up ones. A cloud wider than about 2^21 voxels fails with an error that asks for a larger voxel size.
   - Tile size and coverage: tiles are disjoint, and MapManager uses at most `map_max_submaps` (default 5) tiles nearest to the robot by centroid (within `map_search_radius`). With the default 20 m grid that is only about 40 x 40 m around the robot, while GLIM submaps usually cover the whole sensor range. For an outdoor LiDAR with a range of 50 to 100 m, use `--grid-size 50` to `100`, or raise `map_max_submaps`. MapManager is unchanged.
-- Not implemented: PLY input, 2D OccupancyGrid export, and covariance recomputation for GLIM dumps ([#4](https://github.com/atinfinity/glim_localization/issues/4)).
+- PLY input: a `.ply` file (extension case-insensitive) takes the PCD path after reading: same options, same voxel downsampling, covariance estimation and tiling, `source: "ply"` in `map_index.json`. The same points as PCD give the same map (tested for ascii and binary). The reader (`read_ply`, `map/ply_reader.hpp`) is written here: PCL is not in the image, and gtsam_points has no PLY reader.
+  - Formats: `ascii 1.0` and `binary_little_endian 1.0`. `binary_big_endian` is rejected with an error that says so.
+  - The `vertex` element must have scalar `x`, `y`, `z` of type `float`/`float32` or `double`/`float64`. Other vertex properties (intensity, normals, colors, list properties) are skipped. Elements before `vertex` are skipped, including lists; elements after it (faces) are not read.
+  - Rejected with an error: a missing first line `ply`, a missing `end_header` or format line, an unknown keyword, type or format, duplicate elements or properties, a missing or non-float x, y or z, an element with a count but no properties, a negative list length, and truncated data. The vertex count is checked against the file size before allocating, as for PCD. Ascii vertices are one per line. Non-finite points are dropped.
+- 2D occupancy grid (for Nav2 `map_server`): `--occupancy-grid <prefix> --occupancy-z-min <m> --occupancy-z-max <m> [--occupancy-resolution 0.05]` writes `<prefix>.pgm` and `<prefix>.yaml` from any input (GLIM dump, compiled map, PCD, PLY). The core writes the files itself, so it needs no ROS.
+  - Rule: heights are map-frame z. A cell is occupied if it holds a point with `z_min <= z < z_max`, otherwise free if it holds a point with `z < z_min` (the ground or floor seen below the band), otherwise unknown. Points at or above `z_max` (ceilings, tree tops) are ignored. The band is required, because no default height is right for every map (a GLIM map's z = 0 is the first sensor pose, not the ground). No filter is applied: a single point marks a cell occupied, so noise and dynamic objects in the map show up. Voxel downsampling (`--voxel-size`) does not remove isolated outliers, so clean the cloud first (for example with statistical outlier removal).
+  - Flat-ground assumption: the band is an absolute map-frame z, the same everywhere. It suits roughly flat sites with a gravity-aligned z axis (GLIM maps are gravity-aligned). On slopes or multi-level sites, one band cuts the ground in some places and misses obstacles in others. PCD and PLY input must be z-up.
+  - Grid: cell edges are multiples of the resolution in the map frame, and the grid covers the x, y extent of the points below `z_max`. `origin` is the map-frame position of the lower-left corner of cell (0, 0), with zero yaw. The grid is built from the map's points after downsampling, before anything is written, and is limited to 2^30 cells (for example 1.6 x 1.6 km at 0.05 m). The build uses one byte per cell (a single buffer that first holds the seen flags, then the cell values), and the PGM is one byte per cell.
+  - Files: a binary (P5) 8-bit PGM whose top row is the highest y, and a YAML with `image` (the PGM file name, relative to the YAML, as a double-quoted YAML string with `\` and `"` escaped), `mode: trinary`, `resolution`, `origin`, `negate: 0`, `occupied_thresh: 0.65` and `free_thresh: 0.1`. Occupied cells are 0, free cells 254 and unknown cells 205. map_server reads a pixel p as occupancy (255 - p) / 255, so these are 1.0, 0.004 and 0.196, each well clear of the thresholds (the often-used `free_thresh: 0.25` would turn 205 into free). Numbers are written in fixed notation, so every value is a YAML float. Existing grid files, a prefix without a file name (`out/`, `.`, `..`) or with control characters, and a non-empty output directory are refused before anything is read or written. If writing the grid fails after the compiled map was written, the error says that the map is complete.
+  - The Python test `scripts/tests/test_map_compiler_occupancy.py` loads the output with the rules of nav2_map_server's map_io (required keys and types, trinary thresholds, the y flip). Loading it in a running map_server is not tested.
+- Not implemented: covariance recomputation for GLIM dumps ([#31](https://github.com/atinfinity/glim_localization/issues/31)).
 
 ### 5.2 Map factors (create_factors)
 
@@ -214,11 +224,31 @@ Two stages: development and evaluation put an extension on the existing `glim_ro
 | Pose reset | Through a shared singleton in the core | The node holds the module directly |
 | Offline evaluation | Faster than real time with `glim_rosbag` | `ros2 bag play` + `use_sim_time` |
 
+### Core and ROS 2 boundary
+
+The core (`glim_localization/`) depends only on GLIM, gtsam_points, nlohmann_json and the libraries they use. ament is used only to export the package when it is found. The core has no rclcpp, message, parameter or TF code. All estimation, state and map logic lives in the core, so the offline tools and the core tests run without ROS. The ROS 2 packages have no estimation logic of their own: they convert messages, parameters and services and call the core API.
+
+| Function | Core (ROS-independent) | ROS 2 (`glim_localization_ros2`, `glim_localization_msgs`) |
+| --- | --- | --- |
+| Estimation | CPU and GPU odometry modules, map VGICP factors, fixed-lag smoothing, IMU preintegration (GLIM) | — |
+| Map | MapManager, tiles and nearby-tile selection, GPU tile cache, loading GLIM dumps and compiled maps | `~/map`: one voxel-downsampled cloud of the loaded map (MapPublisher) |
+| Sensor input | Preprocessed frames and IMU samples through GLIM's odometry interface | PointCloud2 and Imu conversion, TimeKeeper, QoS: glim_rosnode / glim_rosbag in R1, the GlimROS-based input of the node in R2 |
+| Initial pose and resets | `request_reset()` applies a stamped pose at the first frame at or after its stamp; IMU-gap self-reset; LOST | `/initialpose`, `~/initialize`, `~/relocalize`, the late-pose check (`max_init_pose_delay`) |
+| Initial pose yaw search (§5.3) | Candidate generation and scan-to-map scoring, the acceptance rules (truncated, low score, ambiguous), and the result and reason in `LocalizationStatus`; configured by the `init_yaw_search` keys of the odometry JSON config | No ROS parameters (JSON only); the `init_search*` fields of `LocalizationStatus.msg` (including `init_search_reason`) and the diagnostics text that gives the reason for a rejection |
+| State and quality | `LocalizationStatus` struct, states INITIALIZING / TRACKING / DEGRADED / LOST, quality monitor, `on_status` callback | `~/status` (`LocalizationStatus.msg`) and `/diagnostics` |
+| Pose output | Frame estimates through GLIM's odometry callbacks | `~/pose`, `~/odometry` (angular twist from the gyro), TF with `tf_mode`, `base_frame_id` and `T_base_imu` (LocalizationPublisher) |
+| Process and configuration | GLIM JSON configs (the odometry and map parameters) | R1 extension module, R2 lifecycle node and component, ROS parameters, launch files, RViz config |
+| Tools | `map_compiler` (GLIM dump, compiled map, PCD or PLY in; compiled map out; optional 2D occupancy grid as a map_server YAML + PGM file), `glim_localization_replay`, `glim_localization_mapper` | — (Nav2's map_server serves the 2D grid; this package does not publish it) |
+
+- **Status values:** the state, reset-reason, init-search result and init-search reason values of the core status are part of the message. `LocalizationStatus.msg` repeats them as constants. `scripts/test_interfaces.sh` pins the message definition, and `test_message_constants` (in `glim_localization_ros2`) checks that the core enums match it.
+- **Python tooling:** the tools in `scripts/` need no ROS installation. `bag_to_replay.py` and `replay_to_bag.py` read and write rosbag2 files with the pure-Python `rosbags` package, and `evaluate.py` uses evo.
+- **New code:** estimation, state and map logic goes in the core with a test that runs without ROS. The ROS 2 packages keep only conversion and ROS-facing checks. Their ROS-free helpers (`GyroBuffer`, the late-pose rule in `init_pose_delay.hpp`) are header-only and tested without ROS.
+
 ### Package layout (colcon)
 
 ```
 glim_localization/                  # repository
-  glim_localization/                # ROS-independent core (odometry .so, MapManager, map_compiler: GLIM dump or PCD input)
+  glim_localization/                # ROS-independent core (odometry .so, MapManager, map_compiler: GLIM dump, PCD or PLY input, 2D grid export)
   glim_localization_msgs/           # LocalizationStatus.msg, Initialize.srv
   glim_localization_ros2/
     src/localization_publisher.cpp  # publisher and TF class shared by R1 and R2
@@ -294,7 +324,7 @@ Where `glim_localization_node` differs from the plan above:
 ### Threads and integration
 
 - Estimation runs on the `AsyncOdometryEstimation` thread. Publication comes from `OdometryEstimationCallbacks::on_update_new_frame` and `LocalizationCallbacks::on_status` ("Publication rules" above). `use_sim_time` is supported.
-- Nav2: `~/pose` and the TF are meant to be usable in place of a 2D particle-filter localizer. Not verified. Exporting a 2D OccupancyGrid from map_compiler is planned ([#4](https://github.com/atinfinity/glim_localization/issues/4)).
+- Nav2: `~/pose` and the TF are meant to be usable in place of a 2D particle-filter localizer. Not verified. `map_compiler --occupancy-grid` exports a map_server PGM and YAML for the 2D costmaps (§5.1).
 - External EKF: `tf_mode: none`, remap `~/pose` to the pose input of the EKF, initialize with `~/initialize`. Not verified; the topic names and service types of the target stack need to be checked.
 - Launch files. `localization.launch.py` (R2): `params_file`, `config_path` and `map_path` (empty keeps the `params_file` value), `use_sim_time`, `autostart` (default true), `use_composition` (default false; loads the component into a new `component_container` named `container_name`) and `rviz`. `localization_r1.launch.py` (R1): `bag` (empty runs `glim_rosnode`, otherwise `glim_rosbag <bag>`), `config_path` (default the installed `config/r1`; a relative path is taken from the current directory), `map_path` (R1 reads the map path only from JSON, so a non-empty value makes a temporary copy of the config with `odometry_estimation.map_path` set in the file that `global.config_odometry` of `config.json` names; names outside the config directory are rewritten to reach the same files; the copy is removed when the launch process exits), `params_file` (`config/localization_r1.param.yaml`, the GlimROS and glim_rosbag parameters, passed as typed `-p name:=value` by `launch/launch_utils.py` since `glim_rosbag` takes any existing file argument for a bag), `use_sim_time` and `rviz` (the RViz topics remapped to `/glim_ros/...`). `rviz` defaults to false; `rviz2` is not a package dependency, and when it is missing the launch file warns and starts without it.
 
