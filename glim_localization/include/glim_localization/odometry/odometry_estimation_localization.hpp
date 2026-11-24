@@ -1,6 +1,7 @@
 // Derived from koide3/glim include/glim/odometry/odometry_estimation_cpu.hpp at commit 1a197c999e4865f5cab7c9cd25474128413ebbca (MIT License, Copyright (c) 2024 koide3)
 #pragma once
 
+#include <cmath>
 #include <cstdint>
 #include <deque>
 #include <memory>
@@ -15,6 +16,7 @@
 #include <glim_localization/map/map_manager.hpp>
 #include <glim_localization/odometry/map_factor_builder.hpp>
 #include <glim_localization/odometry/quality_monitor.hpp>
+#include <glim_localization/relocalization/pose_candidates.hpp>
 
 namespace glim_localization {
 
@@ -28,6 +30,28 @@ enum class ResetReason : uint8_t {
 
 const char* to_string(ResetReason reason);
 
+/// Outcome of the yaw search on the first frame after a given pose. The values are part of the ROS message
+/// glim_localization_msgs/LocalizationStatus (INIT_SEARCH_*).
+enum class InitSearchResult : uint8_t {
+  NONE = 0,      ///< No search since the last reset (disabled, not run yet, or the pose was not given from outside)
+  ACCEPTED = 1,  ///< The best candidate passed and estimation started from it
+  REJECTED = 2   ///< Truncated by the time budget, below the minimum score or ambiguous: LOST until another pose is given
+};
+
+const char* to_string(InitSearchResult result);
+
+/// Why the yaw search rejected the given pose. The values are part of the ROS message
+/// glim_localization_msgs/LocalizationStatus (INIT_SEARCH_REASON_*).
+enum class InitSearchReason : uint8_t {
+  NONE = 0,          ///< Not searched, or accepted
+  TRUNCATED = 1,     ///< The time budget ran out before every candidate was scored
+  LOW_SCORE = 2,     ///< The best inlier ratio is below init_yaw_search_min_inlier_ratio
+  AMBIGUOUS = 3,     ///< The runner-up is within init_yaw_search_min_score_gap of the best
+  NO_CANDIDATE = 4   ///< The candidate generator returned nothing to score
+};
+
+const char* to_string(InitSearchReason reason);
+
 struct LocalizationStatus {
   LocalizationState state = LocalizationState::INITIALIZING;
   double stamp = 0.0;
@@ -39,6 +63,19 @@ struct LocalizationStatus {
   double residual = 0.0;      ///< Finest-level error per inlier point. Reported only
   double processing_time = 0.0;  ///< Wall-clock seconds spent in insert_frame for this frame; 0 on a reset
   ResetReason last_reset_reason = ResetReason::NONE;  ///< NONE while reset_count is 0
+
+  // Yaw search of the current run (init_yaw_search). Cleared by a reset, set when the search runs on the first frame.
+  InitSearchResult init_search = InitSearchResult::NONE;
+  InitSearchReason init_search_reason = InitSearchReason::NONE;  ///< Set when init_search is REJECTED
+  int init_search_candidates = 0;       ///< Candidates scored; fewer than init_search_candidates_total means truncated
+  int init_search_candidates_total = 0;  ///< Candidates generated
+  double init_search_score = 0.0;        ///< Inlier ratio of the best candidate, also when it was rejected
+  double init_search_yaw_offset = 0.0;   ///< Yaw of the best registered pose relative to the given pose [rad]
+  /// Inlier ratio of the best candidate whose registered yaw is more than distinct_yaw_for_step(step) (two steps, at
+  /// most 90 deg) from the best one (0 if none)
+  double init_search_runner_up_score = 0.0;
+  double init_search_runner_up_yaw_offset = 0.0;  ///< Its yaw relative to the given pose [rad]
+  double init_search_time = 0.0;                  ///< Wall-clock seconds of the search
 };
 
 struct LocalizationCallbacks {
@@ -78,6 +115,23 @@ struct OdometryEstimationLocalizationParams : public glim::OdometryEstimationIMU
   /// Also match each scan to earlier scans, for estimation outside the map. The CPU module matches a local model and
   /// adds a relative pose factor; the GPU module adds upstream's keyframe factors.
   bool use_keyframes;
+
+  /// Yaw search on the first frame after a pose given from outside (the configured pose, reset()): score yaw
+  /// candidates around the given pose by scan-to-map registration and start from the best one. Not applied to
+  /// relocalize() or an IMU gap self-reset, which start from the estimate. The pose is rejected (LOST) if the time
+  /// budget runs out before every candidate is scored, if the best inlier ratio is below min_inlier_ratio, or if a
+  /// candidate more than two steps (at most 90 deg) away in yaw scores within min_score_gap of the best. With a range
+  /// of 0 or one too small to reach that far, only the inlier ratio threshold applies.
+  struct InitYawSearch {
+    bool enabled = false;
+    double range = M_PI;                ///< Half width [rad] (config: init_yaw_search_range_deg)
+    double step = 15.0 * M_PI / 180.0;  ///< [rad], at least 0.5 deg (config: init_yaw_search_step_deg)
+    double min_inlier_ratio = 0.7;      ///< The best candidate must reach this inlier ratio
+    double min_score_gap = 0.05;        ///< The best must beat the runner-up at a different yaw by more than this
+    double time_budget = 10.0;          ///< Every candidate must be scored within this many seconds [s]
+    int max_iterations = 10;            ///< Registration iterations per candidate
+    int min_points = 100;               ///< Smaller frames are dropped while the search waits for its first frame
+  } init_yaw_search;
 };
 
 /// Load the map at params.map_path with params.map_voxel_resolutions.
@@ -149,6 +203,11 @@ protected:
   /// Weight of the map factors of the next frame: map_factor_weight, times degraded_weight_scale while DEGRADED or LOST
   double map_factor_weight() const;
 
+  /// Replace the candidate generator of the initial pose search (default: YawCandidateGenerator from init_yaw_search).
+  /// Not thread-safe: call before the first frame and before any reset(), because the estimation thread reads it.
+  /// Lets a global candidate source plug in later.
+  void set_candidate_generator(std::unique_ptr<PoseCandidateGenerator> generator);
+
   /// Called when a reset is applied, after the frames and the smoother are cleared: drop the backend state of the old run.
   virtual void reset_backend() {}
 
@@ -184,6 +243,9 @@ private:
   void publish_lost();
   void trim_imu_queue(double stamp);
   void update_status(const glim::EstimationFrame::ConstPtr& frame, double processing_time);
+  /// Run the initial pose search on the first frame and set the initial state to the best candidate.
+  /// @return false if no candidate passed (the state is then LOST until a new pose)
+  bool run_init_search(const glim::PreprocessedFrame::Ptr& frame);
 
   std::shared_ptr<const MapManager> map_;
   QualityMonitor quality_;
@@ -201,6 +263,16 @@ private:
   double gap_longest_ = 0.0;  ///< Longest gap seen in this episode [s]
   size_t hold_check_trips_ = 0;  ///< Frames dropped as LOST by the hold check
   bool imu_lost_ = false;     ///< The gap was too long to recover; frames are dropped until reset()
+
+  // Initial pose search (init_yaw_search)
+  std::unique_ptr<PoseCandidateGenerator> candidate_generator_;
+  /// A pose was given from outside and no frame has been estimated from it yet. Frames with fewer than min_points
+  /// points are dropped meanwhile: upstream would start from the unsearched pose on an empty frame.
+  bool init_search_pending_ = false;
+  bool init_search_rejected_ = false;  ///< No candidate passed; frames are dropped until reset()
+  bool init_search_sparse_warned_ = false;  ///< A sparse frame was already reported for the pending search
+  Eigen::Isometry3d init_hint_T_world_imu_ = Eigen::Isometry3d::Identity();
+  Eigen::Vector3d init_hint_v_world_imu_ = Eigen::Vector3d::Zero();
 
   mutable std::mutex reset_mutex_;
   std::unique_ptr<PendingReset> pending_reset_;
