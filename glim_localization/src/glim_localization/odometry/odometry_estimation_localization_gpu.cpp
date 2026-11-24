@@ -9,6 +9,8 @@
 
 #include <spdlog/spdlog.h>
 
+#include <cuda_runtime.h>
+
 #include <gtsam/geometry/Pose3.h>
 #include <gtsam/inference/Symbol.h>
 #include <gtsam/linear/GaussianFactorGraph.h>
@@ -75,6 +77,18 @@ OdometryEstimationLocalizationGPUParams::~OdometryEstimationLocalizationGPUParam
 
 namespace {
 
+/// gtsam_points only prints a warning on a CUDA error and goes on, so check the device ourselves and fail closed.
+void require_cuda_device() {
+  int count = 0;
+  const cudaError_t error = cudaGetDeviceCount(&count);
+  if (error != cudaSuccess) {
+    throw std::runtime_error(std::string("no usable CUDA device for the GPU localization module: ") + cudaGetErrorString(error));
+  }
+  if (count < 1) {
+    throw std::runtime_error("no usable CUDA device for the GPU localization module: no device is visible");
+  }
+}
+
 /// Validate the GPU parameters, then register the GPU linearization hook: the smoother is created in the base
 /// constructor, and it picks up the hooks registered at that time.
 std::unique_ptr<OdometryEstimationLocalizationGPUParams> gpu_params_with_hook(const OdometryEstimationLocalizationGPUParams& params) {
@@ -85,6 +99,7 @@ std::unique_ptr<OdometryEstimationLocalizationGPUParams> gpu_params_with_hook(co
   if (params.use_keyframes && (params.voxelmap_levels < 1 || !(params.voxel_resolution > 0.0) || params.max_num_keyframes < 1)) {
     throw std::invalid_argument("invalid keyframe parameters");
   }
+  require_cuda_device();
   ensure_gpu_linearization_hook();
   return std::make_unique<OdometryEstimationLocalizationGPUParams>(params);
 }
@@ -99,6 +114,10 @@ OdometryEstimationLocalizationGPU::OdometryEstimationLocalizationGPU(const Param
   stream.reset(new gtsam_points::CUDAStream());
   stream_buffer_roundrobin.reset(new gtsam_points::StreamTempBufferRoundRobin());
   tile_cache_.reset(new GpuTileCache(params.map_gpu_max_tiles, *stream));
+  const cudaError_t error = cudaGetLastError();
+  if (error != cudaSuccess) {
+    throw std::runtime_error(std::string("failed to set up the CUDA streams: ") + cudaGetErrorString(error));
+  }
 }
 
 OdometryEstimationLocalizationGPU::~OdometryEstimationLocalizationGPU() {

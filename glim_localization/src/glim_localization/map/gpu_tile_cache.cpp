@@ -3,6 +3,8 @@
 #include <stdexcept>
 #include <string>
 
+#include <cuda_runtime.h>
+
 #include <gtsam_points/types/gaussian_voxelmap_gpu.hpp>
 #include <gtsam_points/types/point_cloud_gpu.hpp>
 
@@ -43,6 +45,13 @@ GpuTile::ConstPtr GpuTileCache::get(const MapTile::ConstPtr& tile) {
     gpu->voxelmaps.push_back(voxelmap);
   }
   gpu->points = points;
+  // gtsam_points only prints a warning when an allocation or a copy fails (for example out of device memory), so
+  // check here and fail closed instead of building factors on invalid device memory.
+  cudaStreamSynchronize(stream_);  // A failure here is also the last error
+  const cudaError_t error = cudaGetLastError();
+  if (error != cudaSuccess) {
+    throw std::runtime_error("failed to upload map tile " + std::to_string(tile->id) + " to the GPU: " + cudaGetErrorString(error));
+  }
   num_uploads_++;
 
   lru_.push_front(tile->id);

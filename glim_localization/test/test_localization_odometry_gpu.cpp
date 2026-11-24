@@ -23,6 +23,7 @@
 #include <gtsam/nonlinear/Values.h>
 
 #include <gtsam_points/cuda/nonlinear_factor_set_gpu.hpp>
+#include <gtsam_points/factors/integrated_vgicp_factor.hpp>
 #include <gtsam_points/factors/integrated_vgicp_factor_gpu.hpp>
 #include <gtsam_points/types/point_cloud_gpu.hpp>
 
@@ -316,6 +317,58 @@ TEST_F(LocalizationOdometryGPUTest, RejectsTooFewGpuTiles) {
   EXPECT_THROW(OdometryEstimationLocalizationGPU(params, *map_), std::invalid_argument);
 }
 
+TEST_F(LocalizationOdometryGPUTest, FailsClosedWithoutAVisibleDevice) {
+  // Hide every device before the first CUDA call of this process (ctest runs each test in its own process). A CUDA
+  // build started without a GPU must not run on invalid device memory: gtsam_points only warns on CUDA errors.
+  setenv("CUDA_VISIBLE_DEVICES", "", 1);
+  std::string reason;
+  if (gpu_visible(&reason)) {
+    GTEST_SKIP() << "the CUDA runtime was initialized before the devices could be hidden";
+  }
+  const auto params = params_at(Eigen::Isometry3d::Identity());
+  EXPECT_THROW(OdometryEstimationLocalizationGPU(params, *map_), std::runtime_error);
+}
+
+TEST_F(LocalizationOdometryGPUTest, MapFactorMatchesTheCpuFactor) {
+  SKIP_WITHOUT_GPU();
+  // The GPU tile against the CPU tile it was uploaded from, with the same source and pose: the same correspondences
+  // and the same cost up to float precision, on every level.
+  const auto tile = (*map_)->tiles().front();
+  GpuTileCache cache(1, nullptr);
+  const auto gpu_tile = cache.get(tile);
+  ASSERT_EQ(gpu_tile->voxelmaps.size(), tile->voxelmaps.size());
+
+  const auto source_gpu = gtsam_points::PointCloudGPU::clone(*tile->points);
+  const gtsam::Pose3 T_world_origin(tile->T_world_origin.matrix());
+  const gtsam::Pose3 delta(gtsam::Rot3::Rz(0.01), gtsam::Point3(0.05, -0.03, 0.02));
+  gtsam::Values values;
+  values.insert(X(0), T_world_origin * delta);
+
+  for (size_t level = 0; level < tile->voxelmaps.size(); level++) {
+    const auto cpu = std::make_shared<gtsam_points::IntegratedVGICPFactor>(T_world_origin, X(0), tile->voxelmaps[level], tile->points);
+    const auto gpu = std::make_shared<gtsam_points::IntegratedVGICPFactorGPU>(T_world_origin, X(0), gpu_tile->voxelmaps[level], source_gpu);
+    gtsam::NonlinearFactorGraph graph;
+    graph.add(gpu);
+    gtsam_points::NonlinearFactorSetGPU factor_set;
+    factor_set.add(graph);
+    factor_set.linearize(values);
+    factor_set.error(values);
+
+    const auto cpu_linear = std::dynamic_pointer_cast<gtsam::HessianFactor>(cpu->linearize(values));
+    const auto gpu_linear = std::dynamic_pointer_cast<gtsam::HessianFactor>(gpu->linearize(values));
+    ASSERT_TRUE(cpu_linear);
+    ASSERT_TRUE(gpu_linear);
+    const double cpu_error = cpu->error(values);
+    ASSERT_GT(cpu_error, 0.0);
+    EXPECT_NEAR(gpu->error(values), cpu_error, 1e-3 * cpu_error) << "level " << level;
+    const gtsam::Matrix H_cpu = cpu_linear->information();
+    const gtsam::Matrix H_gpu = gpu_linear->information();
+    EXPECT_LT((H_gpu - H_cpu).norm(), 1e-3 * H_cpu.norm()) << "level " << level << "\n" << H_gpu << "\n" << H_cpu;
+    const gtsam::Vector b_cpu = cpu_linear->linearTerm();
+    EXPECT_LT((gpu_linear->linearTerm() - b_cpu).norm(), 1e-3 * b_cpu.norm() + 1e-9) << "level " << level;
+  }
+}
+
 TEST_F(LocalizationOdometryGPUTest, TileCacheEvictsLeastRecentlyUsed) {
   SKIP_WITHOUT_GPU();
   const auto tiles = (*map_)->tiles();
@@ -415,6 +468,15 @@ TEST(LocalizationPluginGPUTest, LoadsModuleFromConfiguredMap) {
   SKIP_WITHOUT_GPU();
   const fs::path dir = fs::temp_directory_path() / ("glim_loc_plugin_gpu_" + std::to_string(::getpid()));
   fs::remove_all(dir);
+  // Restore the config and remove the directory even when an assertion returns early
+  struct Cleanup {
+    fs::path dir;
+    ~Cleanup() {
+      glim::GlobalConfig::instance(gpu_config_dir(), true);
+      std::error_code ec;
+      fs::remove_all(dir, ec);
+    }
+  } cleanup{dir};
   const fs::path config_dir = dir / "config";
   const fs::path map_dir = dir / "map";
   fs::create_directories(dir);
@@ -437,6 +499,4 @@ TEST(LocalizationPluginGPUTest, LoadsModuleFromConfiguredMap) {
     ASSERT_TRUE(odometry);
     EXPECT_EQ(odometry->status().state, LocalizationState::INITIALIZING);
   }
-  glim::GlobalConfig::instance(gpu_config_dir(), true);
-  fs::remove_all(dir);
 }
