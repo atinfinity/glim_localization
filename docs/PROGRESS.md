@@ -662,3 +662,14 @@ A pose from outside (a 2D Pose Estimate click, `~/initialize`, the configured `i
   - Docs: the flat-ground assumption, and that no noise filter is applied.
   - Re-verified in Docker on the development Mac: core ctest 247/247, Python tests 190.
 - **Open**: covariance recomputation for GLIM dumps moved to [#31](https://github.com/atinfinity/glim_localization/issues/31).
+
+## ROS 2 code style with ament_lint (2026-11-25, [#30](https://github.com/atinfinity/glim_localization/issues/30))
+
+- **What**: `ament_lint_auto` with `ament_lint_common` in `glim_localization_ros2` and `glim_localization_msgs` (uncrustify, cpplint, cppcheck, lint_cmake, xmllint, flake8, pep257, copyright). `scripts/test_colcon.sh` tests both packages and checks that each expected linter wrote a result with at least one test case and no failure. No functional change; the core (`glim_localization/`) is not covered.
+- **Fixes**: one commit with the mechanical reformat (`ament_uncrustify --reformat` and single quotes in Python, 27 files, +1029/-685), then the hand fixes for cpplint and uncrustify (15 files), flake8 and pep257 (12 Python files: 99 columns, google import order, docstring summaries), and the short MIT header (`mit_header_0` of ament_copyright) on all 27 sources.
+- **Exceptions and decisions**:
+  - `src/localization_node.cpp` is derived from glim_ros2. Its provenance lines stay first and are longer than 100 columns, so the automatic cpplint excludes the file and a second test (`cpplint_derived`) checks it with every check but `whitespace/line_length`. The copyright header follows the provenance lines, which ament_copyright accepts.
+  - cppcheck: `ament_cppcheck` skips cppcheck 2.x (Jazzy: 2.13) for its run time unless `AMENT_CPPCHECK_ALLOW_SLOW_VERSIONS=1`; `test_colcon.sh` sets it (the run takes seconds).
+  - flake8: `# noqa: E402` on the imports after `sys.path.insert` in the launch tests, and `I100` on the first of them.
+  - The messages package has no C++ or Python sources. Its copyright test runs but checks no file (`.msg` files are skipped), so only lint_cmake and xmllint are required to have test cases there.
+- **Verification** (Docker on the development Mac): core ctest 276/276, colcon test 21/21 and 3/3 (all linters pass: copyright 27, cppcheck 15, cpplint 14, cpplint_derived 1, pep257 12, uncrustify 15), interfaces, Python tests 190. A deliberately long Python line makes `test_colcon.sh` fail on flake8.
