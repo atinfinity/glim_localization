@@ -136,7 +136,8 @@ jobs:
         if: steps.changes.outputs.docs_only != 'true'
         env:
           GLIM_LOC_CCACHE_DIR: ${{ runner.temp }}/ccache
-          # Keeps the saved cache small next to the buildx layer cache (10 GB per repository).
+          # Keeps the saved cache small: the 10 GB Actions cache of the repository holds two buildx
+          # layer caches (scopes image-amd64, image-arm64) and two ccaches (one per architecture).
           CCACHE_MAXSIZE: 500M
         run: scripts/docker_run.sh scripts/ci.sh
       - name: Save ccache
@@ -181,7 +182,9 @@ jobs:
 
   # Pushes the image only after the checks passed on main, and only when it was not on GHCR yet.
   # Never runs for PRs or forks, so only the publish jobs get packages: write. publish-image-arm64
-  # runs the same steps for the arm64 image, built natively on an arm64 runner.
+  # runs the same steps for the arm64 image, built natively on an arm64 runner. Each publish job is
+  # gated only on the checks of its own architecture, so one failing architecture does not hold
+  # back the other's image.
   publish-image:
     needs: build-and-test
     if: >-
