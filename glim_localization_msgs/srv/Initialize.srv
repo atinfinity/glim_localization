@@ -1,0 +1,21 @@
+# Initialize (or re-initialize) the localization.
+
+# Request
+# Initial pose of the base frame in the map frame. A zero stamp means "apply at the next frame".
+# The orientation must be a unit quaternion; a default-constructed (all-zero) pose is rejected.
+# header.frame_id must be empty or the map frame. Ignored when global_search is true.
+geometry_msgs/PoseWithCovarianceStamped pose
+# If true, ignore pose and search the whole map. Not implemented in this release:
+# the service returns success=false and the current estimate is unchanged.
+bool global_search
+---
+# Response
+# True if the request was accepted. The core applies the reset at the next frame, and a newer
+# request replaces a pending one, so this does not mean the reset has been applied yet.
+# False for an invalid pose (e.g. an empty request with a zero quaternion), a wrong frame_id, or
+# global_search=true ("global relocalization is not implemented"); the estimate is then unchanged.
+bool success
+# Human-readable result, including the reason when success is false.
+string message
+# Confidence of the accepted pose in [0, 1]; 0 when success is false or no score is available.
+float64 score

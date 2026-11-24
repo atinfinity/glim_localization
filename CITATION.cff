@@ -1,0 +1,29 @@
+cff-version: 1.2.0
+message: If you use this software, please cite it as below, and cite GLIM.
+title: glim_localization
+type: software
+authors:
+  - alias: atinfinity
+license: MIT
+repository-code: https://github.com/atinfinity/glim_localization
+abstract: >-
+  LiDAR-IMU localization on a prebuilt 3D map, built on top of GLIM and gtsam_points.
+  It replaces GLIM's odometry module with a localization module that adds scan-to-map
+  VGICP factors to GLIM's tightly coupled LiDAR-IMU fixed-lag smoother, with offline
+  replay tools and ROS 2 integration.
+references:
+  - type: article
+    title: "GLIM: 3D Range-Inertial Localization and Mapping with GPU-Accelerated Scan Matching Factors"
+    authors:
+      - family-names: Koide
+        given-names: Kenji
+      - family-names: Yokozuka
+        given-names: Masashi
+      - family-names: Oishi
+        given-names: Shuji
+      - family-names: Banno
+        given-names: Atsuhiko
+    journal: Robotics and Autonomous Systems
+    volume: 179
+    year: 2024
+    doi: 10.1016/j.robot.2024.104750

@@ -1,0 +1,40 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>glim_localization_ros2</name>
+  <version>0.1.0</version>
+  <description>ROS 2 interface for glim_localization</description>
+  <maintainer email="dandelion1124@gmail.com">atinfinity</maintainer>
+  <license>MIT</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <depend>ament_index_cpp</depend>
+  <depend>diagnostic_msgs</depend>
+  <depend>eigen</depend>
+  <depend>geometry_msgs</depend>
+  <depend>glim</depend>
+  <depend>glim_localization</depend>
+  <depend>glim_localization_msgs</depend>
+  <depend>nav_msgs</depend>
+  <depend>rclcpp</depend>
+  <depend>rclcpp_components</depend>
+  <depend>rclcpp_lifecycle</depend>
+  <depend>sensor_msgs</depend>
+  <depend>std_srvs</depend>
+  <depend>tf2_ros</depend>
+
+  <test_depend>ament_cmake_gtest</test_depend>
+  <test_depend>ament_cmake_ros</test_depend>
+  <test_depend>glim_ros</test_depend>
+  <test_depend>launch_testing_ament_cmake</test_depend>
+  <test_depend>launch_testing_ros</test_depend>
+  <test_depend>lifecycle_msgs</test_depend>
+  <test_depend>rclpy</test_depend>
+  <test_depend>ros2bag</test_depend>
+  <test_depend>rosbag2_storage_default_plugins</test_depend>
+  <test_depend>rosbag2_interfaces</test_depend>
+  <test_depend>tf2_msgs</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

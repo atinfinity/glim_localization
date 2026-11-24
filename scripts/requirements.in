@@ -1,0 +1,5 @@
+# Direct Python dependencies of the replay tooling, all pinned.
+# scripts/requirements.txt pins the transitive dependencies too.
+rosbags==0.11.10
+evo==1.38.1
+pytest==9.2.0

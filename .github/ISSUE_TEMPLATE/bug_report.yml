@@ -1,0 +1,91 @@
+name: Bug report
+description: Report a build failure, crash, wrong result or other problem.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        > [!WARNING]
+        > Do not attach bags or maps here; issues are public. Describe the data instead (sensor, duration, environment, map size).
+
+        > [!IMPORTANT]
+        > Report security vulnerabilities as described in [SECURITY.md](https://github.com/atinfinity/glim_localization/blob/main/SECURITY.md), not here.
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: What happened, and what did you expect?
+    validations:
+      required: true
+  - type: input
+    id: commit
+    attributes:
+      label: Commit
+      description: Output of `git rev-parse HEAD`.
+    validations:
+      required: true
+  - type: dropdown
+    id: environment
+    attributes:
+      label: Environment
+      options:
+        - Docker image from docker/Dockerfile
+        - Host build (not supported)
+    validations:
+      required: true
+  - type: input
+    id: host
+    attributes:
+      label: Host OS and architecture
+      placeholder: Ubuntu 24.04, amd64
+  - type: input
+    id: ros_distro
+    attributes:
+      label: ROS 2 distribution
+      placeholder: Jazzy
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Mode
+      options:
+        - R1 (GLIM extension, glim_rosnode / glim_rosbag)
+        - R2 (glim_localization_node)
+        - Offline replay (glim_localization_replay)
+        - map_compiler
+        - Build or CI
+        - Other
+    validations:
+      required: true
+  - type: dropdown
+    id: map_type
+    attributes:
+      label: Map type
+      options:
+        - GLIM dump
+        - Compiled map from a GLIM dump
+        - Compiled map from a PCD file
+        - Not applicable
+  - type: input
+    id: sensor
+    attributes:
+      label: Sensor
+      description: LiDAR and IMU model, rates, and whether the IMU is built into the LiDAR.
+  - type: textarea
+    id: config
+    attributes:
+      label: Config changes
+      description: Changes from the shipped config files (for example T_lidar_imu, topics, map_max_submaps).
+      render: text
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: The exact commands, starting from the image build if relevant.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Relevant console output, summary.json or eval.txt. Remove paths or hostnames you do not want to share.
+      render: text

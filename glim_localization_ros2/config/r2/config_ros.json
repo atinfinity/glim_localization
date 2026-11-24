@@ -1,0 +1,26 @@
+// Derived from koide3/glim config/config_ros.json at commit 1a197c999e4865f5cab7c9cd25474128413ebbca (MIT License, Copyright (c) 2024 koide3)
+{
+  // R2: read by glim_localization_node. The glim_ros keys have the meaning they have in glim_ros2; the node reads
+  // only the ones below (no extension modules, no viewer, no frame id overrides).
+  "glim_ros": {
+    "imu_time_offset": 0.0,
+    "points_time_offset": 0.0,
+    "acc_scale": 0.0,
+    "ang_scale": 1.0,
+    "odom_frame_id": "odom",
+    "map_frame_id": "map",
+    "imu_topic": "/imu",
+    "points_topic": "/points",
+    "imu_qos": { "profile": "sensor_data", "depth": 1000 },
+    "points_qos": { "profile": "sensor_data" }
+  },
+  // tf_mode          : internal_odom | external_odom | none (see docs/DESIGN.md section 6)
+  // base_frame_id    : frame of ~/pose and the TF child
+  // T_base_imu       : pose of the IMU in base_frame_id, [x, y, z, qx, qy, qz, qw]
+  "localization_ros": {
+    "tf_mode": "internal_odom",
+    "base_frame_id": "base_link",
+    "T_base_imu": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0],
+    "diagnostics_period": 1.0
+  }
+}

@@ -1,0 +1,176 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    paths-ignore: ['**.md', 'docs/**', 'LICENSE']
+  # Runs for every non-draft PR, including docs-only ones, so each PR gets a CI check. Marking a
+  # draft ready for review runs it.
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: read  # pull the prebuilt image while the package is private
+    outputs:
+      image: ${{ steps.image.outputs.ref }}
+      missing: ${{ steps.pull.outputs.missing }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          fetch-depth: 2  # The PR merge commit and its parents.
+      # Docs-only PRs still report this check, but skip the build. --no-renames lists both paths
+      # of a rename, so moving code into docs/ runs the full checks.
+      - name: Detect docs-only PR
+        id: changes
+        if: github.event_name == 'pull_request'
+        run: |
+          files="${RUNNER_TEMP}/changed_files"
+          git diff --name-only --no-renames -z HEAD^1 HEAD > "${files}"
+          docs_only=false
+          if scripts/is_docs_only.sh < "${files}"; then
+            docs_only=true
+          fi
+          echo "docs_only=${docs_only}" >> "${GITHUB_OUTPUT}"
+          echo "docs_only=${docs_only}"
+      # The prebuilt image is tagged with the hash of the files it bakes in (the same list that
+      # scripts/ci_local.sh checks), so a pulled image always matches this tree.
+      - name: Resolve the prebuilt image
+        id: image
+        if: steps.changes.outputs.docs_only != 'true'
+        run: |
+          hash="$(scripts/image_inputs_hash.sh)"
+          ref="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/glim_localization:${hash}"
+          echo "hash=${hash}" >> "${GITHUB_OUTPUT}"
+          echo "ref=${ref}" >> "${GITHUB_OUTPUT}"
+          echo "image: ${ref}"
+      # A public image needs no login; a failed login only means building the image here.
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550  # v4.8.0
+        if: steps.changes.outputs.docs_only != 'true'
+        continue-on-error: true
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Pull the prebuilt image
+        id: pull
+        if: steps.changes.outputs.docs_only != 'true'
+        env:
+          IMAGE: ${{ steps.image.outputs.ref }}
+        # missing=true only when the registry says the image is absent: "manifest unknown" for a
+        # missing tag, "denied" for a package that does not exist (or cannot be read). Other errors
+        # are retried; if they persist, the image is built here but not published.
+        run: |
+          pulled=false
+          missing=false
+          for attempt in 1 2 3; do
+            if docker pull "${IMAGE}"; then
+              docker tag "${IMAGE}" glim_localization:dev
+              pulled=true
+              break
+            fi
+            if docker manifest inspect "${IMAGE}" 2>&1 | grep -qiE 'manifest unknown|no such manifest|not found|denied'; then
+              missing=true
+              break
+            fi
+            [[ "${attempt}" -eq 3 ]] || sleep $((attempt * 15))
+          done
+          if [[ "${missing}" == true ]]; then
+            echo "No prebuilt image ${IMAGE}; building it"
+          elif [[ "${pulled}" != true ]]; then
+            echo "::warning::Cannot pull ${IMAGE}; building it here, not publishing"
+          fi
+          echo "pulled=${pulled}" >> "${GITHUB_OUTPUT}"
+          echo "missing=${missing}" >> "${GITHUB_OUTPUT}"
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069  # v4.4.1
+        if: steps.changes.outputs.docs_only != 'true' && steps.pull.outputs.pulled != 'true'
+      - name: Build image
+        if: steps.changes.outputs.docs_only != 'true' && steps.pull.outputs.pulled != 'true'
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc  # v7.4.0
+        with:
+          context: .
+          file: docker/Dockerfile
+          load: true
+          tags: glim_localization:dev
+          build-args: JOBS=2
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      # Only pushes to main save the compiler cache; PRs restore main's (same image, nearest sources).
+      - name: Restore ccache
+        id: ccache
+        if: steps.changes.outputs.docs_only != 'true'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: ${{ runner.temp }}/ccache
+          key: ccache-${{ steps.image.outputs.hash }}-${{ hashFiles('glim_localization/**', 'glim_localization_msgs/**', 'glim_localization_ros2/**') }}
+          # ccache checks the compiler and hashes the headers itself, so another image's cache is safe.
+          restore-keys: |
+            ccache-${{ steps.image.outputs.hash }}-
+            ccache-
+      - name: Run checks
+        if: steps.changes.outputs.docs_only != 'true'
+        env:
+          GLIM_LOC_CCACHE_DIR: ${{ runner.temp }}/ccache
+          # Keeps the saved cache small next to the buildx layer cache (10 GB per repository).
+          CCACHE_MAXSIZE: 500M
+        run: scripts/docker_run.sh scripts/ci.sh
+      - name: Save ccache
+        if: >-
+          !cancelled() && steps.changes.outputs.docs_only != 'true'
+          && github.event_name == 'push' && github.ref == 'refs/heads/main'
+          && steps.ccache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: ${{ runner.temp }}/ccache
+          key: ${{ steps.ccache.outputs.cache-primary-key }}
+
+  # Pushes the image only after the checks passed on main, and only when it was not on GHCR yet.
+  # Never runs for PRs or forks, so only this job gets packages: write.
+  publish-image:
+    needs: build-and-test
+    if: >-
+      github.event_name == 'push' && github.ref == 'refs/heads/main' && !github.event.repository.fork
+      && needs.build-and-test.outputs.missing == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069  # v4.4.1
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550  # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      # This is a rebuild, not the image build-and-test ran: same build arguments, so every layer
+      # normally comes from the GitHub Actions layer cache. If the base image tag moved or the cache
+      # was evicted in between, the pushed image is a fresh build. The tag identifies the
+      # repository's image inputs, not the image content: base image and apt updates reach the
+      # published image only when an input changes, or by deleting the tag on GHCR so that the next
+      # push to main rebuilds it.
+      - name: Push image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc  # v7.4.0
+        with:
+          context: .
+          file: docker/Dockerfile
+          push: true
+          tags: ${{ needs.build-and-test.outputs.image }}
+          labels: org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+          build-args: JOBS=2
+          cache-from: type=gha

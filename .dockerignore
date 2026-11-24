@@ -1,0 +1,10 @@
+build/
+install/
+log/
+out/
+.git
+data/
+maps/
+*.bag
+*.db3
+*.mcap

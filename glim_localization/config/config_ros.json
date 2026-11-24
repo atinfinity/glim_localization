@@ -1,0 +1,26 @@
+// Derived from koide3/glim config/config_ros.json at commit 1a197c999e4865f5cab7c9cd25474128413ebbca (MIT License, Copyright (c) 2024 koide3)
+{
+  "glim_ros": {
+    "enable_local_mapping": false,
+    "enable_global_mapping": false,
+    "keep_raw_points": false,
+    "imu_time_offset": 0.0,
+    "points_time_offset": 0.0,
+    "acc_scale": 0.0,
+    "ang_scale": 1.0,
+    "imu_frame_id": "",
+    "lidar_frame_id": "",
+    "base_frame_id": "",
+    "odom_frame_id": "odom",
+    "map_frame_id": "map",
+    "publish_imu2lidar": true,
+    "tf_time_offset": 1e-6,
+    "extension_modules": [],
+    "imu_topic": "/os_cloud_node/imu",
+    "points_topic": "/os_cloud_node/points",
+    "image_topic": "/image",
+    "imu_qos": { "profile": "sensor_data", "depth": 1000 },
+    "points_qos": { "profile": "sensor_data" },
+    "image_qos": { "profile": "sensor_data" }
+  }
+}

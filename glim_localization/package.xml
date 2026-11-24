@@ -1,0 +1,16 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>glim_localization</name>
+  <version>0.1.0</version>
+  <description>ROS-independent LiDAR-IMU localization core built on GLIM</description>
+  <maintainer email="dandelion1124@gmail.com">atinfinity</maintainer>
+  <license>MIT</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <depend>glim</depend>
+  <build_depend>nlohmann-json-dev</build_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

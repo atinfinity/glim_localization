@@ -1,0 +1,18 @@
+// Derived from koide3/glim config/config_sensors.json at commit 1a197c999e4865f5cab7c9cd25474128413ebbca (MIT License, Copyright (c) 2024 koide3)
+{
+  "sensors": {
+    "imu_acc_noise": 0.05,
+    "imu_gyro_noise": 0.02,
+    "imu_int_noise": 0.001,
+    "imu_bias_noise_acc": 1e-5,
+    "imu_bias_noise_gyro": 1e-6,
+    "global_shutter_lidar": false,
+    "T_lidar_imu": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0],
+    "intensity_field": "intensity",
+    "ring_field": "",
+    "autoconf_perpoint_times": true,
+    "autoconf_prefer_frame_time": false,
+    "perpoint_relative_time": true,
+    "perpoint_time_scale": 1.0
+  }
+}

@@ -1,0 +1,21 @@
+name: glim_localization
+
+services:
+  dev:
+    # scripts/ci_local.sh sets GLIM_LOC_IMAGE to a private tag of the image it verified.
+    image: ${GLIM_LOC_IMAGE:-glim_localization:dev}
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      args:
+        JOBS: ${JOBS:-4}
+    working_dir: /ws/src/glim_localization
+    environment:
+      - CTEST_JOBS  # Passed through from the host only when set.
+    volumes:
+      - ..:/ws/src/glim_localization
+      - build:/ws/build
+      - ../out:/ws/out
+
+volumes:
+  build:

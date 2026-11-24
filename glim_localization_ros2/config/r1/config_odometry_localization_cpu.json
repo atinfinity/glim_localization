@@ -1,0 +1,36 @@
+// Derived from koide3/glim config/config_odometry_cpu.json at commit 1a197c999e4865f5cab7c9cd25474128413ebbca (MIT License, Copyright (c) 2024 koide3)
+{
+  "odometry_estimation": {
+    "so_name": "libodometry_localization_cpu.so",
+    "map_path": "",
+    "map_voxel_resolutions": [0.5, 1.0, 2.0],
+    "map_search_radius": 60.0,
+    "map_max_submaps": 5,
+    "map_min_overlap": 0.1,
+    "map_factor_weight": 1.0,
+    "degraded_weight_scale": 0.1,
+    "use_keyframes": false,
+    "degraded_inlier_ratio": 0.3,
+    "tracking_frames": 5,
+    "degraded_frames": 5,
+    "lost_frames": 50,
+    "on_imu_gap": "reset",
+    "max_imu_gap": 0.05,
+    "imu_gap_reset_max": 0.5,
+    "init_pose_damping_scale": 1e2,
+    "smoother_lag": 5.0,
+    "use_isam2_dogleg": false,
+    "isam2_relinearize_skip": 1,
+    "isam2_relinearize_thresh": 0.1,
+    "fix_imu_bias": false,
+    "max_iterations": 8,
+    "lru_thresh": 100,
+    "target_downsampling_rate": 0.1,
+    "vgicp_resolution": 0.5,
+    "vgicp_voxelmap_levels": 1,
+    "vgicp_voxelmap_scaling_factor": 2.0,
+    "validate_imu": true,
+    "save_imu_rate_trajectory": false,
+    "num_threads": 2
+  }
+}

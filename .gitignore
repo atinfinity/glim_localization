@@ -1,0 +1,15 @@
+build/
+install/
+log/
+.cache/
+compile_commands.json
+*.swp
+.DS_Store
+/data/
+/maps/
+*.bag
+*.db3
+*.mcap
+out/
+__pycache__/
+.pytest_cache/

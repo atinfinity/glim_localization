@@ -1,0 +1,11 @@
+version: 2
+updates:
+  # Only GitHub Actions. The Python tooling (scripts/requirements.txt) is a pip freeze lock generated
+  # in the image by scripts/update_requirements.sh, and the Docker base image is a ROS distro tag;
+  # both are updated by hand.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: ci

@@ -1,0 +1,46 @@
+#pragma once
+
+#include <string>
+#include <vector>
+
+#include <Eigen/Core>
+
+#include <glim_localization/map/map_io.hpp>
+
+namespace glim_localization {
+
+using PcdPoints = std::vector<Eigen::Vector4d, Eigen::aligned_allocator<Eigen::Vector4d>>;
+
+/// Read x, y and z from a PCD file with `DATA ascii` or `DATA binary` (`binary_compressed` is rejected).
+/// x, y and z must be single floats (F4 or F8). Other fields are skipped, and VIEWPOINT is ignored.
+/// Points with a non-finite coordinate are dropped. The result has w = 1.
+/// On failure, `points` is unchanged.
+bool read_pcd(const std::string& path, PcdPoints& points);
+
+/// Lower bounds of PcdMapParams. Smaller tiles explode the submap count, smaller voxels flood the voxel grid,
+/// and fewer than 5 neighbours give degenerate covariances (k = 1 is a zero matrix).
+constexpr double kMinPcdGridSize = 1.0;
+constexpr double kMinPcdVoxelSize = 0.01;
+constexpr int kMinPcdKNeighbors = 5;
+
+/// How a point cloud becomes submaps.
+struct PcdMapParams {
+  double grid_size = 20.0;  ///< Tile edge along world x and y [m], >= kMinPcdGridSize. Tiles span all z.
+  double voxel_size = 0.0;  ///< Voxel grid downsampling before tiling [m]. 0 disables it, otherwise >= kMinPcdVoxelSize.
+  int k_neighbors = 10;     ///< Neighbours for covariance estimation, searched in the whole cloud, >= kMinPcdKNeighbors
+  int num_threads = 1;
+};
+
+/// Empty if `params` is valid, otherwise a message that names the bad parameter.
+std::string check_pcd_map_params(const PcdMapParams& params);
+
+/// Split world-frame points into grid tiles with per-point covariances.
+/// Downsampling runs in a frame centred on the cloud's bounding box, so it works with large (for example UTM)
+/// coordinates; it fails if the cloud is too wide for the voxel grid (about 2^21 voxels per axis).
+/// Covariances are estimated over the whole cloud first, so points near a tile edge use neighbours across it.
+/// Each non-empty tile becomes a submap with identity rotation, its origin at the centroid of its points,
+/// and ids 0, 1, ... in (x, y) cell order. Fails if the cloud has fewer than k_neighbors points.
+/// On failure, `submaps` is unchanged.
+bool build_pcd_submaps(const PcdPoints& points, const PcdMapParams& params, LoadedSubmaps& submaps);
+
+}  // namespace glim_localization
