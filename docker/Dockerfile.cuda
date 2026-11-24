@@ -145,13 +145,16 @@ RUN apt-get update \
 # Python tooling for bag conversion and evaluation. Kept out of the PATH so that ROS and colcon
 # keep using the system Python (Ubuntu 24.04 blocks system-wide pip installs, PEP 668).
 # Placed after the GLIM build so that changing it does not rebuild GLIM.
+# fonts-noto-core: Noto Sans (OFL 1.1) for the text of scripts/render_demo.py. The matplotlib font
+# cache is built after the fonts are installed, so it lists them from the first use.
 COPY scripts/requirements.txt /tmp/requirements.txt
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends python3-venv \
+    && apt-get install -y --no-install-recommends fonts-noto-core python3-venv \
     && rm -rf /var/lib/apt/lists/* \
     && python3 -m venv /opt/glim_localization_venv \
     && /opt/glim_localization_venv/bin/pip install --no-cache-dir -r /tmp/requirements.txt \
-    && rm /tmp/requirements.txt
+    && rm /tmp/requirements.txt \
+    && /opt/glim_localization_venv/bin/python -c "from matplotlib import font_manager as fm; fm.findfont(fm.FontProperties(family='Noto Sans'), fallback_to_default=False)"
 ENV GLIM_LOC_PYTHON=/opt/glim_localization_venv/bin/python
 
 # ccache, used only when CCACHE_DIR is set (CI mounts one; scripts/build_core.sh, build_colcon.sh).
