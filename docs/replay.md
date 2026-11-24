@@ -23,11 +23,11 @@ The animation in the README (`docs/media/replay_synthetic.gif`) is rendered offs
 ```bash
 scripts/docker_run.sh bash -c 'env -u PYTHONPATH $GLIM_LOC_PYTHON scripts/render_demo.py \
   --data /ws/out/phase4_e2e/input/data --run /ws/out/phase4_e2e/run1 --map /ws/out/phase4_e2e/input/map.pcd \
-  --z-min 0.2 --out docs/media/replay_synthetic.gif'
+  --z-min 1.0 --z-max 3.0 --out docs/media/replay_synthetic.gif'
 ```
 
 - `render_demo.py` draws, per estimated frame, the map points, the current scan moved to the map frame by the estimate, the estimated trajectory so far, the ground truth (`<data>/traj_gt.txt` when it exists; `--gt`, `--no-gt`), and the state and inlier ratio from `frames.csv`. Frames that are not `estimated` are skipped.
-- The map is a PCD file (ascii or binary). `--z-min` and `--z-max` drop points outside a map-frame height band, here the floor. Pass `--t-lidar-imu` with the value of `config_sensors.json` when it is not the identity.
+- The map is a PCD file (ascii or binary); non-finite points are dropped. `--z-min` and `--z-max` draw only the map and scan points in a map-frame height band. The README image is a horizontal slice from 1 m (the sensor height) to 3 m: it hides the floor, and the low boxes in the middle of the corridor, which the trajectory passes over and would otherwise seem to drive through. Pass `--t-lidar-imu` with the value of `config_sensors.json` when it is not the identity.
 - The output is a GIF or WebP, chosen by the extension. Other options: `--width`, `--fps`, `--stride`, `--max-frames`, `--margin`, `--title`.
 - Keep the committed file under about 3 MB, and commit only the image: never a bag, dataset or map.
 
