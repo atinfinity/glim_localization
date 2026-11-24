@@ -449,7 +449,7 @@ A private Ouster OS1-128 recording (1153 frames, about 115 s, 10 Hz LiDAR) was c
   - `LocalizationCallbacks::loaded_map()`: the map of the oldest live localization odometry instance, so the R1 extension reuses the map the dlopen'd module loaded instead of loading it twice.
   - `OdometryEstimationLocalizationCPU::map()`.
   - Each has a core test.
-- **Deferred:** `~/aligned_points`. It needs a per-frame copy of the scan on the odometry callback and a rate and downsampling policy. It will be filed as a follow-up issue.
+- **Deferred:** `~/aligned_points`. It needs a per-frame copy of the scan on the odometry callback and a rate and downsampling policy. Filed as #18.
 - **Tests:**
   - `test_map_publisher` (gtest) checks the map-frame transform, the voxel centroids, the skipping of non-finite points, the rejection of a bad voxel size, and delivery of the latched map to a late subscriber.
   - Three launch tests include the installed launch files headless with the synthetic fixtures. Each checks `~/pose`, TF that composes to the last pose, and the latched `~/map` received after it was published:
@@ -458,4 +458,14 @@ A private Ouster OS1-128 recording (1153 frames, about 115 s, 10 Hz LiDAR) was c
     - `test_launch_r2_component`: R2 as a component.
   - The R2 tests also check that autostart reaches active.
 - **Verification**: `scripts/ci.sh` in Docker passes: core ctest 218/218 and colcon test 11/11. Launch test times: R1 5.1 s, R2 16.1 s, R2 component 17.2 s.
-- **Not done**: a manual run on a real bag with the launch files and RViz on a display.
+- **Not done**: a manual run on a real bag with the launch files and RViz on a display (part of #18).
+
+### Review fixes for #1 (2026-11-25)
+
+- **`~/map` size**: the cloud size is computed in `size_t`. A cloud above 1 GiB (`kMaxMapCloudBytes`, about 89 million points), or above the uint32 `row_step` of the message, is refused with a warning and not published; before, `row_step` could wrap and the copy wrote past the buffer. `check_map_cloud_size()` is tested at the uint32 boundary, and `make_map_cloud()` with a small cap, so no large allocation is needed.
+- **`~/map` cost**: with `map_cloud_voxel: 0` the points go straight into the message (12 bytes per point, no per-point sums); with downsampling the build holds about 40 bytes per occupied voxel, and the voxel index is reserved. A map above 10 million points with voxel 0 gets a warning. The build stays where it was (R1 node start, R2 configure): it runs once, and moving it to a thread would need locking around the publisher for a small gain. The cost is documented in `config_ros.json`, the README and DESIGN §6.
+- **R1 parameters** (`launch/launch_utils.py`, tested without ROS in `scripts/tests/test_launch_utils.py`): strings are passed single-quoted (so `""`, `"123"`, `"true"` and `"a: b"` stay strings), doubles keep a decimal point, integers of GlimROS's double parameters (`delay`, `start_offset`, `playback_duration`, `playback_until`) become doubles, lists of one type are passed as YAML flow, and nested mappings, empty lists and nulls are rejected with a clear error. R2 cannot coerce (launch_ros loads its `params_file`), so its YAML says to write doubles with a decimal point.
+- **R1 `map_path:=`** edits the odometry config that `global.config_odometry` of `config.json` names, relative to the config directory, with a clear error when the key or the file is missing. Names that point outside the config directory (such as `../r1/...` in `config/r2`) are rewritten in the copy. The JSON comment stripping now skips strings and handles `/* */`; the R2 test helpers reuse it. The copy is removed at the launch shutdown (`OnShutdown`) and at exit.
+- **Other**: `autostart` skips and logs the state when the node already left Unconfigured; `package.xml` declares `ament_index_python` and `glim_ros` as exec dependencies (`glim_ros` moved from test_depend); the R2 test config copies are removed at exit.
+- **Tests**: the launch tests now assert the 9245-point `~/map`. New `test_launch_r1_live` runs `glim_rosnode` (no `bag:=`) with `map_path` empty and the map in the config. The `rviz:=true` fallback stays a manual check: a launch test would start rviz2 where it is installed, and the warning goes to the launch log, not to a process output that launch_testing can assert.
+- **Verification**: `scripts/ci.sh` in Docker passes: core ctest 218/218, colcon test 12/12 (`test_launch_r1_live` 1.1 s), Python tests 175.
