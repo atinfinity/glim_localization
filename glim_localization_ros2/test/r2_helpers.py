@@ -27,7 +27,10 @@ from tf2_msgs.msg import TFMessage
 NODE = "/glim_localization"
 SERVICE_TIMEOUT_S = 30.0  # fails the test; not a success path
 DEADLINE_S = 180.0  # fails the test; not a success path
-DISCOVERY_MARGIN_S = 2.0  # after the player's publishers are visible here, for the node to match them too
+# Spun before resuming the player, after its publishers are visible here and (with node_matched) the node has matched
+# them. It covers the other direction: a reliable volatile publisher sends nothing to a reader it has not matched yet,
+# and the player's writers match the node's readers independently of the node's matched event. Not redundant.
+DISCOVERY_MARGIN_S = 2.0
 PLAYER_GRACE_S = 20.0  # after the bag ended, how long the node may go without a new pose before the test fails
 BAG_TOPICS = ["/imu", "/points", "/initialpose"]  # the topics of the synthetic bags (scripts/replay_to_bag.py)
 
@@ -84,12 +87,16 @@ def node_process(config_dir, map_path):
 def wait_for_node_matched(proc_output, timeout=SERVICE_TIMEOUT_S):
     """A `node_matched` for R2Client.play_and_wait: wait in the launch output for the node's log line
     "matched publishers on <topic>: N" (N >= 1) of each topic. Only for a test whose node meets one player: a line
-    from an earlier player would also match.
+    from an earlier player would also match. Needs an RMW with matched events (Fast DDS, Cyclone DDS and Connext have
+    them); without them the node logs "matched events not supported on <topic>" and this times out. One deadline
+    covers all topics.
     """
     def wait(topics):
+        end = time.monotonic() + timeout
         for topic in topics:
             proc_output.assertWaitFor(
-                expected_output=re.compile(rf"matched publishers on {re.escape(topic)}: [1-9]"), timeout=timeout, stream="stderr")
+                expected_output=re.compile(rf"matched publishers on {re.escape(topic)}: [1-9]"),
+                timeout=max(end - time.monotonic(), 0.1), stream="stderr")
     return wait
 
 

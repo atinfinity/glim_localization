@@ -85,7 +85,7 @@ def check_r2_launch(test, client, proc_output):
     client.play_and_wait(
         r2_helpers.require_env("GLIM_R1_BAG"), r2_helpers.BAG_TOPICS, node_matched=r2_helpers.wait_for_node_matched(proc_output))
     num_frames = len(client.gt)
-    print(f"{len(client.poses)} poses for {num_frames} frames; {client.coverage_report()}", flush=True)
+    print(f"{len(client.poses)} poses for {num_frames} frames", flush=True)
     test.assertGreaterEqual(
         len(client.poses), MIN_POSE_RATIO * num_frames, f"{len(client.poses)} poses for {num_frames} frames; {client.coverage_report()}")
     test.assertTrue(all(p.header.frame_id == "map" for p in client.poses))
