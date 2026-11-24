@@ -167,6 +167,20 @@ for name, d in (("cpu", cpu), ("gpu", gpu)):
     t, r, o = report["errors"]["ate_trans_m"], report["errors"]["ate_rot_deg"], report["timing"]["odometry_ms"]
     print(f"{name}: ATE trans rmse {t['rmse']:.4f} m, max {t['max']:.4f} m, rot max {r['max']:.3f} deg; "
           f"odometry mean {o['mean']:.1f} ms, p95 {o['p95']:.1f} ms")
+
+# Same factors, same optimum: the two backends must agree far closer than the accuracy limit, so a GPU regression
+# that stays inside it (a wrong level, a dropped tile, a weight not applied) still fails.
+import numpy as np
+a = np.loadtxt(f"{cpu}/traj_localization.txt", ndmin=2)
+b = np.loadtxt(f"{gpu}/traj_localization.txt", ndmin=2)
+assert a.shape == b.shape and len(a) > 0, f"cpu {a.shape} vs gpu {b.shape} poses"
+assert np.allclose(a[:, 0], b[:, 0], rtol=0.0, atol=1e-6), "the backends estimated different frames"
+dp = np.linalg.norm(a[:, 1:4] - b[:, 1:4], axis=1).max()
+dot = np.clip(np.abs(np.sum(a[:, 4:8] * b[:, 4:8], axis=1)) / (np.linalg.norm(a[:, 4:8], axis=1) * np.linalg.norm(b[:, 4:8], axis=1)), 0.0, 1.0)
+dr = np.degrees(2.0 * np.arccos(dot)).max()
+print(f"cpu vs gpu over {len(a)} poses: max position diff {dp:.3e} m, max rotation diff {dr:.3e} deg")
+assert dp < 1e-3, f"cpu and gpu trajectories differ by {dp} m"
+assert dr < 0.05, f"cpu and gpu trajectories differ by {dr} deg"
 PY
   echo "gpu replay ok"
 else
