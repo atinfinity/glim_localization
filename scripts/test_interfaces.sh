@@ -68,8 +68,11 @@ uint8 INIT_SEARCH_ACCEPTED=1
 uint8 INIT_SEARCH_REJECTED=2
 uint8 init_search
 int32 init_search_candidates
+int32 init_search_candidates_total
 float64 init_search_score
 float64 init_search_yaw_offset
+float64 init_search_runner_up_score
+float64 init_search_runner_up_yaw_offset
 float64 init_search_time'
 [[ "${status_api}" == "${expected_status}" ]] || fail "LocalizationStatus changed:
 $(diff <(echo "${expected_status}") <(echo "${status_api}") || true)"
@@ -158,7 +161,9 @@ status.state = LocalizationStatus.DEGRADED
 status.last_reset_reason = LocalizationStatus.RESET_EXTERNAL
 status.processing_time = 0.02
 status.init_search = LocalizationStatus.INIT_SEARCH_REJECTED
-status.init_search_candidates = 24
+status.init_search_candidates = 1
+status.init_search_candidates_total = 24
+status.init_search_runner_up_score = 0.85
 request = Initialize.Request()
 request.global_search = True
 request.pose.pose.pose.position.x = 1.0
@@ -171,7 +176,8 @@ from rclpy.serialization import deserialize_message, serialize_message
 status_copy = deserialize_message(serialize_message(status), LocalizationStatus)
 assert status_copy.state == 2 and status_copy.last_reset_reason == 1
 assert abs(status_copy.processing_time - 0.02) < 1e-12
-assert status_copy.init_search == 2 and status_copy.init_search_candidates == 24
+assert status_copy.init_search == 2 and status_copy.init_search_candidates == 1
+assert status_copy.init_search_candidates_total == 24 and status_copy.init_search_runner_up_score == 0.85
 request_copy = deserialize_message(serialize_message(request), Initialize.Request)
 assert request_copy.global_search is True and request_copy.pose.pose.pose.position.x == 1.0
 response_copy = deserialize_message(serialize_message(response), Initialize.Response)

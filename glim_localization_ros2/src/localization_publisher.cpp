@@ -1,6 +1,8 @@
 #include <glim_localization_ros2/localization_publisher.hpp>
 
 #include <cmath>
+#include <cstdio>
+#include <string>
 
 #include <diagnostic_msgs/msg/diagnostic_status.hpp>
 #include <geometry_msgs/msg/transform_stamped.hpp>
@@ -107,6 +109,18 @@ diagnostic_msgs::msg::KeyValue key_value(const std::string& key, const std::stri
   kv.key = key;
   kv.value = value;
   return kv;
+}
+
+/// Why the search rejected the pose, as far as the message tells: a search cut short is recognized by its counts;
+/// otherwise the scores are given (the thresholds are in the odometry config, not in the message).
+std::string init_search_rejection_reason(const glim_localization_msgs::msg::LocalizationStatus& msg) {
+  char text[160];
+  if (msg.init_search_candidates < msg.init_search_candidates_total) {
+    std::snprintf(text, sizeof(text), "time budget ran out after %d of %d candidates", msg.init_search_candidates, msg.init_search_candidates_total);
+  } else {
+    std::snprintf(text, sizeof(text), "best inlier ratio %.3f, runner-up %.3f", msg.init_search_score, msg.init_search_runner_up_score);
+  }
+  return text;
 }
 
 }  // namespace
@@ -305,8 +319,11 @@ void LocalizationPublisher::on_status(const glim_localization::LocalizationStatu
   msg.last_reset_reason = to_message_reason(status.last_reset_reason);
   msg.init_search = static_cast<uint8_t>(status.init_search);  // Same values, pinned by test_message_constants
   msg.init_search_candidates = status.init_search_candidates;
+  msg.init_search_candidates_total = status.init_search_candidates_total;
   msg.init_search_score = status.init_search_score;
   msg.init_search_yaw_offset = status.init_search_yaw_offset;
+  msg.init_search_runner_up_score = status.init_search_runner_up_score;
+  msg.init_search_runner_up_yaw_offset = status.init_search_runner_up_yaw_offset;
   msg.init_search_time = status.init_search_time;
   msg.header.frame_id = params_.map_frame;
 
@@ -348,7 +365,7 @@ void LocalizationPublisher::publish_diagnostics(const LocalizationStatus& msg) {
   status.hardware_id = params_.diagnostics_hardware_id;
   status.message = state_name;
   if (msg.init_search == LocalizationStatus::INIT_SEARCH_REJECTED) {
-    status.message += ": the initial pose search rejected the given pose";
+    status.message += ": the initial pose search rejected the given pose (" + init_search_rejection_reason(msg) + ")";
   }
   status.values.push_back(key_value("state", state_name));
   status.values.push_back(key_value("reset_count", std::to_string(msg.reset_count)));
@@ -360,8 +377,11 @@ void LocalizationPublisher::publish_diagnostics(const LocalizationStatus& msg) {
   status.values.push_back(key_value("processing_time", std::to_string(msg.processing_time)));
   status.values.push_back(key_value("init_search", glim_localization::to_string(static_cast<glim_localization::InitSearchResult>(msg.init_search))));
   status.values.push_back(key_value("init_search_candidates", std::to_string(msg.init_search_candidates)));
+  status.values.push_back(key_value("init_search_candidates_total", std::to_string(msg.init_search_candidates_total)));
   status.values.push_back(key_value("init_search_score", std::to_string(msg.init_search_score)));
   status.values.push_back(key_value("init_search_yaw_offset_deg", std::to_string(msg.init_search_yaw_offset * 180.0 / M_PI)));
+  status.values.push_back(key_value("init_search_runner_up_score", std::to_string(msg.init_search_runner_up_score)));
+  status.values.push_back(key_value("init_search_runner_up_yaw_offset_deg", std::to_string(msg.init_search_runner_up_yaw_offset * 180.0 / M_PI)));
   status.values.push_back(key_value("init_search_time", std::to_string(msg.init_search_time)));
 
   diagnostic_msgs::msg::DiagnosticArray array;
