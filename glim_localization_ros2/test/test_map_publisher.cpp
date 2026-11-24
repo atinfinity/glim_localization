@@ -16,7 +16,8 @@
 
 #include <glim_localization_ros2/map_publisher.hpp>
 
-namespace {
+namespace
+{
 
 using glim_localization::MapTile;
 using glim_localization_ros2::make_map_cloud;
@@ -24,9 +25,12 @@ using glim_localization_ros2::MapPublisher;
 using sensor_msgs::msg::PointCloud2;
 using namespace std::chrono_literals;
 
-MapTile::ConstPtr make_tile(int id, const Eigen::Isometry3d& T_world_origin, const std::vector<Eigen::Vector3d>& points) {
+MapTile::ConstPtr make_tile(
+  int id, const Eigen::Isometry3d & T_world_origin,
+  const std::vector<Eigen::Vector3d> & points)
+{
   std::vector<Eigen::Vector4d> homogeneous;
-  for (const auto& p : points) {
+  for (const auto & p : points) {
     homogeneous.emplace_back(p.x(), p.y(), p.z(), 1.0);
   }
   auto tile = std::make_shared<MapTile>();
@@ -36,13 +40,15 @@ MapTile::ConstPtr make_tile(int id, const Eigen::Isometry3d& T_world_origin, con
   return tile;
 }
 
-Eigen::Isometry3d translation(double x, double y, double z) {
+Eigen::Isometry3d translation(double x, double y, double z)
+{
   Eigen::Isometry3d T = Eigen::Isometry3d::Identity();
   T.translation() = Eigen::Vector3d(x, y, z);
   return T;
 }
 
-std::vector<Eigen::Vector3f> read_points(const PointCloud2& msg) {
+std::vector<Eigen::Vector3f> read_points(const PointCloud2 & msg)
+{
   std::vector<Eigen::Vector3f> points(msg.width * msg.height);
   for (size_t i = 0; i < points.size(); i++) {
     std::memcpy(points[i].data(), &msg.data[i * msg.point_step], 3 * sizeof(float));
@@ -55,7 +61,8 @@ std::vector<Eigen::Vector3f> read_points(const PointCloud2& msg) {
 TEST(MapCloud, KeepsEveryPointInTheMapFrameWithoutDownsampling) {
   Eigen::Isometry3d T = translation(10.0, -5.0, 1.0);
   T.linear() = Eigen::AngleAxisd(M_PI / 2.0, Eigen::Vector3d::UnitZ()).toRotationMatrix();
-  const auto tiles = {make_tile(0, T, {{1.0, 0.0, 0.0}, {0.0, 2.0, 0.5}}), make_tile(1, translation(0.0, 0.0, 0.0), {{3.0, 3.0, 3.0}})};
+  const auto tiles = {make_tile(0, T, {{1.0, 0.0, 0.0}, {0.0, 2.0, 0.5}}),
+    make_tile(1, translation(0.0, 0.0, 0.0), {{3.0, 3.0, 3.0}})};
 
   const PointCloud2 msg = make_map_cloud(tiles, 0.0, "map");
   EXPECT_EQ(msg.header.frame_id, "map");
@@ -65,7 +72,7 @@ TEST(MapCloud, KeepsEveryPointInTheMapFrameWithoutDownsampling) {
   EXPECT_EQ(msg.fields[0].name, "x");
   EXPECT_EQ(msg.fields[1].name, "y");
   EXPECT_EQ(msg.fields[2].name, "z");
-  for (const auto& field : msg.fields) {
+  for (const auto & field : msg.fields) {
     EXPECT_EQ(field.datatype, sensor_msgs::msg::PointField::FLOAT32);
   }
   EXPECT_EQ(msg.data.size(), static_cast<size_t>(msg.row_step));
@@ -94,7 +101,8 @@ TEST(MapCloud, KeepsOneCentroidPerVoxel) {
 
 TEST(MapCloud, RejectsABadVoxelSizeAndHandlesNoTiles) {
   EXPECT_THROW(make_map_cloud({}, -1.0, "map"), std::invalid_argument);
-  EXPECT_THROW(make_map_cloud({}, std::numeric_limits<double>::infinity(), "map"), std::invalid_argument);
+  EXPECT_THROW(make_map_cloud({}, std::numeric_limits<double>::infinity(), "map"),
+    std::invalid_argument);
   const PointCloud2 empty = make_map_cloud({nullptr}, 0.5, "map");
   EXPECT_EQ(empty.width, 0u);
   EXPECT_TRUE(empty.data.empty());
@@ -102,7 +110,8 @@ TEST(MapCloud, RejectsABadVoxelSizeAndHandlesNoTiles) {
 
 TEST(MapCloud, SkipsNonFinitePointsWithoutDownsampling) {
   const double nan = std::numeric_limits<double>::quiet_NaN();
-  const PointCloud2 msg = make_map_cloud({make_tile(0, translation(0.0, 0.0, 0.0), {{1.0, 0.0, 0.0}, {nan, 0.0, 0.0}, {2.0, 0.0, 0.0}})}, 0.0, "map");
+  const PointCloud2 msg = make_map_cloud({make_tile(0, translation(0.0, 0.0, 0.0),
+        {{1.0, 0.0, 0.0}, {nan, 0.0, 0.0}, {2.0, 0.0, 0.0}})}, 0.0, "map");
   ASSERT_EQ(msg.width, 2u);
   EXPECT_EQ(msg.row_step, 24u);
   EXPECT_EQ(msg.data.size(), 24u);
@@ -120,11 +129,14 @@ TEST(MapCloud, RefusesACloudBeyondTheSizeLimit) {
   EXPECT_THROW(check_map_cloud_size(max_uint32_points + 1, no_cap), std::length_error);
   EXPECT_THROW(check_map_cloud_size(no_cap, no_cap), std::length_error);
   // The default 1 GiB cap
-  EXPECT_NO_THROW(check_map_cloud_size(glim_localization_ros2::kMaxMapCloudBytes / kMapCloudPointStep));
-  EXPECT_THROW(check_map_cloud_size(glim_localization_ros2::kMaxMapCloudBytes / kMapCloudPointStep + 1), std::length_error);
+  EXPECT_NO_THROW(check_map_cloud_size(glim_localization_ros2::kMaxMapCloudBytes /
+    kMapCloudPointStep));
+  EXPECT_THROW(check_map_cloud_size(glim_localization_ros2::kMaxMapCloudBytes / kMapCloudPointStep +
+    1), std::length_error);
 
   // make_map_cloud applies it, with and without downsampling (a small cap stands in for a huge map)
-  const auto tiles = {make_tile(0, translation(0.0, 0.0, 0.0), {{0.0, 0.0, 0.0}, {5.0, 0.0, 0.0}, {10.0, 0.0, 0.0}})};
+  const auto tiles = {make_tile(0, translation(0.0, 0.0, 0.0),
+      {{0.0, 0.0, 0.0}, {5.0, 0.0, 0.0}, {10.0, 0.0, 0.0}})};
   EXPECT_THROW(make_map_cloud(tiles, 0.0, "map", 2 * kMapCloudPointStep), std::length_error);
   EXPECT_THROW(make_map_cloud(tiles, 1.0, "map", 2 * kMapCloudPointStep), std::length_error);
   EXPECT_EQ(make_map_cloud(tiles, 1.0, "map", 3 * kMapCloudPointStep).width, 3u);
@@ -135,24 +147,28 @@ TEST(MapCloud, RefusesACloudBeyondTheSizeLimit) {
 
 class MapPublisherTest : public testing::Test {
 protected:
-  void SetUp() override { rclcpp::init(0, nullptr); }
-  void TearDown() override { rclcpp::shutdown(); }
+  void SetUp() override {rclcpp::init(0, nullptr);}
+  void TearDown() override {rclcpp::shutdown();}
 };
 
 TEST_F(MapPublisherTest, LateSubscriberGetsTheLatchedMap) {
   auto node = std::make_shared<rclcpp::Node>("map_publisher_test");
-  EXPECT_THROW(MapPublisher(node->get_node_topics_interface(), node->get_clock(), "", 0.5), std::invalid_argument);
-  EXPECT_THROW(MapPublisher(node->get_node_topics_interface(), node->get_clock(), "map", -0.5), std::invalid_argument);
+  EXPECT_THROW(MapPublisher(node->get_node_topics_interface(), node->get_clock(), "", 0.5),
+    std::invalid_argument);
+  EXPECT_THROW(MapPublisher(node->get_node_topics_interface(), node->get_clock(), "map", -0.5),
+    std::invalid_argument);
 
   MapPublisher publisher(node->get_node_topics_interface(), node->get_clock(), "map", 0.5);
-  const size_t published = publisher.publish({make_tile(0, translation(1.0, 2.0, 3.0), {{0.0, 0.0, 0.0}, {0.1, 0.1, 0.1}, {5.0, 0.0, 0.0}})});
+  const size_t published = publisher.publish({make_tile(0, translation(1.0, 2.0, 3.0),
+        {{0.0, 0.0, 0.0}, {0.1, 0.1, 0.1}, {5.0, 0.0, 0.0}})});
   EXPECT_EQ(published, 2u);
 
   // Subscribed after the publication: only transient local durability delivers it
   auto observer = std::make_shared<rclcpp::Node>("map_publisher_observer");
   std::vector<PointCloud2> received;
   auto sub = observer->create_subscription<PointCloud2>(
-    "/map_publisher_test/map", rclcpp::QoS(1).reliable().transient_local(), [&](const PointCloud2::ConstSharedPtr msg) { received.push_back(*msg); });
+    "/map_publisher_test/map", rclcpp::QoS(1).reliable().transient_local(),
+    [&](const PointCloud2::ConstSharedPtr msg) {received.push_back(*msg);});
 
   rclcpp::executors::SingleThreadedExecutor executor;
   executor.add_node(node);

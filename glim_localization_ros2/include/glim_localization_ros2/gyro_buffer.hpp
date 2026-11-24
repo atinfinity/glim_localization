@@ -9,7 +9,8 @@
 
 #include <Eigen/Core>
 
-namespace glim_localization_ros2 {
+namespace glim_localization_ros2
+{
 
 /// The last second of raw gyro samples, to give each frame the angular velocity of its stamp (FrameEstimate::w_imu).
 /// Not thread-safe; the caller locks. Header only and free of ROS, so that it can be tested alone.
@@ -21,7 +22,8 @@ public:
   static constexpr double MAX_GAP = 0.02;
   static constexpr double WINDOW = 1.0;  ///< [s], counted back from the newest sample
 
-  void add(double stamp, const Eigen::Vector3d& gyro) {
+  void add(double stamp, const Eigen::Vector3d & gyro)
+  {
     if (!std::isfinite(stamp)) {
       return;
     }
@@ -35,13 +37,18 @@ public:
   }
 
   /// The sample nearest to stamp, if it is within MAX_GAP. Returns false for an empty buffer or a non-finite stamp.
-  bool nearest(double stamp, Eigen::Vector3d& gyro) const {
+  bool nearest(double stamp, Eigen::Vector3d & gyro) const
+  {
     if (samples_.empty() || !std::isfinite(stamp)) {
       return false;
     }
-    const auto it = std::lower_bound(samples_.begin(), samples_.end(), stamp, [](const auto& s, double t) { return s.first < t; });
+    const auto it = std::lower_bound(samples_.begin(), samples_.end(), stamp,
+        [](const auto & s, double t) {return s.first < t;});
     auto best = it;
-    if (it == samples_.end() || (it != samples_.begin() && std::abs(std::prev(it)->first - stamp) <= std::abs(it->first - stamp))) {
+    if (it == samples_.end() ||
+      (it != samples_.begin() &&
+      std::abs(std::prev(it)->first - stamp) <= std::abs(it->first - stamp)))
+    {
       best = std::prev(it);
     }
     if (std::abs(best->first - stamp) > MAX_GAP) {
@@ -51,7 +58,7 @@ public:
     return true;
   }
 
-  size_t size() const { return samples_.size(); }
+  size_t size() const {return samples_.size();}
 
 private:
   std::deque<std::pair<double, Eigen::Vector3d>> samples_;

@@ -30,7 +30,7 @@ class TestLaunchR2Component(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         rclpy.init()
-        cls.client = r2_helpers.R2Client("launch_r2_component_test_client", r2_helpers.require_env("GLIM_R1_DATA"))
+        cls.client = r2_helpers.R2Client('launch_r2_component_test_client', r2_helpers.require_env('GLIM_R1_DATA'))
 
     @classmethod
     def tearDownClass(cls):

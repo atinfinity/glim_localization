@@ -26,20 +26,23 @@
 
 #include <glim_localization/odometry/odometry_estimation_localization.hpp>
 
-namespace glim_localization_ros2 {
+namespace glim_localization_ros2
+{
 
 /// Which transforms are published.
-enum class TfMode {
+enum class TfMode
+{
   INTERNAL_ODOM,  ///< map->odom (an anchor, changed only by an external reset) and odom->base = anchor * pose
   EXTERNAL_ODOM,  ///< map->odom only, computed from an odom->base published by someone else
   NONE            ///< No TF
 };
 
 /// @throw std::invalid_argument for a name other than internal_odom, external_odom, none
-TfMode parse_tf_mode(const std::string& name);
-const char* to_string(TfMode mode);
+TfMode parse_tf_mode(const std::string & name);
+const char * to_string(TfMode mode);
 
-struct LocalizationPublisherParams {
+struct LocalizationPublisherParams
+{
   std::string map_frame = "map";
   std::string odom_frame = "odom";
   std::string base_frame = "base_link";
@@ -53,7 +56,8 @@ struct LocalizationPublisherParams {
 };
 
 /// The estimate of one frame, in the map frame. Built by the caller from the core's EstimationFrame.
-struct FrameEstimate {
+struct FrameEstimate
+{
   double stamp = 0.0;                                     ///< Frame time [s]
   Eigen::Isometry3d T_map_imu = Eigen::Isometry3d::Identity();
   Eigen::Vector3d v_map_imu = Eigen::Vector3d::Zero();  ///< Linear velocity of the IMU in the map frame
@@ -73,21 +77,23 @@ public:
     rclcpp::node_interfaces::NodeTopicsInterface>;
 
   /// @throw std::invalid_argument if a frame name is empty, or if the parameters are not finite or negative
-  LocalizationPublisher(NodeInterfaces node, const LocalizationPublisherParams& params = LocalizationPublisherParams());
+  LocalizationPublisher(
+    NodeInterfaces node,
+    const LocalizationPublisherParams & params = LocalizationPublisherParams());
   ~LocalizationPublisher();
 
   /// Store a frame. Nothing is published until on_status gets the status of the same frame (same stamp), which
   /// carries its state. Frames with a non-finite stamp, pose, velocity or angular velocity are dropped. A frame
   /// whose stamp is not newer than the last accepted one is dropped, unless an external reset came since. A
   /// stored frame that is replaced by a newer one before its status arrives is dropped.
-  void on_frame(const FrameEstimate& frame);
+  void on_frame(const FrameEstimate & frame);
 
   /// Publish ~/status and /diagnostics, and the pending frame if the status is for it (frame_id >= 0 and the same
   /// stamp). A status that is not for a frame (frame_id < 0, as emitted when a reset is applied) carries
   /// stamp = the reset's min_stamp, which may be 0. It is stamped with the last accepted frame stamp, or with the
   /// current time if there is none, and never used as a pose time. An external reset re-anchors odom->base at
   /// the next frame.
-  void on_status(const glim_localization::LocalizationStatus& status);
+  void on_status(const glim_localization::LocalizationStatus & status);
 
   /// Frames for which external odom->base was not available, so no map->odom was published (for tests and logs)
   size_t tf_lookup_failures() const;
@@ -96,13 +102,18 @@ public:
   /// Frames dropped because their stamp was not newer than the last accepted one
   size_t stale_frames() const;
   /// The buffer that listens to /tf in external_odom, otherwise null (for tests)
-  const tf2_ros::Buffer* tf_buffer() const { return tf_buffer_.get(); }
+  const tf2_ros::Buffer * tf_buffer() const {return tf_buffer_.get();}
 
 private:
-  void publish_frame(const FrameEstimate& frame, uint8_t state);
-  bool compute_odom_base(const builtin_interfaces::msg::Time& stamp, const Eigen::Isometry3d& T_map_base, Eigen::Isometry3d& T_odom_base, Eigen::Isometry3d& T_map_odom);
-  void publish_tf(const builtin_interfaces::msg::Time& stamp, const Eigen::Isometry3d& T_map_odom, const Eigen::Isometry3d& T_odom_base, bool with_map_odom);
-  void publish_diagnostics(const glim_localization_msgs::msg::LocalizationStatus& msg);
+  void publish_frame(const FrameEstimate & frame, uint8_t state);
+  bool compute_odom_base(
+    const builtin_interfaces::msg::Time & stamp,
+    const Eigen::Isometry3d & T_map_base, Eigen::Isometry3d & T_odom_base,
+    Eigen::Isometry3d & T_map_odom);
+  void publish_tf(
+    const builtin_interfaces::msg::Time & stamp, const Eigen::Isometry3d & T_map_odom,
+    const Eigen::Isometry3d & T_odom_base, bool with_map_odom);
+  void publish_diagnostics(const glim_localization_msgs::msg::LocalizationStatus & msg);
 
   const LocalizationPublisherParams params_;
   NodeInterfaces node_;

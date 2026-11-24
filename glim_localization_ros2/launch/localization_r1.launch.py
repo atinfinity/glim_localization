@@ -40,53 +40,53 @@ def _load(file_name, module_name):
     return module
 
 
-_r2_launch = _load("localization.launch.py", "glim_localization_r2_launch")
+_r2_launch = _load('localization.launch.py', 'glim_localization_r2_launch')
 rviz_actions, to_bool = _r2_launch.rviz_actions, _r2_launch.to_bool
-launch_utils = _load("launch_utils.py", "glim_localization_launch_utils")
+launch_utils = _load('launch_utils.py', 'glim_localization_launch_utils')
 
-PACKAGE = "glim_localization_ros2"
+PACKAGE = 'glim_localization_ros2'
 # The RViz config shows the R2 node's topics; GLIM's node is glim_ros
-RVIZ_REMAPPINGS = [(f"/glim_localization/{topic}", f"/glim_ros/{topic}") for topic in ("map", "pose", "odometry")]
+RVIZ_REMAPPINGS = [(f'/glim_localization/{topic}', f'/glim_ros/{topic}') for topic in ('map', 'pose', 'odometry')]
 
 
 def launch_setup(context):
-    config_path = os.path.abspath(LaunchConfiguration("config_path").perform(context))
-    map_path = LaunchConfiguration("map_path").perform(context)
+    config_path = os.path.abspath(LaunchConfiguration('config_path').perform(context))
+    map_path = LaunchConfiguration('map_path').perform(context)
     if map_path:
-        work_dir = tempfile.mkdtemp(prefix="glim_localization_r1_")
+        work_dir = tempfile.mkdtemp(prefix='glim_localization_r1_')
         # Removed when the launch process exits, after it has reaped GLIM (which may still read the config while it
         # shuts down). Not at the launch shutdown event: that fires when the processes are only being signalled.
         # A killed launch leaks it.
         atexit.register(shutil.rmtree, work_dir, ignore_errors=True)
         config_path = launch_utils.config_with_map(config_path, map_path, work_dir)
-    bag = LaunchConfiguration("bag").perform(context)
-    use_sim_time = to_bool(LaunchConfiguration("use_sim_time").perform(context))
+    bag = LaunchConfiguration('bag').perform(context)
+    use_sim_time = to_bool(LaunchConfiguration('use_sim_time').perform(context))
 
-    params = launch_utils.read_params_file(LaunchConfiguration("params_file").perform(context))
+    params = launch_utils.read_params_file(LaunchConfiguration('params_file').perform(context))
     # config_path last: GlimROS would take a relative path from glim's share directory
-    params.update({"config_path": config_path, "use_sim_time": use_sim_time})
+    params.update({'config_path': config_path, 'use_sim_time': use_sim_time})
     node = Node(
-        package="glim_ros",
-        executable="glim_rosbag" if bag else "glim_rosnode",
+        package='glim_ros',
+        executable='glim_rosbag' if bag else 'glim_rosnode',
         arguments=[bag] if bag else [],
         # Not `parameters`: launch_ros passes those as --params-file <a file>, and glim_rosbag reads every argument
         # that names an existing file as a bag. `-p name:=value` names no file.
         ros_arguments=launch_utils.to_ros_arguments(params),
-        output="screen",
+        output='screen',
     )
-    return [node] + rviz_actions(to_bool(LaunchConfiguration("rviz").perform(context)), use_sim_time, RVIZ_REMAPPINGS)
+    return [node] + rviz_actions(to_bool(LaunchConfiguration('rviz').perform(context)), use_sim_time, RVIZ_REMAPPINGS)
 
 
 def generate_launch_description():
     share = get_package_share_directory(PACKAGE)
     return LaunchDescription([
-        DeclareLaunchArgument("bag", default_value="", description="bag for glim_rosbag; empty runs glim_rosnode"),
+        DeclareLaunchArgument('bag', default_value='', description='bag for glim_rosbag; empty runs glim_rosnode'),
         DeclareLaunchArgument(
-            "config_path", default_value=os.path.join(share, "config", "r1"), description="GLIM config directory (a relative path is from the current directory)"),
-        DeclareLaunchArgument("map_path", default_value="", description="map directory; empty keeps the config's"),
+            'config_path', default_value=os.path.join(share, 'config', 'r1'), description='GLIM config directory (a relative path is from the current directory)'),
+        DeclareLaunchArgument('map_path', default_value='', description="map directory; empty keeps the config's"),
         DeclareLaunchArgument(
-            "params_file", default_value=os.path.join(share, "config", "localization_r1.param.yaml"), description="ROS parameters of the GLIM node"),
-        DeclareLaunchArgument("use_sim_time", default_value="false", description="use /clock"),
-        DeclareLaunchArgument("rviz", default_value="false", description="start rviz2 (if installed)"),
+            'params_file', default_value=os.path.join(share, 'config', 'localization_r1.param.yaml'), description='ROS parameters of the GLIM node'),
+        DeclareLaunchArgument('use_sim_time', default_value='false', description='use /clock'),
+        DeclareLaunchArgument('rviz', default_value='false', description='start rviz2 (if installed)'),
         OpaqueFunction(function=launch_setup),
     ])

@@ -7,9 +7,11 @@
 
 using glim_localization_ros2::GyroBuffer;
 
-namespace {
+namespace
+{
 // 200 Hz samples from t0 for n samples; the gyro x value is the sample index.
-GyroBuffer filled(double t0, int n) {
+GyroBuffer filled(double t0, int n)
+{
   GyroBuffer buffer;
   for (int i = 0; i < n; i++) {
     buffer.add(t0 + i * 0.005, Eigen::Vector3d(i, 0.0, 0.0));

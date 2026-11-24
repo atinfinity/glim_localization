@@ -24,23 +24,23 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import launch_file_helpers  # noqa: E402
 import r2_helpers  # noqa: E402  (its R2Client records ~/pose and /tf of a given node)
 
-NODE = "/glim_ros"
+NODE = '/glim_ros'
 
 
 @pytest.mark.launch_test
 @launch_testing.markers.keep_alive
 def generate_test_description():
-    bag = r2_helpers.require_env("GLIM_R1_BAG")
-    r2_helpers.require_env("GLIM_R1_DATA")
-    work_dir = tempfile.mkdtemp(prefix="glim_launch_r1_")
+    bag = r2_helpers.require_env('GLIM_R1_BAG')
+    r2_helpers.require_env('GLIM_R1_DATA')
+    work_dir = tempfile.mkdtemp(prefix='glim_launch_r1_')
     atexit.register(shutil.rmtree, work_dir, ignore_errors=True)
-    params_file = os.path.join(work_dir, "params.yaml")
-    with open(params_file, "w") as f:
+    params_file = os.path.join(work_dir, 'params.yaml')
+    with open(params_file, 'w') as f:
         # delay: the bag is read 2 s after the node is up, so that the test's subscribers are connected first.
         # dump_path: a path of this run, so that parallel tests share no output path.
         f.write(f"/**:\n  ros__parameters:\n    auto_quit: false\n    delay: 2.0\n    dump_path: {os.path.join(work_dir, 'dump')}\n")
     include = launch_file_helpers.include_launch(
-        "localization_r1.launch.py", {"bag": bag, "map_path": r2_helpers.require_env("GLIM_R1_MAP"), "params_file": params_file})
+        'localization_r1.launch.py', {'bag': bag, 'map_path': r2_helpers.require_env('GLIM_R1_MAP'), 'params_file': params_file})
     return launch.LaunchDescription([include, launch_testing.actions.ReadyToTest()]), {}
 
 
@@ -48,7 +48,7 @@ class TestLaunchR1(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         rclpy.init()
-        cls.client = r2_helpers.R2Client("launch_r1_test_client", r2_helpers.require_env("GLIM_R1_DATA"), target=NODE)
+        cls.client = r2_helpers.R2Client('launch_r1_test_client', r2_helpers.require_env('GLIM_R1_DATA'), target=NODE)
 
     @classmethod
     def tearDownClass(cls):
@@ -60,19 +60,19 @@ class TestLaunchR1(unittest.TestCase):
         last = client.gt_stamps[-1]
         client.wait_until(
             lambda: client.poses and r2_helpers.stamp_s(client.poses[-1].header.stamp) >= last - 0.25,
-            f"the last pose (stamp {last:.2f}) did not arrive", timeout=r2_helpers.DEADLINE_S)
+            f'the last pose (stamp {last:.2f}) did not arrive', timeout=r2_helpers.DEADLINE_S)
         client.spin_for(1.0)
 
         # ~/pose and ~/map come only from the extension, so they also show that the launch file loaded it
         num_frames = len(client.gt)
-        self.assertGreaterEqual(len(client.poses), launch_file_helpers.MIN_POSE_RATIO * num_frames, f"{len(client.poses)} poses for {num_frames} frames")
-        self.assertTrue(all(p.header.frame_id == "map" for p in client.poses))
+        self.assertGreaterEqual(len(client.poses), launch_file_helpers.MIN_POSE_RATIO * num_frames, f'{len(client.poses)} poses for {num_frames} frames')
+        self.assertTrue(all(p.header.frame_id == 'map' for p in client.poses))
         pairs = client.tf_pairs()
-        self.assertGreaterEqual(len(pairs), launch_file_helpers.MIN_POSE_RATIO * num_frames, f"{len(pairs)} stamps with map->odom and odom->base_link")
-        self.assertTrue(client.tf_composes_to_pose(pairs, client.poses[-1]), "TF does not compose to the last pose")
+        self.assertGreaterEqual(len(pairs), launch_file_helpers.MIN_POSE_RATIO * num_frames, f'{len(pairs)} stamps with map->odom and odom->base_link')
+        self.assertTrue(client.tf_composes_to_pose(pairs, client.poses[-1]), 'TF does not compose to the last pose')
 
         # ~/map was published when the extension was loaded, long before this subscription
-        launch_file_helpers.check_map(self, launch_file_helpers.wait_for_latched_map(client.node, f"{NODE}/map"))
+        launch_file_helpers.check_map(self, launch_file_helpers.wait_for_latched_map(client.node, f'{NODE}/map'))
 
 
 @launch_testing.post_shutdown_test()

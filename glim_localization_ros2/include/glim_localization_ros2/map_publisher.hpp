@@ -10,16 +10,18 @@
 #include <glim/util/config.hpp>
 #include <glim_localization/map/map_tile.hpp>
 
-namespace glim_localization_ros2 {
+namespace glim_localization_ros2
+{
 
 /// Settings of ~/map, from the "localization_ros" section of config_ros.json (publish_map, map_cloud_voxel)
-struct MapPublisherParams {
+struct MapPublisherParams
+{
   bool enabled = true;      ///< Publish ~/map
   double voxel_size = 0.5;  ///< Downsampling voxel [m]: one point (the centroid) per voxel. 0 keeps every point
 };
 
 /// @throw std::invalid_argument if map_cloud_voxel is negative or not finite
-MapPublisherParams read_map_publisher_params(const glim::Config& config_ros);
+MapPublisherParams read_map_publisher_params(const glim::Config & config_ros);
 
 /// Bytes per point of ~/map (float32 x, y, z)
 constexpr size_t kMapCloudPointStep = 12;
@@ -29,7 +31,7 @@ constexpr size_t kMaxMapCloudBytes = size_t(1) << 30;
 constexpr size_t kLargeMapCloudPoints = 10'000'000;
 
 /// The number of points of the tiles (null tiles count as empty)
-size_t count_map_points(const std::vector<glim_localization::MapTile::ConstPtr>& tiles);
+size_t count_map_points(const std::vector<glim_localization::MapTile::ConstPtr> & tiles);
 
 /// @throw std::length_error if a cloud of num_points does not fit in max_bytes (capped at the uint32 limit of the message)
 void check_map_cloud_size(size_t num_points, size_t max_bytes = kMaxMapCloudBytes);
@@ -42,9 +44,9 @@ void check_map_cloud_size(size_t num_points, size_t max_bytes = kMaxMapCloudByte
 /// @throw std::invalid_argument if voxel_size is negative or not finite
 /// @throw std::length_error if the cloud would exceed max_bytes (see check_map_cloud_size); nothing large is allocated then
 sensor_msgs::msg::PointCloud2 make_map_cloud(
-  const std::vector<glim_localization::MapTile::ConstPtr>& tiles,
+  const std::vector<glim_localization::MapTile::ConstPtr> & tiles,
   double voxel_size,
-  const std::string& frame_id,
+  const std::string & frame_id,
   size_t max_bytes = kMaxMapCloudBytes);
 
 /// Publishes the loaded map once on ~/map, latched (reliable, transient local, depth 1), so that a late subscriber
@@ -53,14 +55,14 @@ class MapPublisher {
 public:
   /// @throw std::invalid_argument if frame_id is empty or voxel_size is negative or not finite
   MapPublisher(
-    const rclcpp::node_interfaces::NodeTopicsInterface::SharedPtr& topics,
-    const rclcpp::Clock::SharedPtr& clock,
-    const std::string& frame_id,
+    const rclcpp::node_interfaces::NodeTopicsInterface::SharedPtr & topics,
+    const rclcpp::Clock::SharedPtr & clock,
+    const std::string & frame_id,
     double voxel_size);
 
   /// Build and publish the cloud of the tiles. @return the number of published points
   /// @throw std::length_error if the cloud is too large (nothing is published then)
-  size_t publish(const std::vector<glim_localization::MapTile::ConstPtr>& tiles);
+  size_t publish(const std::vector<glim_localization::MapTile::ConstPtr> & tiles);
 
 private:
   rclcpp::Clock::SharedPtr clock_;

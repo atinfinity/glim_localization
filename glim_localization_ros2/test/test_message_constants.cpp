@@ -5,7 +5,8 @@
 #include <glim_localization/odometry/odometry_estimation_localization.hpp>
 #include <glim_localization_msgs/msg/localization_status.hpp>
 
-namespace {
+namespace
+{
 using glim_localization::InitSearchReason;
 using glim_localization::InitSearchResult;
 using glim_localization::LocalizationState;

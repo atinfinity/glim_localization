@@ -3,7 +3,8 @@
 #include <cmath>
 #include <optional>
 
-namespace glim_localization_ros2 {
+namespace glim_localization_ros2
+{
 
 /// The online form of the replay rule for a late initial pose (DESIGN 6.5, max_init_pose_delay).
 ///
@@ -15,7 +16,8 @@ namespace glim_localization_ros2 {
 /// that is already more than max_delay late is rejected; a shorter delay is accepted with a warning. Frames still in
 /// the input queue are not counted (they get the pose too), so a frame that arrives later than expected after the
 /// check is not caught. Plain C++, tested without ROS.
-struct InitPoseDelay {
+struct InitPoseDelay
+{
   bool accept = true;
   /// Lower bound of how late the pose applies [s]; empty when it can apply on time (the stamp is newer than the
   /// last frame taken, the pose is unstamped, or no frame was taken yet)
@@ -25,9 +27,14 @@ struct InitPoseDelay {
 /// @param stamp             stamp of the pose [s]; 0 means "the next frame" and is always accepted
 /// @param last_frame_stamp  stamp of the last frame the odometry took off its input queue, estimated or dropped
 /// @param max_delay         max_init_pose_delay [s]
-inline InitPoseDelay check_init_pose_delay(double stamp, std::optional<double> last_frame_stamp, double max_delay) {
+inline InitPoseDelay check_init_pose_delay(
+  double stamp, std::optional<double> last_frame_stamp,
+  double max_delay)
+{
   InitPoseDelay result;
-  if (stamp == 0.0 || !last_frame_stamp || !std::isfinite(*last_frame_stamp) || *last_frame_stamp < stamp) {
+  if (stamp == 0.0 || !last_frame_stamp || !std::isfinite(*last_frame_stamp) ||
+    *last_frame_stamp < stamp)
+  {
     return result;
   }
   result.late_by = *last_frame_stamp - stamp;

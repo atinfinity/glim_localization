@@ -7,15 +7,18 @@
 #include <diagnostic_msgs/msg/diagnostic_status.hpp>
 #include <geometry_msgs/msg/transform_stamped.hpp>
 
-namespace glim_localization_ros2 {
+namespace glim_localization_ros2
+{
 
-namespace {
+namespace
+{
 
 using glim_localization::LocalizationState;
 using glim_localization_msgs::msg::LocalizationStatus;
 using DiagnosticStatus = diagnostic_msgs::msg::DiagnosticStatus;
 
-builtin_interfaces::msg::Time to_time_msg(double stamp) {
+builtin_interfaces::msg::Time to_time_msg(double stamp)
+{
   builtin_interfaces::msg::Time msg;
   const double sec = std::floor(stamp);
   msg.sec = static_cast<int32_t>(sec);
@@ -23,7 +26,8 @@ builtin_interfaces::msg::Time to_time_msg(double stamp) {
   return msg;
 }
 
-geometry_msgs::msg::Pose to_pose_msg(const Eigen::Isometry3d& T) {
+geometry_msgs::msg::Pose to_pose_msg(const Eigen::Isometry3d & T)
+{
   const Eigen::Quaterniond q(Eigen::Quaterniond(T.rotation()).normalized());
   geometry_msgs::msg::Pose pose;
   pose.position.x = T.translation().x();
@@ -37,7 +41,9 @@ geometry_msgs::msg::Pose to_pose_msg(const Eigen::Isometry3d& T) {
 }
 
 geometry_msgs::msg::TransformStamped to_transform_msg(
-  const builtin_interfaces::msg::Time& stamp, const std::string& parent, const std::string& child, const Eigen::Isometry3d& T) {
+  const builtin_interfaces::msg::Time & stamp, const std::string & parent,
+  const std::string & child, const Eigen::Isometry3d & T)
+{
   const auto pose = to_pose_msg(T);
   geometry_msgs::msg::TransformStamped msg;
   msg.header.stamp = stamp;
@@ -50,23 +56,28 @@ geometry_msgs::msg::TransformStamped to_transform_msg(
   return msg;
 }
 
-int64_t key_ns(const builtin_interfaces::msg::Time& t) {
+int64_t key_ns(const builtin_interfaces::msg::Time & t)
+{
   return static_cast<int64_t>(t.sec) * 1000000000LL + t.nanosec;
 }
 
-Eigen::Isometry3d from_transform_msg(const geometry_msgs::msg::Transform& msg) {
+Eigen::Isometry3d from_transform_msg(const geometry_msgs::msg::Transform & msg)
+{
   Eigen::Isometry3d T = Eigen::Isometry3d::Identity();
-  T.linear() = Eigen::Quaterniond(msg.rotation.w, msg.rotation.x, msg.rotation.y, msg.rotation.z).normalized().toRotationMatrix();
+  T.linear() = Eigen::Quaterniond(msg.rotation.w, msg.rotation.x, msg.rotation.y,
+        msg.rotation.z).normalized().toRotationMatrix();
   T.translation() = Eigen::Vector3d(msg.translation.x, msg.translation.y, msg.translation.z);
   return T;
 }
 
-bool is_finite(const Eigen::Isometry3d& T) {
+bool is_finite(const Eigen::Isometry3d & T)
+{
   return T.matrix().allFinite();
 }
 
 // The values are pinned to the core enums by test_message_constants.
-uint8_t to_message_state(LocalizationState state) {
+uint8_t to_message_state(LocalizationState state)
+{
   switch (state) {
     case LocalizationState::INITIALIZING:
       return LocalizationStatus::INITIALIZING;
@@ -80,7 +91,8 @@ uint8_t to_message_state(LocalizationState state) {
   return LocalizationStatus::LOST;
 }
 
-uint8_t to_message_reason(glim_localization::ResetReason reason) {
+uint8_t to_message_reason(glim_localization::ResetReason reason)
+{
   switch (reason) {
     case glim_localization::ResetReason::NONE:
       return LocalizationStatus::RESET_NONE;
@@ -93,7 +105,8 @@ uint8_t to_message_reason(glim_localization::ResetReason reason) {
 }
 
 // WARN on DEGRADED, ERROR on LOST. INITIALIZING is a normal start-up state and is OK.
-uint8_t diagnostic_level(uint8_t state) {
+uint8_t diagnostic_level(uint8_t state)
+{
   switch (state) {
     case LocalizationStatus::DEGRADED:
       return DiagnosticStatus::WARN;
@@ -104,7 +117,8 @@ uint8_t diagnostic_level(uint8_t state) {
   }
 }
 
-diagnostic_msgs::msg::KeyValue key_value(const std::string& key, const std::string& value) {
+diagnostic_msgs::msg::KeyValue key_value(const std::string & key, const std::string & value)
+{
   diagnostic_msgs::msg::KeyValue kv;
   kv.key = key;
   kv.value = value;
@@ -113,18 +127,23 @@ diagnostic_msgs::msg::KeyValue key_value(const std::string& key, const std::stri
 
 /// Why the search rejected the pose, with the numbers that matter for that reason (the thresholds are in the
 /// odometry config, not in the message).
-std::string init_search_rejection_reason(const glim_localization_msgs::msg::LocalizationStatus& msg) {
+std::string init_search_rejection_reason(
+  const glim_localization_msgs::msg::LocalizationStatus & msg)
+{
   using glim_localization_msgs::msg::LocalizationStatus;
   char text[160];
   switch (msg.init_search_reason) {
     case LocalizationStatus::INIT_SEARCH_REASON_TRUNCATED:
-      std::snprintf(text, sizeof(text), "time budget ran out after %d of %d candidates", msg.init_search_candidates, msg.init_search_candidates_total);
+      std::snprintf(text, sizeof(text), "time budget ran out after %d of %d candidates",
+          msg.init_search_candidates, msg.init_search_candidates_total);
       break;
     case LocalizationStatus::INIT_SEARCH_REASON_LOW_SCORE:
-      std::snprintf(text, sizeof(text), "best inlier ratio %.3f is below the minimum", msg.init_search_score);
+      std::snprintf(text, sizeof(text), "best inlier ratio %.3f is below the minimum",
+          msg.init_search_score);
       break;
     case LocalizationStatus::INIT_SEARCH_REASON_AMBIGUOUS:
-      std::snprintf(text, sizeof(text), "ambiguous: best inlier ratio %.3f, runner-up %.3f", msg.init_search_score, msg.init_search_runner_up_score);
+      std::snprintf(text, sizeof(text), "ambiguous: best inlier ratio %.3f, runner-up %.3f",
+          msg.init_search_score, msg.init_search_runner_up_score);
       break;
     case LocalizationStatus::INIT_SEARCH_REASON_NO_CANDIDATE:
       std::snprintf(text, sizeof(text), "no candidate to score");
@@ -138,7 +157,8 @@ std::string init_search_rejection_reason(const glim_localization_msgs::msg::Loca
 
 }  // namespace
 
-TfMode parse_tf_mode(const std::string& name) {
+TfMode parse_tf_mode(const std::string & name)
+{
   if (name == "internal_odom") {
     return TfMode::INTERNAL_ODOM;
   }
@@ -148,10 +168,12 @@ TfMode parse_tf_mode(const std::string& name) {
   if (name == "none") {
     return TfMode::NONE;
   }
-  throw std::invalid_argument("unknown tf_mode '" + name + "' (internal_odom, external_odom or none)");
+  throw std::invalid_argument("unknown tf_mode '" + name +
+      "' (internal_odom, external_odom or none)");
 }
 
-const char* to_string(TfMode mode) {
+const char * to_string(TfMode mode)
+{
   switch (mode) {
     case TfMode::INTERNAL_ODOM:
       return "internal_odom";
@@ -163,22 +185,33 @@ const char* to_string(TfMode mode) {
   return "unknown";
 }
 
-LocalizationPublisher::LocalizationPublisher(NodeInterfaces node, const LocalizationPublisherParams& params)
+LocalizationPublisher::LocalizationPublisher(
+  NodeInterfaces node,
+  const LocalizationPublisherParams & params)
 : params_(params),
   node_(node),
-  clock_(node.get_node_clock_interface()->get_clock()) {
-  if (params_.map_frame.empty() || params_.base_frame.empty() || (params_.tf_mode != TfMode::NONE && params_.odom_frame.empty())) {
+  clock_(node.get_node_clock_interface()->get_clock())
+{
+  if (params_.map_frame.empty() || params_.base_frame.empty() ||
+    (params_.tf_mode != TfMode::NONE && params_.odom_frame.empty()))
+  {
     throw std::invalid_argument("frame names must not be empty");
   }
-  if (!is_finite(params_.T_base_imu) || !std::isfinite(params_.diagnostics_period) || params_.diagnostics_period < 0.0) {
-    throw std::invalid_argument("T_base_imu and diagnostics_period must be finite and not negative");
+  if (!is_finite(params_.T_base_imu) || !std::isfinite(params_.diagnostics_period) ||
+    params_.diagnostics_period < 0.0)
+  {
+    throw std::invalid_argument(
+        "T_base_imu and diagnostics_period must be finite and not negative");
   }
 
   auto topics = node_.get_node_topics_interface();
-  pose_pub_ = rclcpp::create_publisher<geometry_msgs::msg::PoseWithCovarianceStamped>(topics, "~/pose", rclcpp::QoS(10));
-  odometry_pub_ = rclcpp::create_publisher<nav_msgs::msg::Odometry>(topics, "~/odometry", rclcpp::QoS(10));
+  pose_pub_ = rclcpp::create_publisher<geometry_msgs::msg::PoseWithCovarianceStamped>(topics,
+      "~/pose", rclcpp::QoS(10));
+  odometry_pub_ = rclcpp::create_publisher<nav_msgs::msg::Odometry>(topics, "~/odometry",
+      rclcpp::QoS(10));
   status_pub_ = rclcpp::create_publisher<LocalizationStatus>(topics, "~/status", rclcpp::QoS(10));
-  diagnostics_pub_ = rclcpp::create_publisher<diagnostic_msgs::msg::DiagnosticArray>(topics, "/diagnostics", rclcpp::QoS(10));
+  diagnostics_pub_ = rclcpp::create_publisher<diagnostic_msgs::msg::DiagnosticArray>(topics,
+      "/diagnostics", rclcpp::QoS(10));
 
   if (params_.tf_mode != TfMode::NONE) {
     tf_broadcaster_ = std::make_unique<tf2_ros::TransformBroadcaster>(&node_);
@@ -192,31 +225,39 @@ LocalizationPublisher::LocalizationPublisher(NodeInterfaces node, const Localiza
 
 LocalizationPublisher::~LocalizationPublisher() = default;
 
-size_t LocalizationPublisher::tf_lookup_failures() const {
+size_t LocalizationPublisher::tf_lookup_failures() const
+{
   std::lock_guard<std::mutex> lock(mutex_);
   return tf_lookup_failures_;
 }
 
-size_t LocalizationPublisher::unpaired_frames() const {
+size_t LocalizationPublisher::unpaired_frames() const
+{
   std::lock_guard<std::mutex> lock(mutex_);
   return unpaired_frames_;
 }
 
-size_t LocalizationPublisher::stale_frames() const {
+size_t LocalizationPublisher::stale_frames() const
+{
   std::lock_guard<std::mutex> lock(mutex_);
   return stale_frames_;
 }
 
-void LocalizationPublisher::on_frame(const FrameEstimate& frame) {
-  if (!std::isfinite(frame.stamp) || frame.stamp < 0.0 || !is_finite(frame.T_map_imu) || !frame.v_map_imu.allFinite() || !frame.w_imu.allFinite()) {
-    RCLCPP_WARN_THROTTLE(node_.get_node_logging_interface()->get_logger(), *clock_, 5000, "dropped a frame with a non-finite stamp, pose or velocity");
+void LocalizationPublisher::on_frame(const FrameEstimate & frame)
+{
+  if (!std::isfinite(frame.stamp) || frame.stamp < 0.0 || !is_finite(frame.T_map_imu) ||
+    !frame.v_map_imu.allFinite() || !frame.w_imu.allFinite())
+  {
+    RCLCPP_WARN_THROTTLE(node_.get_node_logging_interface()->get_logger(), *clock_, 5000,
+        "dropped a frame with a non-finite stamp, pose or velocity");
     return;
   }
 
   std::lock_guard<std::mutex> lock(mutex_);
   if (last_stamp_ && frame.stamp <= *last_stamp_ && !allow_older_stamp_) {
     ++stale_frames_;
-    RCLCPP_WARN_THROTTLE(node_.get_node_logging_interface()->get_logger(), *clock_, 5000, "dropped a frame whose stamp is not newer than the last one");
+    RCLCPP_WARN_THROTTLE(node_.get_node_logging_interface()->get_logger(), *clock_, 5000,
+        "dropped a frame whose stamp is not newer than the last one");
     return;
   }
   last_stamp_ = frame.stamp;
@@ -227,7 +268,8 @@ void LocalizationPublisher::on_frame(const FrameEstimate& frame) {
   pending_ = frame;
 }
 
-void LocalizationPublisher::publish_frame(const FrameEstimate& frame, uint8_t state) {
+void LocalizationPublisher::publish_frame(const FrameEstimate & frame, uint8_t state)
+{
   const bool lost = state == LocalizationStatus::LOST;
   const Eigen::Isometry3d T_map_base = frame.T_map_imu * params_.T_base_imu.inverse();
   const auto stamp = to_time_msg(frame.stamp);
@@ -272,20 +314,24 @@ void LocalizationPublisher::publish_frame(const FrameEstimate& frame, uint8_t st
 }
 
 bool LocalizationPublisher::compute_odom_base(
-  const builtin_interfaces::msg::Time& stamp, const Eigen::Isometry3d& T_map_base, Eigen::Isometry3d& T_odom_base, Eigen::Isometry3d& T_map_odom) {
+  const builtin_interfaces::msg::Time & stamp, const Eigen::Isometry3d & T_map_base,
+  Eigen::Isometry3d & T_odom_base, Eigen::Isometry3d & T_map_odom)
+{
   if (params_.tf_mode == TfMode::EXTERNAL_ODOM) {
     try {
       // A double stamp near 1.7e9 s has 238 ns resolution, so the message stamp can be a few ns after an odom
       // sample at the true stamp. Look up at the stamp floored to 1 us.
       const int64_t ns = key_ns(stamp);
-      const auto transform = tf_buffer_->lookupTransform(params_.odom_frame, params_.base_frame, tf2::TimePoint(std::chrono::nanoseconds(ns - ns % 1000)));
+      const auto transform = tf_buffer_->lookupTransform(params_.odom_frame, params_.base_frame,
+          tf2::TimePoint(std::chrono::nanoseconds(ns - ns % 1000)));
       T_odom_base = from_transform_msg(transform.transform);
       T_map_odom = T_map_base * T_odom_base.inverse();
       return true;
-    } catch (const tf2::TransformException& e) {
+    } catch (const tf2::TransformException & e) {
       ++tf_lookup_failures_;
       RCLCPP_WARN_THROTTLE(
-        node_.get_node_logging_interface()->get_logger(), *clock_, 5000, "no %s->%s at the frame stamp, map->odom is not published: %s",
+        node_.get_node_logging_interface()->get_logger(), *clock_, 5000,
+          "no %s->%s at the frame stamp, map->odom is not published: %s",
         params_.odom_frame.c_str(), params_.base_frame.c_str(), e.what());
       return false;
     }
@@ -294,7 +340,8 @@ bool LocalizationPublisher::compute_odom_base(
   // internal_odom: odom->base = anchor * pose. The anchor is identity at the first frame and changes only at the
   // first frame after an external reset, where odom->base is kept at its last value.
   if (reanchor_ || !has_odom_base_) {
-    anchor_ = has_odom_base_ ? Eigen::Isometry3d(last_odom_base_ * T_map_base.inverse()) : Eigen::Isometry3d::Identity();
+    anchor_ = has_odom_base_ ? Eigen::Isometry3d(last_odom_base_ *
+        T_map_base.inverse()) : Eigen::Isometry3d::Identity();
     anchor_inverse_ = anchor_.inverse();
     reanchor_ = false;
   }
@@ -305,20 +352,26 @@ bool LocalizationPublisher::compute_odom_base(
   return true;
 }
 
-void LocalizationPublisher::publish_tf(const builtin_interfaces::msg::Time& stamp, const Eigen::Isometry3d& T_map_odom, const Eigen::Isometry3d& T_odom_base, bool with_map_odom) {
+void LocalizationPublisher::publish_tf(
+  const builtin_interfaces::msg::Time & stamp,
+  const Eigen::Isometry3d & T_map_odom, const Eigen::Isometry3d & T_odom_base, bool with_map_odom)
+{
   std::vector<geometry_msgs::msg::TransformStamped> transforms;
   if (with_map_odom) {
-    transforms.push_back(to_transform_msg(stamp, params_.map_frame, params_.odom_frame, T_map_odom));
+    transforms.push_back(to_transform_msg(stamp, params_.map_frame, params_.odom_frame,
+        T_map_odom));
   }
   if (params_.tf_mode == TfMode::INTERNAL_ODOM) {
-    transforms.push_back(to_transform_msg(stamp, params_.odom_frame, params_.base_frame, T_odom_base));
+    transforms.push_back(to_transform_msg(stamp, params_.odom_frame, params_.base_frame,
+        T_odom_base));
   }
   if (!transforms.empty()) {
     tf_broadcaster_->sendTransform(transforms);
   }
 }
 
-void LocalizationPublisher::on_status(const glim_localization::LocalizationStatus& status) {
+void LocalizationPublisher::on_status(const glim_localization::LocalizationStatus & status)
+{
   const bool for_frame = status.frame_id >= 0 && std::isfinite(status.stamp);
 
   LocalizationStatus msg;
@@ -344,7 +397,9 @@ void LocalizationPublisher::on_status(const glim_localization::LocalizationStatu
   std::lock_guard<std::mutex> lock(mutex_);
   // A reset status is stamped with min_stamp, which may be 0 and is not a frame time: use the last frame stamp,
   // or the current time before the first frame
-  msg.header.stamp = for_frame ? to_time_msg(status.stamp) : (last_stamp_ ? to_time_msg(*last_stamp_) : builtin_interfaces::msg::Time(clock_->now()));
+  msg.header.stamp =
+    for_frame ? to_time_msg(status.stamp) :
+    (last_stamp_ ? to_time_msg(*last_stamp_) : builtin_interfaces::msg::Time(clock_->now()));
   if (status.reset_count != last_reset_count_) {
     last_reset_count_ = status.reset_count;
     if (status.last_reset_reason == glim_localization::ResetReason::EXTERNAL) {
@@ -362,11 +417,14 @@ void LocalizationPublisher::on_status(const glim_localization::LocalizationStatu
   publish_diagnostics(msg);
 }
 
-void LocalizationPublisher::publish_diagnostics(const LocalizationStatus& msg) {
+void LocalizationPublisher::publish_diagnostics(const LocalizationStatus & msg)
+{
   const uint8_t level = diagnostic_level(msg.state);
   const auto now = clock_->now();
   const bool changed = !last_diag_level_ || *last_diag_level_ != level;
-  if (!changed && last_diag_time_.nanoseconds() != 0 && (now - last_diag_time_).seconds() < params_.diagnostics_period) {
+  if (!changed && last_diag_time_.nanoseconds() != 0 &&
+    (now - last_diag_time_).seconds() < params_.diagnostics_period)
+  {
     return;
   }
   last_diag_level_ = level;
@@ -379,7 +437,8 @@ void LocalizationPublisher::publish_diagnostics(const LocalizationStatus& msg) {
   status.hardware_id = params_.diagnostics_hardware_id;
   status.message = state_name;
   if (msg.init_search == LocalizationStatus::INIT_SEARCH_REJECTED) {
-    status.message += ": the initial pose search rejected the given pose (" + init_search_rejection_reason(msg) + ")";
+    status.message += ": the initial pose search rejected the given pose (" +
+      init_search_rejection_reason(msg) + ")";
   }
   status.values.push_back(key_value("state", state_name));
   status.values.push_back(key_value("reset_count", std::to_string(msg.reset_count)));
@@ -389,15 +448,24 @@ void LocalizationPublisher::publish_diagnostics(const LocalizationStatus& msg) {
   status.values.push_back(key_value("inlier_ratio", std::to_string(msg.inlier_ratio)));
   status.values.push_back(key_value("residual", std::to_string(msg.residual)));
   status.values.push_back(key_value("processing_time", std::to_string(msg.processing_time)));
-  status.values.push_back(key_value("init_search", glim_localization::to_string(static_cast<glim_localization::InitSearchResult>(msg.init_search))));
+  status.values.push_back(key_value("init_search",
+      glim_localization::to_string(
+      static_cast<glim_localization::InitSearchResult>(msg.init_search))));
   status.values.push_back(
-    key_value("init_search_reason", glim_localization::to_string(static_cast<glim_localization::InitSearchReason>(msg.init_search_reason))));
-  status.values.push_back(key_value("init_search_candidates", std::to_string(msg.init_search_candidates)));
-  status.values.push_back(key_value("init_search_candidates_total", std::to_string(msg.init_search_candidates_total)));
+    key_value("init_search_reason",
+      glim_localization::to_string(
+      static_cast<glim_localization::InitSearchReason>(msg.init_search_reason))));
+  status.values.push_back(key_value("init_search_candidates",
+      std::to_string(msg.init_search_candidates)));
+  status.values.push_back(key_value("init_search_candidates_total",
+      std::to_string(msg.init_search_candidates_total)));
   status.values.push_back(key_value("init_search_score", std::to_string(msg.init_search_score)));
-  status.values.push_back(key_value("init_search_yaw_offset_deg", std::to_string(msg.init_search_yaw_offset * 180.0 / M_PI)));
-  status.values.push_back(key_value("init_search_runner_up_score", std::to_string(msg.init_search_runner_up_score)));
-  status.values.push_back(key_value("init_search_runner_up_yaw_offset_deg", std::to_string(msg.init_search_runner_up_yaw_offset * 180.0 / M_PI)));
+  status.values.push_back(key_value("init_search_yaw_offset_deg",
+      std::to_string(msg.init_search_yaw_offset * 180.0 / M_PI)));
+  status.values.push_back(key_value("init_search_runner_up_score",
+      std::to_string(msg.init_search_runner_up_score)));
+  status.values.push_back(key_value("init_search_runner_up_yaw_offset_deg",
+      std::to_string(msg.init_search_runner_up_yaw_offset * 180.0 / M_PI)));
   status.values.push_back(key_value("init_search_time", std::to_string(msg.init_search_time)));
 
   diagnostic_msgs::msg::DiagnosticArray array;
