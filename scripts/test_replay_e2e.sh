@@ -148,6 +148,31 @@ check_init_stamp_hole imu_from_5 5.0 8.0
 imu_variant imu_hole_4_6 "ns <= 4000000000 or ns >= 6000000000"
 check_init_stamp_hole imu_hole_4_6 6.0 9.0
 
+# GPU backend (CUDA image with a visible GPU): the same run with config/gpu, the same accuracy limits, and
+# the per-frame odometry time of both backends. ci.sh sets GLIM_LOC_REQUIRE_GPU=1 when nvidia-smi lists a GPU.
+if [[ "${GLIM_LOC_BUILD_WITH_CUDA:-OFF}" == ON && "${GLIM_LOC_REQUIRE_GPU:-0}" == 1 ]]; then
+  # shellcheck disable=SC2086
+  "${replay}" --data "${out}/input/data" --config "${repo_root}/glim_localization/config/gpu" \
+    --map "${out}/input/map" --out "${out}/run_gpu" --init-pose ${init_pose} > "${out}/run_gpu.log" 2>&1
+  py "${repo_root}/scripts/evaluate.py" --est "${out}/run_gpu/traj_localization.txt" --gt "${out}/input/data/traj_gt.txt" \
+    --frames "${out}/run_gpu/frames.csv" --out "${out}/run_gpu" --settle 3 --max-trans 0.1 --max-rot-deg 1
+  py - "${out}/run1" "${out}/run_gpu" <<'PY'
+import json
+import sys
+cpu, gpu = sys.argv[1:3]
+assert json.load(open(f"{cpu}/replay_args.json"))["effective"]["backend"] == "cpu"
+assert json.load(open(f"{gpu}/replay_args.json"))["effective"]["backend"] == "gpu"
+for name, d in (("cpu", cpu), ("gpu", gpu)):
+    report = json.load(open(f"{d}/eval.json"))
+    t, r, o = report["errors"]["ate_trans_m"], report["errors"]["ate_rot_deg"], report["timing"]["odometry_ms"]
+    print(f"{name}: ATE trans rmse {t['rmse']:.4f} m, max {t['max']:.4f} m, rot max {r['max']:.3f} deg; "
+          f"odometry mean {o['mean']:.1f} ms, p95 {o['p95']:.1f} ms")
+PY
+  echo "gpu replay ok"
+else
+  echo "SKIPPED: GPU replay (not a CUDA build with a visible GPU)"
+fi
+
 # Exit codes
 set +e
 "${replay}" --data "${out}/input/data" --config "${repo_root}/glim_localization/config" --map "${out}/input/map" --out "${out}/no_init" >/dev/null 2>&1
