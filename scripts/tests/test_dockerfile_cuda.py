@@ -1,5 +1,8 @@
 """Checks that docker/Dockerfile.cuda stays a copy of docker/Dockerfile plus the CUDA changes."""
+import os
 import re
+import shutil
+import subprocess
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -32,19 +35,23 @@ def test_shared_pins_are_equal():
 
 def test_cpu_lines_appear_in_order_in_the_cuda_dockerfile():
     # Every line of the CPU Dockerfile, except the ones the CUDA variant replaces and the image inputs
-    # manifest that only scripts/ci_local.sh uses, must appear in the same order in the CUDA one.
+    # manifest (each image lists its own), must appear in the same order in the CUDA one. This is a
+    # subset check by design: the CUDA-only lines in between are covered by the other tests.
     cpu = CPU.split("\n# Lets scripts/ci_local.sh check", 1)[0]
-    replaced = (
-        "RUN apt-get update \\",  # The first RUN gains an architecture check before it.
+    # Each replaced line is skipped once, at its first occurrence.
+    replaced = [
+        "RUN apt-get update \\",  # Only the first RUN: it gains an architecture check before it.
         '"libgtsam-points-dev=${GTSAM_POINTS_VERSION}" \\',
         "-DBUILD_WITH_CUDA=OFF -DBUILD_WITH_VIEWER=OFF \\",
         "-DBUILD_WITH_CUDA=OFF -DBUILD_WITH_VIEWER=OFF -DBUILD_WITH_CV_BRIDGE=OFF \\",
-    )
+    ]
     cuda_lines = iter(instructions(CUDA))
     for line in instructions(cpu):
         if line in replaced:
+            replaced.remove(line)
             continue
         assert any(line == other for other in cuda_lines), f"missing or out of order in Dockerfile.cuda: {line}"
+    assert not replaced, f"replaced lines not found in docker/Dockerfile: {replaced}"
 
 
 def test_cuda_dockerfile_builds_with_cuda_for_explicit_architectures():
@@ -65,3 +72,47 @@ def test_cuda_dockerfile_builds_with_cuda_for_explicit_architectures():
 def test_cpu_dockerfile_stays_cpu_only():
     assert "-DBUILD_WITH_CUDA=ON" not in CPU
     assert "cuda" not in CPU.lower().replace("build_with_cuda", "")
+
+
+CHECK_INPUTS = ROOT / "scripts" / "check_cuda_image_inputs.sh"
+
+
+def cuda_image_inputs():
+    body = re.search(r"^cuda_image_inputs=\((.*?)^\)", CHECK_INPUTS.read_text(), re.M | re.S).group(1)
+    return body.split()
+
+
+def test_cuda_image_inputs_match_the_dockerfile_copies():
+    copies = re.findall(r"^COPY (\S+?)/? /etc/glim_localization/inputs/(\S+?)/?$", CUDA, re.M)
+    assert copies, "Dockerfile.cuda has no inputs manifest"
+    assert all(src == dst for src, dst in copies), copies
+    assert sorted(src for src, _ in copies) == sorted(cuda_image_inputs())
+    # The manifest is the last section, so every earlier COPY of a repository file is in it.
+    assert "third_party/patches/glim_cuda" in cuda_image_inputs()
+
+
+def run_check(inputs_dir, **env):
+    return subprocess.run(
+        [str(CHECK_INPUTS)], capture_output=True, text=True,
+        env={**os.environ, "GLIM_LOC_IMAGE_INPUTS_DIR": str(inputs_dir), **env})
+
+
+def test_check_cuda_image_inputs_detects_a_stale_image(tmp_path):
+    image = tmp_path / "inputs"
+    for path in cuda_image_inputs():
+        source = ROOT / path
+        if source.is_dir():
+            shutil.copytree(source, image / path)
+        else:
+            (image / path).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy(source, image / path)
+    assert run_check(image).returncode == 0
+
+    (image / "docker" / "Dockerfile.cuda").write_text("stale\n")
+    stale = run_check(image)
+    assert stale.returncode == 1
+    assert "tree: " in stale.stderr and "./docker/Dockerfile.cuda" in stale.stderr
+    assert "build dev-cuda" in stale.stderr
+    assert run_check(image, GLIM_LOC_ALLOW_STALE_IMAGE="1").returncode == 0
+
+    assert run_check(tmp_path / "missing").returncode == 1

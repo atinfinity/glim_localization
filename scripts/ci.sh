@@ -17,7 +17,11 @@ done
 # CUDA mode in the CUDA image (docker/Dockerfile.cuda sets GLIM_LOC_BUILD_WITH_CUDA=ON): the core is
 # configured with BUILD_WITH_CUDA=ON and the GPU tests are built. They skip when no GPU is visible; when
 # nvidia-smi lists one, a skip is a failure (GLIM_LOC_REQUIRE_GPU=1, unless the caller set it).
+# nvidia-smi is injected only with the "utility" driver capability, which Dockerfile.cuda sets in
+# NVIDIA_DRIVER_CAPABILITIES next to "compute"; without it a visible GPU would let the tests skip.
+# The image must also have been built from this tree (compose does not rebuild an existing tag).
 if [[ "${GLIM_LOC_BUILD_WITH_CUDA:-OFF}" == ON ]]; then
+  "${script_dir}/check_cuda_image_inputs.sh"
   gpus="$(nvidia-smi -L 2>/dev/null || true)"
   if [[ -n "${gpus}" ]]; then
     echo "ci: CUDA mode, GPU visible:"

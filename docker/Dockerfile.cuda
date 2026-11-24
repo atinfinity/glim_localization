@@ -166,3 +166,14 @@ ENV CMAKE_BUILD_PARALLEL_LEVEL=${JOBS}
 WORKDIR /ws/src/glim_localization
 ENTRYPOINT ["/entrypoint.sh"]
 CMD ["bash"]
+
+# CUDA: lets scripts/ci.sh (CUDA mode) check that the image was built from the mounted tree
+# (scripts/check_cuda_image_inputs.sh): every repository file the image bakes in is copied again, at
+# the same path, under /etc/glim_localization/inputs/. Keep this list equal to cuda_image_inputs in
+# that script (scripts/tests/test_dockerfile_cuda.py checks it).
+COPY docker/Dockerfile.cuda /etc/glim_localization/inputs/docker/Dockerfile.cuda
+COPY docker/entrypoint.sh /etc/glim_localization/inputs/docker/entrypoint.sh
+COPY scripts/requirements.txt /etc/glim_localization/inputs/scripts/requirements.txt
+COPY third_party/patches/glim/ /etc/glim_localization/inputs/third_party/patches/glim/
+COPY third_party/patches/glim_cuda/ /etc/glim_localization/inputs/third_party/patches/glim_cuda/
+COPY third_party/patches/glim_ros2/ /etc/glim_localization/inputs/third_party/patches/glim_ros2/
