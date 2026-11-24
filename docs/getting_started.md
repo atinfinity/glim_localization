@@ -80,17 +80,18 @@ The dataset format and the outputs are described in [Offline replay and evaluati
 > [!NOTE]
 > This step needs your own map data. Copy it under `out/` on the host so that the container sees it under `/ws/out`.
 
-Localization takes either a GLIM dump directory (from a GLIM mapping run) or a map compiled by `map_compiler`. A GLIM dump can be used as it is, or compiled; a PCD file must be compiled. Inside the container:
+Localization takes either a GLIM dump directory (from a GLIM mapping run) or a map compiled by `map_compiler`. A GLIM dump can be used as it is, or compiled; a PCD or PLY file must be compiled. Inside the container:
 
 ```bash
 # From a GLIM dump (or a compiled map)
 /ws/build/core/tools/map_compiler /ws/out/glim_dump /ws/out/map
 
-# From a PCD file (x, y, z in the map frame)
+# From a PCD or PLY file (x, y, z in the map frame)
 /ws/build/core/tools/map_compiler /ws/out/map.pcd /ws/out/map --grid-size 50 --voxel-size 0.1
+/ws/build/core/tools/map_compiler /ws/out/map.ply /ws/out/map --grid-size 50 --voxel-size 0.1
 ```
 
-PCD input reads `DATA ascii` and `binary` with x, y, z as F4 or F8. Localization uses up to `map_max_submaps` (default 5) tiles nearest to the robot, so for long-range LiDAR use `--grid-size` 50 to 100. The options are in [Map preparation](maps.md).
+PCD input reads `DATA ascii` and `binary` with x, y, z as F4 or F8; PLY input reads `ascii` and `binary_little_endian` with vertex x, y, z as `float` or `double`. Localization uses up to `map_max_submaps` (default 5) tiles nearest to the robot, so for long-range LiDAR use `--grid-size` 50 to 100. The options, and the 2D occupancy grid for Nav2 (`--occupancy-grid`), are in [Map preparation](maps.md).
 
 ## 6. Replay a real bag and evaluate it
 
