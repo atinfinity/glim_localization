@@ -607,3 +607,14 @@ Second step of [#2](https://github.com/atinfinity/glim_localization/issues/2): t
   - Docs: the flat-ground assumption, and that no noise filter is applied.
   - Re-verified in Docker on the development Mac: core ctest 247/247, Python tests 190.
 - **Open**: covariance recomputation for GLIM dumps moved to [#31](https://github.com/atinfinity/glim_localization/issues/31).
+
+## map_compiler: recompute covariances for GLIM dump input (2026-11-25, [#31](https://github.com/atinfinity/glim_localization/issues/31))
+
+- **What**: `map_compiler --recompute-covariances [--k-neighbors n]` re-estimates the per-point covariances of a GLIM dump or a compiled map with the estimator of the PCD path (`gtsam_points::estimate_covariances`, k nearest neighbours). The core gets `recompute_covariances` in `map/pcd_map.hpp`. Off by default, so the output without the flag does not change.
+- **Decisions**:
+  - k is shared with `--k-neighbors` (5 to 1000, default 10) instead of a second option. For map directory input it is accepted only together with `--recompute-covariances`, so a k that would be ignored is an error.
+  - Neighbours are searched per submap in its origin frame, not over the union of submaps: GLIM submaps overlap, and the union would mix in the same surfaces seen from other submaps with residual misalignment. GLIM also estimates submap covariances per submap. For PCD-compiled tiles this means no neighbours across tile edges; recompiling from the cloud is the documented way to change k there.
+  - The clouds are copied, and all submaps are computed before any is replaced, so a failure (a submap with fewer than k points) leaves the input unchanged and writes nothing.
+  - `--recompute-covariances` with `.pcd` or `.ply` input is rejected rather than ignored, since that path always estimates covariances. Re-downsampling a dump is not part of this change.
+- **Tests** (synthetic data): `test_pcd_map` checks that the recomputed covariances of a submap with a rotated origin equal the PCD path's world-frame covariances rotated into that frame (k = 5, 10, 25; a jittered surface, so the neighbours have no distance ties), and the parameter and small-submap errors with the input unchanged. `test_map_compiler` checks that the default output copies the dump covariances exactly, that `--recompute-covariances --k-neighbors 20` on a dump and on a compiled map gives `estimate_covariances` of the stored points (and differs from the k = 10 dump), and the option errors.
+- **Verification**: the targeted `test_pcd_map` and `test_map_compiler` suites pass in Docker on the development Mac; the full gate is GitHub Actions on the PR.

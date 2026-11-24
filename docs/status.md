@@ -23,7 +23,7 @@ Not done yet (open issues):
 
 - GPU follow-ups ([#23](https://github.com/atinfinity/glim_localization/issues/23)): tile prefetch and a GPU memory budget, real-data timing on the GPU. The GPU module itself is in place ([CUDA variant](build.md#cuda-variant)).
 - Relocalizer: multi-hypothesis refinement of `/initialpose` and global relocalization ([#3](https://github.com/atinfinity/glim_localization/issues/3)).
-- `map_compiler`: covariance recomputation for GLIM dumps ([#31](https://github.com/atinfinity/glim_localization/issues/31)); PCD follow-ups such as `binary_compressed` input ([#12](https://github.com/atinfinity/glim_localization/issues/12)).
+- `map_compiler`: PCD follow-ups such as `binary_compressed` input ([#12](https://github.com/atinfinity/glim_localization/issues/12)).
 - Evaluation on real data against an independent reference ([#5](https://github.com/atinfinity/glim_localization/issues/5)) and in simulation ([#9](https://github.com/atinfinity/glim_localization/issues/9)).
 - Optional wheel odometry fusion ([#14](https://github.com/atinfinity/glim_localization/issues/14)).
 - Follow-ups for robustness, the IMU gap policy, the publisher and the R2 node ([#6](https://github.com/atinfinity/glim_localization/issues/6), [#8](https://github.com/atinfinity/glim_localization/issues/8), [#10](https://github.com/atinfinity/glim_localization/issues/10), [#13](https://github.com/atinfinity/glim_localization/issues/13)).
