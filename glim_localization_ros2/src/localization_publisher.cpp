@@ -303,6 +303,11 @@ void LocalizationPublisher::on_status(const glim_localization::LocalizationStatu
   msg.residual = status.residual;
   msg.processing_time = status.processing_time;
   msg.last_reset_reason = to_message_reason(status.last_reset_reason);
+  msg.init_search = static_cast<uint8_t>(status.init_search);  // Same values, pinned by test_message_constants
+  msg.init_search_candidates = status.init_search_candidates;
+  msg.init_search_score = status.init_search_score;
+  msg.init_search_yaw_offset = status.init_search_yaw_offset;
+  msg.init_search_time = status.init_search_time;
   msg.header.frame_id = params_.map_frame;
 
   std::lock_guard<std::mutex> lock(mutex_);
@@ -342,6 +347,9 @@ void LocalizationPublisher::publish_diagnostics(const LocalizationStatus& msg) {
   status.name = params_.diagnostics_name;
   status.hardware_id = params_.diagnostics_hardware_id;
   status.message = state_name;
+  if (msg.init_search == LocalizationStatus::INIT_SEARCH_REJECTED) {
+    status.message += ": the initial pose search rejected the given pose";
+  }
   status.values.push_back(key_value("state", state_name));
   status.values.push_back(key_value("reset_count", std::to_string(msg.reset_count)));
   status.values.push_back(key_value("last_reset_reason", std::to_string(msg.last_reset_reason)));
@@ -350,6 +358,11 @@ void LocalizationPublisher::publish_diagnostics(const LocalizationStatus& msg) {
   status.values.push_back(key_value("inlier_ratio", std::to_string(msg.inlier_ratio)));
   status.values.push_back(key_value("residual", std::to_string(msg.residual)));
   status.values.push_back(key_value("processing_time", std::to_string(msg.processing_time)));
+  status.values.push_back(key_value("init_search", glim_localization::to_string(static_cast<glim_localization::InitSearchResult>(msg.init_search))));
+  status.values.push_back(key_value("init_search_candidates", std::to_string(msg.init_search_candidates)));
+  status.values.push_back(key_value("init_search_score", std::to_string(msg.init_search_score)));
+  status.values.push_back(key_value("init_search_yaw_offset_deg", std::to_string(msg.init_search_yaw_offset * 180.0 / M_PI)));
+  status.values.push_back(key_value("init_search_time", std::to_string(msg.init_search_time)));
 
   diagnostic_msgs::msg::DiagnosticArray array;
   array.header.stamp = now;

@@ -427,6 +427,52 @@ TEST(LocalizationPublisher, DiagnosticsWarnOnDegradedAndErrorOnLost) {
   }
 }
 
+// The result of the initial pose search reaches the status message and the diagnostics.
+TEST(LocalizationPublisher, InitSearchResultIsReported) {
+  LocalizationPublisherParams params;
+  params.diagnostics_period = 0.0;
+  Fixture fixture(params, "publisher_init_search");
+  fixture.wait_for_discovery(1);
+
+  auto accepted = frame_status(0, LocalizationState::INITIALIZING, 1);
+  accepted.init_search = glim_localization::InitSearchResult::ACCEPTED;
+  accepted.init_search_candidates = 24;
+  accepted.init_search_score = 0.95;
+  accepted.init_search_yaw_offset = -M_PI / 2.0;
+  accepted.init_search_time = 0.8;
+  fixture.publisher->on_status(accepted);
+  auto rejected = frame_status(1, LocalizationState::LOST, 2);
+  rejected.init_search = glim_localization::InitSearchResult::REJECTED;
+  rejected.init_search_candidates = 24;
+  fixture.publisher->on_status(rejected);
+  ASSERT_TRUE(fixture.spin_until([&] { return fixture.statuses.size() >= 2 && fixture.diagnostics.size() >= 2; }));
+
+  const auto& msg = fixture.statuses[0];
+  EXPECT_EQ(msg.init_search, StatusMsg::INIT_SEARCH_ACCEPTED);
+  EXPECT_EQ(msg.init_search_candidates, 24);
+  EXPECT_DOUBLE_EQ(msg.init_search_score, 0.95);
+  EXPECT_DOUBLE_EQ(msg.init_search_yaw_offset, -M_PI / 2.0);
+  EXPECT_DOUBLE_EQ(msg.init_search_time, 0.8);
+  EXPECT_EQ(fixture.statuses[1].init_search, StatusMsg::INIT_SEARCH_REJECTED);
+
+  const auto value_of = [](const diagnostic_msgs::msg::DiagnosticStatus& status, const std::string& key) {
+    for (const auto& kv : status.values) {
+      if (kv.key == key) {
+        return kv.value;
+      }
+    }
+    return std::string("<missing>");
+  };
+  const auto& first = fixture.diagnostics[0].status.at(0);
+  EXPECT_EQ(value_of(first, "init_search"), "ACCEPTED");
+  EXPECT_EQ(value_of(first, "init_search_candidates"), "24");
+  EXPECT_NEAR(std::stod(value_of(first, "init_search_yaw_offset_deg")), -90.0, 1e-3);
+  const auto& second = fixture.diagnostics[1].status.at(0);
+  EXPECT_EQ(second.level, diagnostic_msgs::msg::DiagnosticStatus::ERROR);
+  EXPECT_EQ(value_of(second, "init_search"), "REJECTED");
+  EXPECT_NE(second.message.find("rejected"), std::string::npos) << second.message;
+}
+
 // The pose of a frame is published only with the status of the same frame.
 TEST(LocalizationPublisher, FrameAloneIsNotPublished) {
   Fixture fixture(LocalizationPublisherParams(), "publisher_pairing");

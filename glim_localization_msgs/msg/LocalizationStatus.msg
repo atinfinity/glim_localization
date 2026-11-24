@@ -43,3 +43,24 @@ uint8 RESET_EXTERNAL=1
 # The node reset itself after an IMU gap.
 uint8 RESET_IMU_GAP=2
 uint8 last_reset_reason
+
+# Result of the search around the most recent pose given from outside (init_yaw_search in the odometry config).
+# Cleared by every reset; stays NONE when the search is disabled or the reset is not searched (relocalize, IMU gap).
+uint8 INIT_SEARCH_NONE=0
+# A candidate reached the minimum inlier ratio; the estimation started from its registered pose.
+uint8 INIT_SEARCH_ACCEPTED=1
+# No candidate reached it; the state is LOST until a new pose is given.
+uint8 INIT_SEARCH_REJECTED=2
+uint8 init_search
+
+# Number of candidates scored before the time budget ran out.
+int32 init_search_candidates
+
+# Inlier ratio of the best candidate after registration, in [0, 1], also when rejected.
+float64 init_search_score
+
+# Yaw correction applied to the given pose by the best candidate [rad], in [-pi, pi].
+float64 init_search_yaw_offset
+
+# Wall-clock time of the search [s].
+float64 init_search_time
