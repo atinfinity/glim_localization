@@ -1,5 +1,7 @@
 """Shared parts of the R2 launch tests (test_r2_node.py, test_r2_imu_gap.py). Not a test module itself."""
+import atexit
 import bisect
+import importlib.util
 import json
 import math
 import os
@@ -36,8 +38,17 @@ def require_env(name):
     return value
 
 
+def load_launch_utils():
+    """The installed launch/launch_utils.py (JSON with comments, the R1 map_path override), as the launch files load it."""
+    path = os.path.join(get_package_share_directory("glim_localization_ros2"), "launch", "launch_utils.py")
+    spec = importlib.util.spec_from_file_location("glim_localization_launch_utils", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def strip_comments(path):
-    return json.loads("\n".join(line.split("//")[0] for line in open(path)))
+    return load_launch_utils().load_json_with_comments(path)
 
 
 def make_config_dir():
@@ -45,9 +56,11 @@ def make_config_dir():
 
     The installed config subscribes with the sensor_data profile (best effort), as GLIM does. A test must not lose a
     message in DDS: a lost IMU sample is an IMU gap and changes reset_count. map_path is left to the ROS parameter.
+    The copy is removed when the test process exits.
     """
     share = os.path.join(get_package_share_directory("glim_localization_ros2"), "config")
     root = tempfile.mkdtemp(prefix="glim_r2_config_")
+    atexit.register(shutil.rmtree, root, ignore_errors=True)
     shutil.copytree(os.path.join(share, "r1"), os.path.join(root, "r1"))
     shutil.copytree(os.path.join(share, "r2"), os.path.join(root, "r2"))
     path = os.path.join(root, "r2", "config_ros.json")
