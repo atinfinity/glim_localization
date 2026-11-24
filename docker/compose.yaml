@@ -17,5 +17,29 @@ services:
       - build:/ws/build
       - ../out:/ws/out
 
+  # CUDA variant (amd64 + NVIDIA GPU + NVIDIA Container Toolkit). Only used when named, so
+  # `docker compose build` and scripts/docker_run.sh without --cuda keep using the CPU image.
+  # Build: docker compose -f docker/compose.yaml build dev-cuda; run: scripts/docker_run.sh --cuda ...
+  dev-cuda:
+    profiles: [cuda]
+    image: ${GLIM_LOC_CUDA_IMAGE:-glim_localization:dev-cuda}
+    platform: linux/amd64
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.cuda
+      args:
+        JOBS: ${JOBS:-4}
+        CUDA_ARCHITECTURES: ${CUDA_ARCHITECTURES:-75}
+    gpus: all
+    working_dir: /ws/src/glim_localization
+    environment:
+      - CTEST_JOBS
+      - GLIM_LOC_REQUIRE_GPU  # 1: the GPU tests fail instead of skipping when no GPU is visible.
+    volumes:
+      - ..:/ws/src/glim_localization
+      - build-cuda:/ws/build  # Separate from the CPU build tree.
+      - ../out:/ws/out
+
 volumes:
   build:
+  build-cuda:
