@@ -16,6 +16,21 @@ scripts/docker_run.sh scripts/test_replay_e2e.sh
 
 Generates a 12 s synthetic map and dataset, localizes from an offset initial pose on the GLIM dump and on a PCD map, and checks accuracy (0.1 m, 1 deg after 3 s), determinism and exit codes. Results are in `out/phase4_e2e/`.
 
+## Demo animation
+
+The animation in the README (`docs/media/replay_synthetic.gif`) is rendered offscreen from the synthetic end-to-end run above. To regenerate it after `test_replay_e2e.sh`:
+
+```bash
+scripts/docker_run.sh bash -c 'env -u PYTHONPATH $GLIM_LOC_PYTHON scripts/render_demo.py \
+  --data /ws/out/phase4_e2e/input/data --run /ws/out/phase4_e2e/run1 --map /ws/out/phase4_e2e/input/map.pcd \
+  --z-min 0.2 --out docs/media/replay_synthetic.gif'
+```
+
+- `render_demo.py` draws, per estimated frame, the map points, the current scan moved to the map frame by the estimate, the estimated trajectory so far, the ground truth (`<data>/traj_gt.txt` when it exists; `--gt`, `--no-gt`), and the state and inlier ratio from `frames.csv`. Frames that are not `estimated` are skipped.
+- The map is a PCD file (ascii or binary). `--z-min` and `--z-max` drop points outside a map-frame height band, here the floor. Pass `--t-lidar-imu` with the value of `config_sensors.json` when it is not the identity.
+- The output is a GIF or WebP, chosen by the extension. Other options: `--width`, `--fps`, `--stride`, `--max-frames`, `--margin`, `--title`.
+- Keep the committed file under about 3 MB, and commit only the image: never a bag, dataset or map.
+
 ## Real bag
 
 ```bash
