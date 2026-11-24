@@ -26,9 +26,10 @@ scripts/docker_run.sh bash -c 'env -u PYTHONPATH $GLIM_LOC_PYTHON scripts/render
   --z-min 1.0 --z-max 3.0 --out docs/media/replay_synthetic.gif'
 ```
 
-- `render_demo.py` draws, per estimated frame, the map points, the current scan moved to the map frame by the estimate, the estimated trajectory so far, the ground truth (`<data>/traj_gt.txt` when it exists; `--gt`, `--no-gt`), and the state and inlier ratio from `frames.csv`. Frames that are not `estimated` are skipped.
+- `render_demo.py` draws, per estimated frame, the map points, the current scan moved to the map frame by the estimate, the current pose (a near-black dot with a heading arrow), the estimated trajectory so far, the ground truth (`<data>/traj_gt.txt` when it exists; `--gt`, `--no-gt`), and the state and inlier ratio from `frames.csv`. Frames that are not `estimated` are skipped.
 - The map is a PCD file (ascii or binary); non-finite points are dropped. `--z-min` and `--z-max` draw only the map and scan points in a map-frame height band. The README image is a horizontal slice from 1 m (the sensor height) to 3 m: it hides the floor, and the low boxes in the middle of the corridor, which the trajectory passes over and would otherwise seem to drive through. Pass `--t-lidar-imu` with the value of `config_sensors.json` when it is not the identity.
-- The output is a GIF or WebP, chosen by the extension. Other options: `--width`, `--fps`, `--stride`, `--max-frames`, `--margin`, `--title`.
+- The output is a GIF or WebP, chosen by the extension. The layout is `--width` px wide (default 720) and is rendered at `--scale` times that (default 2, so 1440 px); the README shows it at `width="720"`, so it stays sharp on high-density screens and in a column wider than 720 px. A GIF uses one palette of `--colors` entries (default 256) that holds black, white, the text, state and plot colors exactly, plus adaptive colors from the first, middle and last frames; frames are mapped to it without dithering. Other options: `--fps`, `--stride`, `--max-frames`, `--margin`, `--title`.
+- Text uses `--font` (default `Noto Sans`). The image installs it (`fonts-noto-core`) and builds the matplotlib font cache after it, so the README GIF uses Noto Sans when rendered in the image. Where the font is missing, the script warns on stderr and uses DejaVu Sans, which ships with matplotlib.
 - Keep the committed file under about 3 MB, and commit only the image: never a bag, dataset or map.
 
 ## Real bag
