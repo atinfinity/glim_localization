@@ -40,9 +40,9 @@ export GLIM_R2_GAP_BAG="${fixture}/gap_bag"
 
 pkg_build="${base}/build/glim_localization_ros2"
 # Every gtest that must run. Add the name of a new test here.
-expected=(test_message_constants test_localization_publisher test_gyro_buffer test_init_pose_delay)
+expected=(test_message_constants test_localization_publisher test_map_publisher test_gyro_buffer test_init_pose_delay)
 # Every launch test that must run (the file name without .py). Add the name of a new test here.
-expected_launch=(test_r1_extension test_r2_node test_r2_imu_gap)
+expected_launch=(test_r1_extension test_r2_node test_r2_imu_gap test_launch_r1 test_launch_r1_live test_launch_r2 test_launch_r2_component)
 
 # A build with BUILD_TESTING off registers no tests, and old results must not count.
 grep -q '^BUILD_TESTING:BOOL=ON$' "${pkg_build}/CMakeCache.txt" || { echo "FAIL: BUILD_TESTING is not ON in ${pkg_build}/CMakeCache.txt (run build_colcon.sh)" >&2; exit 1; }

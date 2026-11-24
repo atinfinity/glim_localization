@@ -1,0 +1,26 @@
+# ROS parameters of glim_localization_node (R2), read by launch/localization.launch.py (params_file).
+#
+# These are all the ROS parameters of the node. Everything else (input topics and QoS, time offsets, frames, tf_mode,
+# T_base_imu, ~/map and the odometry settings) is in the GLIM JSON files under config_path, as in R1. The launch
+# arguments config_path and map_path override the values below when they are not empty; the launch arguments
+# use_sim_time and autostart always override them. Write the double parameters with a decimal point (1.0, not 1):
+# ROS reads 1 as an integer, and the node then fails to start with a type error.
+/**:
+  ros__parameters:
+    # GLIM-style config directory (config.json and the files it names). A relative path is taken from
+    # share/glim_localization_ros2. Read at configure.
+    config_path: config/r2
+
+    # Map directory: a GLIM dump or a map compiled by map_compiler. Empty: odometry_estimation.map_path of the
+    # odometry config is used. Read at configure; an empty or unreadable map fails configure.
+    map_path: ""
+
+    # Largest accepted delay [s] of a stamped initial pose (/initialpose, ~/initialize) behind the last frame the
+    # odometry took, and the largest age of the estimate that ~/relocalize restarts from. Not negative.
+    max_init_pose_delay: 0.2
+
+    # Configure and activate the node once it spins. false: drive the lifecycle by hand (ros2 lifecycle set).
+    autostart: true
+
+    # Use /clock (for example from `ros2 bag play --clock`).
+    use_sim_time: false

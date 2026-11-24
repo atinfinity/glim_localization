@@ -174,6 +174,12 @@ void LocalizationCallbacks::request_reset(const Eigen::Isometry3d& T_world_imu, 
   }
 }
 
+std::shared_ptr<const MapManager> LocalizationCallbacks::loaded_map() {
+  auto& registry = reset_registry();
+  std::lock_guard<std::mutex> lock(registry.mutex);
+  return registry.instances.empty() ? nullptr : registry.instances.front()->map();
+}
+
 OdometryEstimationLocalizationCPU::~OdometryEstimationLocalizationCPU() {
   auto& registry = reset_registry();
   std::lock_guard<std::mutex> lock(registry.mutex);

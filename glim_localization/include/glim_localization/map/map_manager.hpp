@@ -35,6 +35,9 @@ public:
   /// @return The tile with the given dump id, or nullptr
   MapTile::ConstPtr tile(int id) const;
 
+  /// @return Every tile of the current map, sorted by id (empty before the first load)
+  std::vector<MapTile::ConstPtr> tiles() const;
+
   /// Find up to k tiles whose origins are within radius of the pose.
   /// @return Tiles sorted by distance, then by id
   std::vector<MapTile::ConstPtr> query(const Eigen::Isometry3d& T_world_imu, double radius, int k) const;

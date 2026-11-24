@@ -112,6 +112,16 @@ MapTile::ConstPtr MapManager::tile(int id) const {
   return found == state->tiles_by_id.end() ? nullptr : found->second;
 }
 
+std::vector<MapTile::ConstPtr> MapManager::tiles() const {
+  const auto state = snapshot();
+  if (!state) {
+    return {};
+  }
+  std::vector<MapTile::ConstPtr> result = state->tiles;
+  std::sort(result.begin(), result.end(), [](const auto& a, const auto& b) { return a->id < b->id; });
+  return result;
+}
+
 std::vector<MapTile::ConstPtr> MapManager::query(const Eigen::Isometry3d& T_world_imu, double radius, int k) const {
   const auto state = snapshot();
   const Eigen::Vector3d center = T_world_imu.translation();

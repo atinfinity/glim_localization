@@ -30,10 +30,18 @@
   // tf_mode          : internal_odom | external_odom | none (see docs/DESIGN.md section 6)
   // base_frame_id    : frame of ~/pose and the TF child
   // T_base_imu       : pose of the IMU in base_frame_id, [x, y, z, qx, qy, qz, qw]
+  // publish_map      : publish the loaded map once on ~/map (latched: reliable, transient local)
+  // map_cloud_voxel  : ~/map keeps one point (the centroid) per voxel of this size [m]; 0 keeps every point.
+  //                    ~/map is built once when the map is loaded and costs 12 bytes per published point (and about
+  //                    40 bytes per voxel while building), in the node start (R1) or configure (R2). With 0, a map
+  //                    above 10 million points gets a warning. A ~/map above 1 GiB (about 89 million points) is
+  //                    not published (a warning says so)
   "localization_ros": {
     "tf_mode": "internal_odom",
     "base_frame_id": "base_link",
     "T_base_imu": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0],
-    "diagnostics_period": 1.0
+    "diagnostics_period": 1.0,
+    "publish_map": true,
+    "map_cloud_voxel": 0.5
   }
 }

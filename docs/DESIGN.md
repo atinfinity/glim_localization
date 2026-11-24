@@ -171,10 +171,15 @@ glim_localization/                  # repository
     src/localization_publisher.cpp  # publisher and TF class shared by R1 and R2
     src/localization_extension.cpp  # R1: ExtensionModuleROS2
     src/localization_node.cpp       # R2: rclcpp_lifecycle::LifecycleNode (registered as a component)
+    src/map_publisher.cpp           # ~/map, shared by R1 and R2
     config/r1/, config/r2/          # GLIM JSON configs for R1 and R2
+    config/localization.param.yaml  # R2 ROS parameters (every one, with comments)
+    config/localization_r1.param.yaml  # ROS parameters of GLIM's node in R1
+    launch/localization.launch.py   # R2: standalone or as a component, autostart
+    launch/localization_r1.launch.py   # R1: glim_rosnode, or glim_rosbag with bag:=
+    launch/launch_utils.py          # R1 helpers: typed -p values, JSON with comments, the map_path override
+    rviz/localization.rviz          # map frame, ~/map, ~/pose, ~/odometry, TF
 ```
-
-Planned, not implemented yet: `launch/localization.launch.py`, `config/localization.param.yaml` and `rviz/localization.rviz`.
 
 ### Inputs and outputs
 
@@ -187,7 +192,8 @@ Planned, not implemented yet: `launch/localization.launch.py`, `config/localizat
 | ~/pose | geometry_msgs/PoseWithCovarianceStamped | base_frame pose in map coordinates (LiDAR rate) |
 | ~/odometry | nav_msgs/Odometry | Pose + velocity (LiDAR rate). An IMU-rate predicted version is planned |
 | ~/status, /diagnostics | LocalizationStatus, diagnostic_msgs | State, inlier ratio, number of tiles in use, number of map factors, residual, processing time, reset count and the latest reason |
-| ~/aligned_points, ~/map | sensor_msgs/PointCloud2 | Planned, not implemented yet: aligned point cloud (downsampled), map (transient_local) |
+| ~/map | sensor_msgs/PointCloud2 | The loaded map in the map frame, published once and latched (reliable, transient local). One centroid per `map_cloud_voxel` voxel (0.5 m; 0 keeps every point), x/y/z float32; `publish_map: false` turns it off (both in `localization_ros`). R1 publishes it when the extension is loaded, from the map the odometry module already holds (`LocalizationCallbacks::loaded_map()`, so the map is not loaded twice); R2 publishes it at configure, so it is visible while the node is inactive. The build runs there, synchronously: 12 bytes per published point, plus about 40 bytes per occupied voxel while downsampling (with 0 the points go straight into the message). With 0, a map above 10 million points gets a warning; a cloud above 1 GiB (the message limit is 4 GiB, uint32 `row_step`) is not published, with a warning |
+| ~/aligned_points | sensor_msgs/PointCloud2 | Not implemented: the aligned scan (downsampled). Deferred: it needs a per-frame copy and conversion of the scan on the odometry callback, plus a rate and downsampling policy, which is more than the launch work needed (#18) |
 
 ### TF (`tf_mode`)
 
@@ -218,7 +224,8 @@ Planned, not implemented yet: `launch/localization.launch.py`, `config/localizat
 
 Where `glim_localization_node` differs from the plan above:
 
-- **Parameters.** Only `config_path` (default `config/r2`; a relative path is taken from the package share), `map_path` (overrides `odometry_estimation.map_path`) and `max_init_pose_delay` (default 0.2 s) are ROS parameters. Everything else comes from the GLIM JSON files as in R1: topics, QoS and time offsets from `glim_ros` in `config_ros.json` (the GlimROS keys), the publisher settings from `localization_ros`. The YAML parameter file, the launch file and the RViz config are planned (not implemented yet).
+- **Parameters.** Only `config_path` (default `config/r2`; a relative path is taken from the package share), `map_path` (overrides `odometry_estimation.map_path`), `max_init_pose_delay` (default 0.2 s) and `autostart` (default false) are ROS parameters; `config/localization.param.yaml` documents them. Everything else comes from the GLIM JSON files as in R1: topics, QoS and time offsets from `glim_ros` in `config_ros.json` (the GlimROS keys), the publisher and `~/map` settings from `localization_ros`.
+- **Autostart.** With `autostart: true` the node configures and activates itself from a one-shot timer once it spins, the same in a process and in a component container. A failed step is logged and leaves the node in the state it reached (unconfigured or inactive); it is not retried.
 - **Lifecycle.** configure reads the config, loads the map and creates `~/initialize` and `~/relocalize`; a missing config, a missing or unreadable map, or bad settings fail it and leave the node unconfigured. activate creates the odometry module, `AsyncOdometryEstimation`, the publisher and the subscriptions (input before activate is not seen). deactivate drops the subscriptions and joins the odometry thread; pending input is discarded, and the next activate starts a new run (new anchor, `reset_count` 0). cleanup releases the map and the services. The services exist only while the node is configured (Inactive or Active): while Inactive they answer `success=false`; while Unconfigured (at startup, after cleanup or after a failed configure) they do not exist, so a client waiting for them blocks.
 - **Resets.** The node holds the module and calls its `reset()`; `LocalizationCallbacks::request_reset` is not used. `/initialpose` and `~/initialize` take the base pose in the map frame (an empty frame id is taken as the map frame) and are applied exactly; there is no yaw hypothesis search. `~/initialize` returns `success=true` when the pose is accepted (queued), not when it has been applied; `score` is 0. `global_search=true` returns `success=false` ("not implemented", #3). Of several queued requests the latest wins.
 - **Relocalize.** `~/relocalize` calls the core's `relocalize(max_init_pose_delay)`: at the next frame, estimation restarts from the newest estimate (pose and velocity), with the position moved to that frame by the velocity and the orientation turned at the rate between the last two estimates (reason EXTERNAL). The first frame after a reset is held near the reset pose, so without the turn a relocalize while turning shows an error of a few degrees in that frame (4.3 deg in `test_r2_node`). The core reads the estimate on the odometry thread when the reset is applied, so it is the newest one, not the one seen at request time. It fails when a reset is still pending (it would silently replace an accepted `~/initialize`), when the state is not TRACKING or DEGRADED (INITIALIZING, also right after any reset, or LOST), and when the newest estimate is more than `max_init_pose_delay` older than the last frame the odometry has taken (frames were dropped since, for example in an IMU gap). Use `~/initialize` in those cases. The state and age are checked again when the reset is applied: if the odometry went LOST after the request (an IMU fault) or the next frame is more than `max_init_pose_delay` after the newest estimate (the input stalled), the request is dropped with a warning in the log and the frame is handled as without it, so LOST and the IMU gap policy stay in force. The service has already answered success by then, and `~/status` does not report the drop: `reset_count` does not change.
@@ -236,7 +243,7 @@ Where `glim_localization_node` differs from the plan above:
 - Estimation runs on the `AsyncOdometryEstimation` thread. Publication comes from `OdometryEstimationCallbacks::on_update_new_frame` and `LocalizationCallbacks::on_status` ("Publication rules" above). `use_sim_time` is supported.
 - Nav2: `~/pose` and the TF are meant to be usable in place of a 2D particle-filter localizer. Not verified. Exporting a 2D OccupancyGrid from map_compiler is planned (#4).
 - External EKF: `tf_mode: none`, remap `~/pose` to the pose input of the EKF, initialize with `~/initialize`. Not verified; the topic names and service types of the target stack need to be checked.
-- launch arguments (planned with the launch file): `map_path`, `config_path`, `params_file`, `use_sim_time`, `rviz`, `container`.
+- Launch files. `localization.launch.py` (R2): `params_file`, `config_path` and `map_path` (empty keeps the `params_file` value), `use_sim_time`, `autostart` (default true), `use_composition` (default false; loads the component into a new `component_container` named `container_name`) and `rviz`. `localization_r1.launch.py` (R1): `bag` (empty runs `glim_rosnode`, otherwise `glim_rosbag <bag>`), `config_path` (default the installed `config/r1`; a relative path is taken from the current directory), `map_path` (R1 reads the map path only from JSON, so a non-empty value makes a temporary copy of the config with `odometry_estimation.map_path` set in the file that `global.config_odometry` of `config.json` names; names outside the config directory are rewritten to reach the same files; the copy is removed when the launch process exits), `params_file` (`config/localization_r1.param.yaml`, the GlimROS and glim_rosbag parameters, passed as typed `-p name:=value` by `launch/launch_utils.py` since `glim_rosbag` takes any existing file argument for a bag), `use_sim_time` and `rviz` (the RViz topics remapped to `/glim_ros/...`). `rviz` defaults to false; `rviz2` is not a package dependency, and when it is missing the launch file warns and starts without it.
 
 ## 6.5 Offline replay (Phase 4)
 

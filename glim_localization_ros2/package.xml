@@ -14,6 +14,7 @@
   <depend>glim</depend>
   <depend>glim_localization</depend>
   <depend>glim_localization_msgs</depend>
+  <depend>lifecycle_msgs</depend>
   <depend>nav_msgs</depend>
   <depend>rclcpp</depend>
   <depend>rclcpp_components</depend>
@@ -22,12 +23,19 @@
   <depend>std_srvs</depend>
   <depend>tf2_ros</depend>
 
+  <!-- launch/. rviz2 is deliberately not a dependency: the launch files start it only with rviz:=true and skip it
+       with a warning when it is not installed (headless machines). -->
+  <exec_depend>ament_index_python</exec_depend>
+  <!-- glim_ros: the R1 launch file runs its glim_rosnode / glim_rosbag (and the tests use them) -->
+  <exec_depend>glim_ros</exec_depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+  <exec_depend>python3-yaml</exec_depend>
+
   <test_depend>ament_cmake_gtest</test_depend>
   <test_depend>ament_cmake_ros</test_depend>
-  <test_depend>glim_ros</test_depend>
   <test_depend>launch_testing_ament_cmake</test_depend>
   <test_depend>launch_testing_ros</test_depend>
-  <test_depend>lifecycle_msgs</test_depend>
   <test_depend>rclpy</test_depend>
   <test_depend>ros2bag</test_depend>
   <test_depend>rosbag2_storage_default_plugins</test_depend>

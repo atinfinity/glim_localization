@@ -428,3 +428,45 @@ A private Ouster OS1-128 recording (1153 frames, about 115 s, 10 Hz LiDAR) was c
 
 > [!NOTE]
 > GitHub runners have 4 CPUs, so the core ctest gains less there. All 6 runs on the final test setup passed: 3 before the `-l` fix and the 3 above.
+
+## Phase 5: launch files, parameter YAML, RViz config and ~/map (2026-11-25, #1)
+
+- **Launch files** (`glim_localization_ros2/launch/`):
+  - `localization.launch.py` (R2) runs `glim_localization_node` standalone, or with `use_composition:=true` as a component in a new `component_container`. `config_path` and `map_path` override `params_file` only when not empty.
+  - `localization_r1.launch.py` (R1) runs `glim_rosnode`, or `glim_rosbag <bag>` with `bag:=`. R1 reads the map path only from JSON, so `map_path:=` makes a temporary copy of the config with `odometry_estimation.map_path` set. The copy is removed when the launch exits.
+  - glim_rosbag takes every argument that names an existing file as a bag, and launch_ros passes `parameters` as `--params-file <file>`. So the R1 launch file reads `params_file` itself and passes each value as `-p name:=value`. The first R1 launch test run failed this way: rosbag2 tried to open the params file as a bag.
+  - `rviz` defaults to false. `rviz2` is not a package dependency: with `rviz:=true` and no rviz2 installed, the launch file logs a warning and starts without it (checked in the container, which has no rviz2).
+- **Parameter YAML**: `config/localization.param.yaml` (every R2 node parameter, with comments) and `config/localization_r1.param.yaml` (the GlimROS and glim_rosbag parameters).
+- **RViz config**: `rviz/localization.rviz` shows the fixed frame `map`, a grid, `~/map` (transient local), `~/pose`, `~/odometry` and TF, and has the 2D Pose Estimate tool on `/initialpose`. The R1 launch file remaps its topics to `/glim_ros/...`.
+- **R2 `autostart` parameter** (default false, true in the launch file). A one-shot wall timer configures and activates the node once it spins, the same in a process and in a container. A failed step is logged and leaves the node where it stopped. The existing R2 tests keep driving the lifecycle by hand.
+- **`~/map`** (`map_publisher`, shared by R1 and R2): the loaded map in the map frame as x/y/z float32, published once with reliable, transient local QoS.
+  - Each voxel of `map_cloud_voxel` (default 0.5 m; 0 keeps every point) keeps its centroid. `publish_map` turns it off. Both keys are in `localization_ros` of `config_ros.json`.
+  - R2 publishes the map at configure.
+  - R1 publishes it when the extension is loaded. GlimROS creates the odometry module before the extensions, so the map is loaded by then.
+  - The synthetic fixture map gives 9245 points from 5 tiles on arm64 and 9246 on amd64 (see the fix below).
+- **Core API additions** (no GLIM patch):
+  - `MapManager::tiles()`: every tile, sorted by id.
+  - `LocalizationCallbacks::loaded_map()`: the map of the oldest live localization odometry instance, so the R1 extension reuses the map the dlopen'd module loaded instead of loading it twice.
+  - `OdometryEstimationLocalizationCPU::map()`.
+  - Each has a core test.
+- **Deferred:** `~/aligned_points`. It needs a per-frame copy of the scan on the odometry callback and a rate and downsampling policy. Filed as #18.
+- **Tests:**
+  - `test_map_publisher` (gtest) checks the map-frame transform, the voxel centroids, the skipping of non-finite points, the rejection of a bad voxel size, and delivery of the latched map to a late subscriber.
+  - Three launch tests include the installed launch files headless with the synthetic fixtures. Each checks `~/pose`, TF that composes to the last pose, and the latched `~/map` received after it was published:
+    - `test_launch_r1`: R1 with `bag:=`.
+    - `test_launch_r2`: R2 standalone.
+    - `test_launch_r2_component`: R2 as a component.
+  - The R2 tests also check that autostart reaches active.
+- **Verification**: `scripts/ci.sh` in Docker passes: core ctest 218/218 and colcon test 11/11. Launch test times: R1 5.1 s, R2 16.1 s, R2 component 17.2 s.
+- **Not done**: a manual run on a real bag with the launch files and RViz on a display (part of #18).
+
+### Review fixes for #1 (2026-11-25)
+
+- **`~/map` size**: the cloud size is computed in `size_t`. A cloud above 1 GiB (`kMaxMapCloudBytes`, about 89 million points), or above the uint32 `row_step` of the message, is refused with a warning and not published; before, `row_step` could wrap and the copy wrote past the buffer. `check_map_cloud_size()` is tested at the uint32 boundary, and `make_map_cloud()` with a small cap, so no large allocation is needed.
+- **`~/map` cost**: with `map_cloud_voxel: 0` the points go straight into the message (12 bytes per point, no per-point sums); with downsampling the build holds about 40 bytes per occupied voxel, and the voxel index is reserved. A map above 10 million points with voxel 0 gets a warning. The build stays where it was (R1 node start, R2 configure): it runs once, and moving it to a thread would need locking around the publisher for a small gain. The cost is documented in `config_ros.json`, the README and DESIGN §6.
+- **R1 parameters** (`launch/launch_utils.py`, tested without ROS in `scripts/tests/test_launch_utils.py`): strings are passed single-quoted (so `""`, `"123"`, `"true"` and `"a: b"` stay strings), doubles keep a decimal point, integers of GlimROS's double parameters (`delay`, `start_offset`, `playback_duration`, `playback_until`) become doubles, lists of one type are passed as YAML flow, and nested mappings, empty lists and nulls are rejected with a clear error. R2 cannot coerce (launch_ros loads its `params_file`), so its YAML says to write doubles with a decimal point.
+- **R1 `map_path:=`** edits the odometry config that `global.config_odometry` of `config.json` names, relative to the config directory, with a clear error when the key or the file is missing. Names that point outside the config directory (such as `../r1/...` in `config/r2`) are rewritten in the copy. The JSON comment stripping now skips strings and handles `/* */`; the R2 test helpers reuse it. The copy is removed when the launch process exits (`atexit`), after launch has reaped GLIM. An `OnShutdown` handler was dropped after the re-review: it fires while the processes are only being signalled, so it removed the config while GLIM could still read it (for example `GlobalConfig::dump` when global mapping is enabled). The params file now rejects a node section or `ros__parameters` that is not a mapping with a ValueError.
+- **Other**: `autostart` skips and logs the state when the node already left Unconfigured; `package.xml` declares `ament_index_python` and `glim_ros` as exec dependencies (`glim_ros` moved from test_depend); the R2 test config copies are removed at exit.
+- **Tests**: the launch tests now assert the `~/map` point count (9245 within 1%; see below). New `test_launch_r1_live` runs `glim_rosnode` (no `bag:=`) with `map_path` empty and the map in the config. The `rviz:=true` fallback stays a manual check: a launch test would start rviz2 where it is installed, and the warning goes to the launch log, not to a process output that launch_testing can assert.
+- **Verification**: `scripts/ci.sh` in Docker passes: core ctest 218/218, colcon test 12/12 (`test_launch_r1_live` 1.1 s), Python tests 175.
+- **`~/map` count across architectures**: GitHub Actions (amd64) got 9246 points where the local arm64 build gets 9245, so the four launch tests that asserted the exact count failed. Cause: the fixture floor (z = 0) and side walls (y = ±5 m) lie exactly on 0.5 m voxel planes with 1 cm noise. With about 40 points per metre of noise density at the plane and float coordinates near 15 m (ulp about 1e-6 m), a few of the tens of thousands of floor and wall points fall within rounding distance of a boundary. GCC contracts `a*b+c` into FMA on aarch64 by default but not on baseline x86-64, so `T_world_origin * p` differs by an ulp and `floor(p / voxel)` moves one point to the neighbouring voxel. Forcing identical rounding (`-ffp-contract=off` plus the same Eigen vectorization on both) would only hide the sensitivity of real maps, so the tests now accept 9245 within 1%. That is far below the change from another voxel size (0.4 m gives about 1.5 times the voxels on these surfaces) or from the raw map. Only arm64 can be checked locally; the amd64 result comes from the Actions run.
