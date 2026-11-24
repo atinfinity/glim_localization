@@ -3,7 +3,8 @@
 # These are all the ROS parameters of the node. Everything else (input topics and QoS, time offsets, frames, tf_mode,
 # T_base_imu, ~/map and the odometry settings) is in the GLIM JSON files under config_path, as in R1. The launch
 # arguments config_path and map_path override the values below when they are not empty; the launch arguments
-# use_sim_time and autostart always override them.
+# use_sim_time and autostart always override them. Write the double parameters with a decimal point (1.0, not 1):
+# ROS reads 1 as an integer, and the node then fails to start with a type error.
 /**:
   ros__parameters:
     # GLIM-style config directory (config.json and the files it names). A relative path is taken from

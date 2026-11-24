@@ -2,12 +2,14 @@
 # launch/localization_r1.launch.py (params_file).
 #
 # config_path is not here: the launch file always sets it (launch argument config_path, default
-# share/glim_localization_ros2/config/r1; a relative path would be taken from glim's share directory). The map path is
+# share/glim_localization_ros2/config/r1; a relative launch argument is taken from the current directory). The map path is
 # odometry_estimation.map_path in the JSON config; the launch argument map_path sets it in a temporary copy.
 # Everything else (topics, frames, tf_mode, ~/map) is in the GLIM JSON files.
 #
 # The launch file reads this file itself (the /** section, then a glim_ros section if there is one) and passes the
-# values as `-p name:=value`: glim_rosbag would take a --params-file path for a bag. Plain values only (no lists).
+# values as typed `-p name:=value` (launch/launch_utils.py): glim_rosbag would take a --params-file path for a bag.
+# Strings stay strings (also "", "123" or "true"), integers of the double parameters below become doubles, and lists
+# of one type are passed; nested mappings are rejected. Other node names in this file are ignored.
 /**:
   ros__parameters:
     # GlimROS: verbose logging, also to the fixed file /tmp/glim_log.log
