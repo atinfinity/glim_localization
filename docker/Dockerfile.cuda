@@ -1,3 +1,6 @@
+# check=skip=SecretsUsedInArgOrEnv;error=true
+# (Build checks: the *_KEY_FPR arguments are public key fingerprints, not secrets. CI runs
+# `docker build --check` on this file, and any other warning fails it.)
 # Headless development image with CUDA: Ubuntu 24.04 + ROS 2 Jazzy + CUDA 13.1, amd64 only.
 # The CPU image (docker/Dockerfile) stays the default. This file is a copy of it with the CUDA changes
 # marked "CUDA:"; keep the shared parts in sync (scripts/tests/test_dockerfile_cuda.py checks the pins).
