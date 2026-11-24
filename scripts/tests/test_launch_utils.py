@@ -87,6 +87,12 @@ def test_ros_arguments_and_params_file_priority():
     assert lu.params_from_yaml(None) == {}
 
 
+@pytest.mark.parametrize("text", ["glim_ros: 5\n", "/**:\n  ros__parameters: [1]\n", "/glim_ros: [a]\n"])
+def test_params_file_node_sections_must_be_mappings(text):
+    with pytest.raises(ValueError, match="must be a mapping with a ros__parameters mapping"):
+        lu.params_from_yaml(yaml.safe_load(text))
+
+
 # --- JSON with comments -----------------------------------------------------------------------------------------
 
 

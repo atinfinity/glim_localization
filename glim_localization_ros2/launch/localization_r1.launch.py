@@ -26,8 +26,7 @@ import tempfile
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, OpaqueFunction, RegisterEventHandler
-from launch.event_handlers import OnShutdown
+from launch.actions import DeclareLaunchArgument, OpaqueFunction
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
@@ -51,14 +50,14 @@ RVIZ_REMAPPINGS = [(f"/glim_localization/{topic}", f"/glim_ros/{topic}") for top
 
 
 def launch_setup(context):
-    actions = []
     config_path = os.path.abspath(LaunchConfiguration("config_path").perform(context))
     map_path = LaunchConfiguration("map_path").perform(context)
     if map_path:
         work_dir = tempfile.mkdtemp(prefix="glim_localization_r1_")
-        # Removed at the launch shutdown, and at exit as a fallback (only a killed launch leaks it)
+        # Removed when the launch process exits, after it has reaped GLIM (which may still read the config while it
+        # shuts down). Not at the launch shutdown event: that fires when the processes are only being signalled.
+        # A killed launch leaks it.
         atexit.register(shutil.rmtree, work_dir, ignore_errors=True)
-        actions.append(RegisterEventHandler(OnShutdown(on_shutdown=lambda event, context: shutil.rmtree(work_dir, ignore_errors=True))))
         config_path = launch_utils.config_with_map(config_path, map_path, work_dir)
     bag = LaunchConfiguration("bag").perform(context)
     use_sim_time = to_bool(LaunchConfiguration("use_sim_time").perform(context))
@@ -75,7 +74,7 @@ def launch_setup(context):
         ros_arguments=launch_utils.to_ros_arguments(params),
         output="screen",
     )
-    return actions + [node] + rviz_actions(to_bool(LaunchConfiguration("rviz").perform(context)), use_sim_time, RVIZ_REMAPPINGS)
+    return [node] + rviz_actions(to_bool(LaunchConfiguration("rviz").perform(context)), use_sim_time, RVIZ_REMAPPINGS)
 
 
 def generate_launch_description():

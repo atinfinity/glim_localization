@@ -117,7 +117,11 @@ def params_from_yaml(content):
         raise ValueError("params_file must be a mapping of node names")
     params = {}
     for key in PARAMS_FILE_NODE_KEYS:
-        params.update((content.get(key) or {}).get("ros__parameters") or {})
+        node = content.get(key) or {}
+        node_params = node.get("ros__parameters") if isinstance(node, dict) else None
+        if not isinstance(node, dict) or not isinstance(node_params or {}, dict):
+            raise ValueError(f"params_file: '{key}' must be a mapping with a ros__parameters mapping")
+        params.update(node_params or {})
     return params
 
 

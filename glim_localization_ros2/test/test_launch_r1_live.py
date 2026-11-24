@@ -36,7 +36,7 @@ def generate_test_description():
         os.path.join(get_package_share_directory("glim_localization_ros2"), "config", "r1"), r2_helpers.require_env("GLIM_R1_MAP"), work_dir)
     params_file = os.path.join(work_dir, "params.yaml")
     with open(params_file, "w") as f:
-        # An empty string and a path: both must reach GlimROS as strings
+        # A quoted path that must reach GlimROS as a string, and a glim_ros section on top of /**
         f.write(f"/**:\n  ros__parameters:\n    dump_path: '{os.path.join(work_dir, 'dump')}'\nglim_ros:\n  ros__parameters:\n    debug: false\n")
     include = launch_file_helpers.include_launch("localization_r1.launch.py", {"config_path": config_dir, "map_path": "", "params_file": params_file})
     return launch.LaunchDescription([include, launch_testing.actions.ReadyToTest()]), {}
