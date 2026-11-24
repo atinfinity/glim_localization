@@ -6,6 +6,7 @@
 // LocalizationCallbacks::request_reset, and publishes the map that the odometry module loaded on ~/map (latched).
 // Settings come from the "localization_ros" section of config_ros.json (see config/r1/config_ros.json).
 #include <memory>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -52,9 +53,20 @@ public:
     const MapPublisherParams map_params = read_map_publisher_params(config);
     if (map_params.enabled) {
       if (const auto map = glim_localization::LocalizationCallbacks::loaded_map()) {
+        const auto tiles = map->tiles();
+        const size_t num_map_points = count_map_points(tiles);
+        if (map_params.voxel_size <= 0.0 && num_map_points > kLargeMapCloudPoints) {
+          spdlog::warn(
+            "[glim_localization] map_cloud_voxel is 0 and the map has {} points: ~/map is large and slow to build and send; set map_cloud_voxel",
+            num_map_points);
+        }
         map_publisher_ = std::make_unique<MapPublisher>(node.get_node_topics_interface(), node.get_clock(), params.map_frame, map_params.voxel_size);
-        const size_t num_points = map_publisher_->publish(map->tiles());
-        spdlog::info("[glim_localization] published ~/map: {} points from {} tiles (voxel {} m)", num_points, map->size(), map_params.voxel_size);
+        try {
+          const size_t num_points = map_publisher_->publish(tiles);
+          spdlog::info("[glim_localization] published ~/map: {} points from {} tiles (voxel {} m)", num_points, map->size(), map_params.voxel_size);
+        } catch (const std::length_error& e) {
+          spdlog::warn("[glim_localization] ~/map is not published: {}", e.what());
+        }
       } else {
         spdlog::warn("[glim_localization] no localization odometry is loaded, so ~/map is not published");
       }

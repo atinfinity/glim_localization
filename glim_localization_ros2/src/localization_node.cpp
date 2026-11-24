@@ -22,6 +22,7 @@
 #include <filesystem>
 #include <memory>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -212,12 +213,18 @@ public:
 private:
   void autostart() {
     autostart_timer_->cancel();
+    // Someone may have changed the state before the timer fired: then leave the node to them
+    const auto& start = get_current_state();
+    if (start.id() != lifecycle_msgs::msg::State::PRIMARY_STATE_UNCONFIGURED) {
+      RCLCPP_INFO(get_logger(), "autostart: skipped, the node is already %s", start.label().c_str());
+      return;
+    }
     if (rclcpp_lifecycle::LifecycleNode::configure().id() != lifecycle_msgs::msg::State::PRIMARY_STATE_INACTIVE) {
-      RCLCPP_ERROR(get_logger(), "autostart: configure failed; the node stays unconfigured");
+      RCLCPP_ERROR(get_logger(), "autostart: configure failed; the node is %s", get_current_state().label().c_str());
       return;
     }
     if (rclcpp_lifecycle::LifecycleNode::activate().id() != lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE) {
-      RCLCPP_ERROR(get_logger(), "autostart: activate failed; the node stays inactive");
+      RCLCPP_ERROR(get_logger(), "autostart: activate failed; the node is %s", get_current_state().label().c_str());
     }
   }
 
@@ -282,9 +289,20 @@ private:
     map_ = map;
     RCLCPP_INFO(get_logger(), "loaded the map '%s' (%zu tiles)", odometry_params_->map_path.c_str(), map_->size());
     if (map_publisher_params.enabled) {
+      const auto tiles = map_->tiles();
+      const size_t num_map_points = count_map_points(tiles);
+      if (map_publisher_params.voxel_size <= 0.0 && num_map_points > kLargeMapCloudPoints) {
+        RCLCPP_WARN(
+          get_logger(), "map_cloud_voxel is 0 and the map has %zu points: ~/map is large and slow to build and send; set map_cloud_voxel",
+          num_map_points);
+      }
       map_publisher_ = std::make_unique<MapPublisher>(get_node_topics_interface(), get_clock(), publisher_params_.map_frame, map_publisher_params.voxel_size);
-      const size_t num_points = map_publisher_->publish(map_->tiles());
-      RCLCPP_INFO(get_logger(), "published ~/map: %zu points (voxel %.3f m)", num_points, map_publisher_params.voxel_size);
+      try {
+        const size_t num_points = map_publisher_->publish(tiles);
+        RCLCPP_INFO(get_logger(), "published ~/map: %zu points (voxel %.3f m)", num_points, map_publisher_params.voxel_size);
+      } catch (const std::length_error& e) {
+        RCLCPP_WARN(get_logger(), "~/map is not published: %s", e.what());
+      }
     }
 
     initialize_srv_ = create_service<InitializeSrv>(

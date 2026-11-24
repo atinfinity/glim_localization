@@ -3,6 +3,7 @@
 
 #include <chrono>
 #include <cmath>
+#include <cstdint>
 #include <cstring>
 #include <limits>
 #include <memory>
@@ -97,6 +98,39 @@ TEST(MapCloud, RejectsABadVoxelSizeAndHandlesNoTiles) {
   const PointCloud2 empty = make_map_cloud({nullptr}, 0.5, "map");
   EXPECT_EQ(empty.width, 0u);
   EXPECT_TRUE(empty.data.empty());
+}
+
+TEST(MapCloud, SkipsNonFinitePointsWithoutDownsampling) {
+  const double nan = std::numeric_limits<double>::quiet_NaN();
+  const PointCloud2 msg = make_map_cloud({make_tile(0, translation(0.0, 0.0, 0.0), {{1.0, 0.0, 0.0}, {nan, 0.0, 0.0}, {2.0, 0.0, 0.0}})}, 0.0, "map");
+  ASSERT_EQ(msg.width, 2u);
+  EXPECT_EQ(msg.row_step, 24u);
+  EXPECT_EQ(msg.data.size(), 24u);
+  const auto points = read_points(msg);
+  EXPECT_TRUE(points[1].isApprox(Eigen::Vector3f(2.0f, 0.0f, 0.0f), 1e-6f));
+}
+
+TEST(MapCloud, RefusesACloudBeyondTheSizeLimit) {
+  using glim_localization_ros2::check_map_cloud_size;
+  using glim_localization_ros2::kMapCloudPointStep;
+  // The uint32 row_step of the message: 357913941 points of 12 bytes fit, one more does not, even with no byte cap
+  const size_t max_uint32_points = std::numeric_limits<uint32_t>::max() / kMapCloudPointStep;
+  const size_t no_cap = std::numeric_limits<size_t>::max();
+  EXPECT_NO_THROW(check_map_cloud_size(max_uint32_points, no_cap));
+  EXPECT_THROW(check_map_cloud_size(max_uint32_points + 1, no_cap), std::length_error);
+  EXPECT_THROW(check_map_cloud_size(no_cap, no_cap), std::length_error);
+  // The default 1 GiB cap
+  EXPECT_NO_THROW(check_map_cloud_size(glim_localization_ros2::kMaxMapCloudBytes / kMapCloudPointStep));
+  EXPECT_THROW(check_map_cloud_size(glim_localization_ros2::kMaxMapCloudBytes / kMapCloudPointStep + 1), std::length_error);
+
+  // make_map_cloud applies it, with and without downsampling (a small cap stands in for a huge map)
+  const auto tiles = {make_tile(0, translation(0.0, 0.0, 0.0), {{0.0, 0.0, 0.0}, {5.0, 0.0, 0.0}, {10.0, 0.0, 0.0}})};
+  EXPECT_THROW(make_map_cloud(tiles, 0.0, "map", 2 * kMapCloudPointStep), std::length_error);
+  EXPECT_THROW(make_map_cloud(tiles, 1.0, "map", 2 * kMapCloudPointStep), std::length_error);
+  EXPECT_EQ(make_map_cloud(tiles, 1.0, "map", 3 * kMapCloudPointStep).width, 3u);
+  EXPECT_EQ(make_map_cloud(tiles, 100.0, "map", 2 * kMapCloudPointStep).width, 1u);
+  EXPECT_EQ(glim_localization_ros2::count_map_points({tiles.begin(), tiles.end()}), 3u);
+  EXPECT_EQ(glim_localization_ros2::count_map_points({nullptr}), 0u);
 }
 
 class MapPublisherTest : public testing::Test {
