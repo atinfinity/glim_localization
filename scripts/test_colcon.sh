@@ -43,10 +43,19 @@ pkg_build="${base}/build/glim_localization_ros2"
 expected=(test_message_constants test_localization_publisher test_map_publisher test_gyro_buffer test_init_pose_delay)
 # Every launch test that must run (the file name without .py). Add the name of a new test here.
 expected_launch=(test_r1_extension test_r2_node test_r2_imu_gap test_launch_r1 test_launch_r1_live test_launch_r2 test_launch_r2_component)
+# Every ament linter test that must run (ament_lint_auto, see CONTRIBUTING.md), per package. cpplint_derived
+# is the cpplint run on the file derived from glim_ros2 (glim_localization_ros2/CMakeLists.txt). The
+# messages package has no C++ or Python sources, so only the linters of its CMake and XML files run there.
+lint_packages=(glim_localization_ros2 glim_localization_msgs)
+expected_lint_glim_localization_ros2=(copyright cppcheck cpplint cpplint_derived flake8 lint_cmake pep257 uncrustify xmllint)
+expected_lint_glim_localization_msgs=(copyright lint_cmake xmllint)
 
 # A build with BUILD_TESTING off registers no tests, and old results must not count.
-grep -q '^BUILD_TESTING:BOOL=ON$' "${pkg_build}/CMakeCache.txt" || { echo "FAIL: BUILD_TESTING is not ON in ${pkg_build}/CMakeCache.txt (run build_colcon.sh)" >&2; exit 1; }
-rm -rf "${pkg_build}/test_results" "${pkg_build}/Testing"
+for pkg in "${lint_packages[@]}"; do
+  cache="${base}/build/${pkg}/CMakeCache.txt"
+  grep -q '^BUILD_TESTING:BOOL=ON$' "${cache}" || { echo "FAIL: BUILD_TESTING is not ON in ${cache} (run build_colcon.sh)" >&2; exit 1; }
+  rm -rf "${base}/build/${pkg}/test_results" "${base}/build/${pkg}/Testing"
+done
 
 # Keep DDS discovery on this host, so that tests in other containers on one network do not meet.
 export ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST
@@ -55,8 +64,11 @@ export ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST
 # ROS_DOMAIN_ID that is already set, so it must not be set here.
 unset ROS_DOMAIN_ID
 jobs="${CTEST_JOBS:-$(nproc)}"
+# ament_cppcheck skips cppcheck 2.x (Jazzy: 2.13) for its run time unless this is set; it takes seconds here.
+export AMENT_CPPCHECK_ALLOW_SLOW_VERSIONS=1
 
-colcon --log-base "${base}/log" test "${paths[@]}" --packages-select glim_localization_ros2 --return-code-on-test-failure \
+# The linters fail the run on any finding, as the other tests do (--return-code-on-test-failure).
+colcon --log-base "${base}/log" test "${paths[@]}" --packages-select "${lint_packages[@]}" --return-code-on-test-failure \
   --event-handlers console_direct+ --ctest-args -j"${jobs}"
 colcon test-result --test-result-base "${base}/build" --verbose
 
@@ -76,6 +88,23 @@ for name in "${expected_launch[@]}"; do
   count="$(sed -n 's/.*<testsuite [^>]*tests="\([0-9]*\)".*/\1/p' "${xml}" | head -n 1)"
   [[ -n "${count}" && "${count}" -ge 1 ]] || { echo "FAIL: the launch test ${name} ran no test cases" >&2; exit 1; }
   echo "ok: ${name} ran ${count} test cases"
+done
+
+# Each expected linter must have written a result file in this run, with at least one test case and no
+# failure (colcon already fails on one; this also catches a linter that silently stopped running).
+for pkg in "${lint_packages[@]}"; do
+  names_var="expected_lint_${pkg}[@]"
+  for name in "${!names_var}"; do
+    xml="${base}/build/${pkg}/test_results/${pkg}/${name}.xunit.xml"
+    [[ -f "${xml}" ]] || { echo "FAIL: no result file for the linter ${name} of ${pkg} (${xml})" >&2; exit 1; }
+    # The ament linters write the attributes of <testsuite> on separate lines.
+    suite="$(tr '\n' ' ' < "${xml}" | sed -n 's/.*\(<testsuite[[:space:]][^>]*>\).*/\1/p')"
+    count="$(sed -n 's/.*[[:space:]]tests="\([0-9]*\)".*/\1/p' <<<"${suite}")"
+    failures="$(sed -n 's/.*[[:space:]]failures="\([0-9]*\)".*/\1/p' <<<"${suite}")"
+    [[ -n "${count}" && "${count}" -ge 1 ]] || { echo "FAIL: the linter ${name} of ${pkg} checked nothing" >&2; exit 1; }
+    [[ "${failures}" == 0 ]] || { echo "FAIL: the linter ${name} of ${pkg} has ${failures:-unknown} failures" >&2; exit 1; }
+    echo "ok: ${pkg} ${name} passed ${count} test cases"
+  done
 done
 
 echo "PASS: colcon test"

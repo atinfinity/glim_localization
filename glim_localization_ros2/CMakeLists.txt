@@ -87,6 +87,17 @@ install(TARGETS localization_publisher
 )
 
 if(BUILD_TESTING)
+  # ROS 2 code style (CONTRIBUTING.md): the linters of ament_lint_common (uncrustify, cpplint, cppcheck,
+  # lint_cmake, xmllint, flake8, pep257, copyright) on every file of the package. Their tests run at
+  # ament_package().
+  find_package(ament_lint_auto REQUIRED)
+  # src/localization_node.cpp is derived from glim_ros2 and starts with its provenance lines (CLAUDE.md),
+  # which are longer than 100 columns and must stay unchanged. cpplint checks that file in a test of its
+  # own (cpplint_derived) with every check but the line length; the other linters check it as usual.
+  set(ament_cmake_cpplint_ADDITIONAL_EXCLUDE src/localization_node.cpp)
+  ament_lint_auto_find_test_dependencies()
+  ament_cpplint(TESTNAME cpplint_derived FILTERS -whitespace/line_length src/localization_node.cpp)
+
   find_package(ament_cmake_gtest REQUIRED)
   # ROS isolation for parallel tests (colcon test passes ctest -j): each test that uses ROS runs through
   # run_test_isolated.py, which reserves a free ROS_DOMAIN_ID (1 to 100) for the time of the test. Unset
@@ -120,7 +131,8 @@ if(BUILD_TESTING)
   # Jazzy has no isolated launch test helper; add_launch_test passes RUNNER on to ament_add_test.
   find_package(launch_testing_ament_cmake REQUIRED)
   # test_launch_*: the installed launch files (launch/), headless (rviz:=false)
-  foreach(launch_test test_r1_extension test_r2_node test_r2_imu_gap test_launch_r1 test_launch_r1_live test_launch_r2 test_launch_r2_component)
+  foreach(launch_test test_r1_extension test_r2_node test_r2_imu_gap
+      test_launch_r1 test_launch_r1_live test_launch_r2 test_launch_r2_component)
     add_launch_test(test/${launch_test}.py TIMEOUT 300 RUNNER "${ros_isolated_runner}"
       ENV ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST)
   endforeach()
