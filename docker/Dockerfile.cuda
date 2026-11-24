@@ -85,6 +85,8 @@ RUN if [ "$(dpkg --print-architecture)" != amd64 ]; then \
 
 # Patches are applied on top of the pinned commit; GLIM itself stays unmodified upstream.
 COPY third_party/patches/glim/ /opt/glim_patches/
+# CUDA: patches for the GPU sources of GLIM only (GLIM 1a197c9 against gtsam_points 1.2.2; docs/PROGRESS.md).
+COPY third_party/patches/glim_cuda/ /opt/glim_cuda_patches/
 
 RUN mkdir -p /opt/glim_ws/src \
     && git clone https://github.com/koide3/glim.git /opt/glim_ws/src/glim \
@@ -93,6 +95,9 @@ RUN mkdir -p /opt/glim_ws/src \
     && test "$(git rev-parse HEAD)" = "${GLIM_COMMIT}" \
     && shopt -s nullglob \
     && for p in /opt/glim_patches/*.patch; do git apply "$p" || exit 1; done \
+    && cuda_patches=(/opt/glim_cuda_patches/*.patch) \
+    && test "${#cuda_patches[@]}" -gt 0 \
+    && for p in "${cuda_patches[@]}"; do git apply "$p" || exit 1; done \
     && cd /opt/glim_ws \
     && set +u && source /opt/ros/jazzy/setup.bash && set -u \
     && MAKEFLAGS="-j${JOBS}" colcon build \
