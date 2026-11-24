@@ -310,6 +310,31 @@ TEST_F(LocalizationOdometryGPUTest, WaitsForInitialPoseThenConverges) {
   EXPECT_EQ(odometry.status().reset_count, 2);
 }
 
+TEST_F(LocalizationOdometryGPUTest, YawSearchCorrectsALargeYawError) {
+  SKIP_WITHOUT_GPU();
+  // The search scores with CPU factors in the GPU module too; then the GPU odometry starts from the registered pose
+  Eigen::Isometry3d init = synthetic_T_world_imu(0.0) * initial_error();
+  init.linear() = Eigen::AngleAxisd(75.0 * M_PI / 180.0, Eigen::Vector3d::UnitZ()).toRotationMatrix() * init.linear();
+  auto params = params_at(init);
+  params.map_factors.num_threads = 2;
+  params.init_yaw_search.enabled = true;
+  params.init_yaw_search.range = M_PI;
+  params.init_yaw_search.step = 15.0 * M_PI / 180.0;
+  params.init_yaw_search.time_budget = 30.0;  // Not the subject here; a loaded CI machine must not cut the search short
+  OdometryEstimationLocalizationGPU odometry(params, *map_);
+
+  const auto result = run(odometry);
+  const auto status = odometry.status();
+  print("gpu, yaw search", result, status);
+  std::cout << "gpu, yaw search: " << status.init_search_candidates << " of " << status.init_search_candidates_total << " candidates in "
+            << status.init_search_time * 1e3 << " ms, score " << status.init_search_score << ", runner-up " << status.init_search_runner_up_score << std::endl;
+  EXPECT_EQ(status.init_search, InitSearchResult::ACCEPTED);
+  EXPECT_EQ(status.init_search_candidates, 24);
+  EXPECT_EQ(status.init_search_candidates_total, 24);
+  EXPECT_NEAR(status.init_search_yaw_offset * 180.0 / M_PI, -78.0, 2.0);  // 75 deg plus the 3 deg of initial_error()
+  EXPECT_EQ(status.state, LocalizationState::TRACKING) << to_string(status.state);
+}
+
 TEST_F(LocalizationOdometryGPUTest, RejectsTooFewGpuTiles) {
   auto params = params_at(Eigen::Isometry3d::Identity());
   params.map_gpu_max_tiles = params.map_factors.max_submaps - 1;

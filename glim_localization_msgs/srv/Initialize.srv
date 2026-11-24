@@ -18,4 +18,6 @@ bool success
 # Human-readable result, including the reason when success is false.
 string message
 # Confidence of the accepted pose in [0, 1]; 0 when success is false or no score is available.
+# The pose is applied at the next frame, so the result of the initial pose yaw search (init_yaw_search) is not
+# known here: it is reported on ~/status (init_search, init_search_score).
 float64 score
