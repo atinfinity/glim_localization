@@ -11,12 +11,14 @@
 
 #include <gtsam/geometry/Pose3.h>
 #include <gtsam/inference/Symbol.h>
+#include <gtsam/linear/GaussianFactorGraph.h>
 #include <gtsam/nonlinear/Values.h>
 
 #include <gtsam_points/cuda/cuda_stream.hpp>
 #include <gtsam_points/cuda/nonlinear_factor_set_gpu.hpp>
 #include <gtsam_points/cuda/stream_temp_buffer_roundrobin.hpp>
 #include <gtsam_points/factors/integrated_vgicp_factor_gpu.hpp>
+#include <gtsam_points/optimizers/incremental_fixed_lag_smoother_with_fallback.hpp>
 #include <gtsam_points/types/gaussian_voxelmap_gpu.hpp>
 #include <gtsam_points/types/point_cloud_cpu.hpp>
 #include <gtsam_points/types/point_cloud_gpu.hpp>
