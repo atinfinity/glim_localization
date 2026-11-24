@@ -4,6 +4,7 @@
 #include <functional>
 #include <iterator>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -11,6 +12,8 @@
 #include <nlohmann/json.hpp>
 #include <sys/wait.h>
 #include <unistd.h>
+
+#include <gtsam_points/features/covariance_estimation.hpp>
 
 #include <glim_localization/map/map_io.hpp>
 #include <glim_localization/map/map_manager.hpp>
@@ -109,6 +112,75 @@ TEST_F(MapCompilerTest, CompiledMapCanBeCompiledAgain) {
   ASSERT_TRUE(load_map((dir_ / "again").string(), second));
   ASSERT_EQ(first.size(), second.size());
   EXPECT_LT((first[2].T_world_origin.matrix() - second[2].T_world_origin.matrix()).cwiseAbs().maxCoeff(), 1e-9);
+}
+
+TEST_F(MapCompilerTest, KeepsDumpCovariancesByDefault) {
+  ASSERT_EQ(compile(input_, output_), 0) << last_log();
+  LoadedSubmaps dump, compiled;
+  ASSERT_TRUE(load_map(input_.string(), dump));
+  ASSERT_TRUE(load_map(output_.string(), compiled));
+  ASSERT_EQ(compiled.size(), dump.size());
+  for (size_t i = 0; i < dump.size(); i++) {
+    ASSERT_EQ(compiled[i].points->size(), dump[i].points->size());
+    ASSERT_TRUE(compiled[i].points->has_covs());
+    for (size_t j = 0; j < dump[i].points->size(); j++) {
+      // Both are float files, so the covariances are copied exactly.
+      ASSERT_EQ(compiled[i].points->covs[j], dump[i].points->covs[j]) << i << " " << j;
+    }
+  }
+}
+
+TEST_F(MapCompilerTest, RecomputesCovariancesForDumpAndCompiledInput) {
+  ASSERT_EQ(compile(input_, dir_ / "plain"), 0) << last_log();
+  // The synthetic dump has covariances from k = 10, so k = 20 must change them.
+  for (const fs::path& input : {input_, dir_ / "plain"}) {
+    fs::remove_all(output_);
+    ASSERT_EQ(compile(input, output_, "--recompute-covariances --k-neighbors 20"), 0) << input << ": " << last_log();
+    EXPECT_NE(last_log().find("recomputed the covariances"), std::string::npos) << last_log();
+    const auto index = nlohmann::json::parse(std::ifstream(output_ / "map_index.json"));
+    EXPECT_EQ(index.at("source"), "glim_dump");
+
+    LoadedSubmaps original, recomputed;
+    ASSERT_TRUE(load_map(input.string(), original));
+    ASSERT_TRUE(load_map(output_.string(), recomputed));
+    ASSERT_EQ(recomputed.size(), original.size());
+    size_t changed = 0;
+    for (size_t i = 0; i < original.size(); i++) {
+      EXPECT_LT((recomputed[i].T_world_origin.matrix() - original[i].T_world_origin.matrix()).cwiseAbs().maxCoeff(), 1e-9);
+      const auto& points = *original[i].points;
+      ASSERT_EQ(recomputed[i].points->size(), points.size());
+      const auto expected = gtsam_points::estimate_covariances(points.points, points.size(), 20, 1);
+      for (size_t j = 0; j < points.size(); j++) {
+        ASSERT_EQ(recomputed[i].points->points[j], points.points[j]);
+        // Stored as floats
+        ASSERT_LT((recomputed[i].points->covs[j] - expected[j]).cwiseAbs().maxCoeff(), 1e-5) << i << " " << j;
+        changed += (recomputed[i].points->covs[j] - points.covs[j]).cwiseAbs().maxCoeff() > 1e-3;
+      }
+    }
+    EXPECT_GT(changed, 0u) << input;
+  }
+
+  // The default k is 10, as in the synthetic dump.
+  fs::remove_all(output_);
+  ASSERT_EQ(compile(input_, output_, "--recompute-covariances"), 0) << last_log();
+  EXPECT_NE(last_log().find("k_neighbors 10"), std::string::npos) << last_log();
+}
+
+TEST_F(MapCompilerTest, RejectsBadRecomputeCovariancesOptions) {
+  const fs::path pcd = dir_ / "cloud.pcd";
+  write_synthetic_pcd(pcd.string(), make_synthetic_world_points(params_), PcdEncoding::Binary);
+  for (const auto& [input, options, message] : std::vector<std::tuple<fs::path, std::string, std::string>>{
+         {pcd, "--recompute-covariances", "--recompute-covariances applies only to a GLIM dump or a compiled map"},
+         {pcd, "--k-neighbors 12 --recompute-covariances", "--recompute-covariances applies only to a GLIM dump or a compiled map"},
+         {input_, "--k-neighbors 12", "--k-neighbors applies to a GLIM dump or a compiled map only with --recompute-covariances"},
+         {input_, "--recompute-covariances --k-neighbors 4", "k_neighbors 4 must be at least 5"},
+         {input_, "--recompute-covariances --k-neighbors 0", "invalid value for --k-neighbors"},
+         {input_, "--recompute-covariances --grid-size 10", "--grid-size and --voxel-size apply only to .pcd and .ply input"},
+         {input_, "--recompute-covariances --k-neighbors", "missing value for --k-neighbors"}}) {
+    EXPECT_EQ(compile(input, output_, options), 1) << options;
+    EXPECT_FALSE(fs::exists(output_)) << options;
+    EXPECT_NE(last_log().find(message), std::string::npos) << options << ": " << last_log();
+  }
 }
 
 TEST_F(MapCompilerTest, DirectoryNamedPcdIsAMap) {

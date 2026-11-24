@@ -22,6 +22,10 @@ void print_usage() {
             << "  --grid-size <m>    tile edge along x and y, at least 1 (default 20)\n"
             << "  --voxel-size <m>   voxel grid downsampling before tiling, 0 disables it, otherwise at least 0.01 (default 0)\n"
             << "  --k-neighbors <n>  neighbours for covariance estimation, 5 to 1000 (default 10)\n"
+            << "options for a GLIM dump or a compiled map:\n"
+            << "  --recompute-covariances  re-estimate the per-point covariances from the k nearest neighbours within each\n"
+            << "                           submap, as for .pcd and .ply input (default off: keep the stored ones)\n"
+            << "  --k-neighbors <n>        with --recompute-covariances: neighbours, 5 to 1000 (default 10)\n"
             << "2D occupancy grid for Nav2 (any input; map_server PGM + YAML, heights in the map frame):\n"
             << "  --occupancy-grid <prefix>       write <prefix>.pgm and <prefix>.yaml\n"
             << "  --occupancy-resolution <m>      cell edge, at least 0.01 (default 0.05)\n"
@@ -80,10 +84,17 @@ int main(int argc, char** argv) {
   params.num_threads = std::max(1u, std::thread::hardware_concurrency());
   glim_localization::OccupancyGridParams grid_params;
   std::string grid_prefix;
-  bool has_cloud_options = false;
+  bool recompute_covariances = false;
+  bool has_k_neighbors = false;
+  bool has_tiling_options = false;  // --grid-size or --voxel-size
   bool has_grid_options = false;
   for (int i = 3; i < argc; i += 2) {
     const std::string option = argv[i];
+    if (option == "--recompute-covariances") {
+      recompute_covariances = true;
+      i--;  // A flag without a value
+      continue;
+    }
     if (i + 1 >= argc) {
       std::cerr << "missing value for " << option << std::endl;
       print_usage();
@@ -115,7 +126,13 @@ int main(int argc, char** argv) {
       std::cerr << "invalid value for " << option << ": " << value << std::endl;
       return 1;
     }
-    (option.rfind("--occupancy-", 0) == 0 ? has_grid_options : has_cloud_options) = true;
+    if (option.rfind("--occupancy-", 0) == 0) {
+      has_grid_options = true;
+    } else if (option == "--k-neighbors") {
+      has_k_neighbors = true;
+    } else {
+      has_tiling_options = true;
+    }
   }
 
   // Check the outputs and everything about the occupancy grid before the slow part, and build the grid before writing
@@ -154,6 +171,12 @@ int main(int argc, char** argv) {
   std::string source = "glim_dump";
   const std::string format = point_cloud_format(input);
   if (!format.empty()) {
+    if (recompute_covariances) {
+      std::cerr << "--recompute-covariances applies only to a GLIM dump or a compiled map; .pcd and .ply input always estimates "
+                   "covariances (set k with --k-neighbors)"
+                << std::endl;
+      return 1;
+    }
     if (const std::string error = glim_localization::check_pcd_map_params(params); !error.empty()) {
       std::cerr << "invalid options: " << error << std::endl;
       return 1;
@@ -171,12 +194,24 @@ int main(int argc, char** argv) {
     }
     source = format;
   } else {
-    if (has_cloud_options) {
-      std::cerr << "--grid-size, --voxel-size and --k-neighbors apply only to .pcd and .ply input" << std::endl;
+    if (has_tiling_options) {
+      std::cerr << "--grid-size and --voxel-size apply only to .pcd and .ply input" << std::endl;
+      return 1;
+    }
+    if (has_k_neighbors && !recompute_covariances) {
+      std::cerr << "--k-neighbors applies to a GLIM dump or a compiled map only with --recompute-covariances" << std::endl;
+      return 1;
+    }
+    if (recompute_covariances && params.k_neighbors < glim_localization::kMinPcdKNeighbors) {
+      std::cerr << "invalid options: k_neighbors " << params.k_neighbors << " must be at least " << glim_localization::kMinPcdKNeighbors << std::endl;
       return 1;
     }
     if (!glim_localization::load_map(input, submaps)) {
       spdlog::error("failed to load {}", input);
+      return 1;
+    }
+    if (recompute_covariances && !glim_localization::recompute_covariances(submaps, params.k_neighbors, params.num_threads)) {
+      spdlog::error("failed to recompute the covariances of {}", input);
       return 1;
     }
   }
