@@ -492,5 +492,5 @@ First step of #2: a CUDA build environment. There is no GPU odometry module yet.
   - `scripts/docker_run.sh --cuda scripts/ci.sh` passes in 276 s: dependency check, core ctest 220/220 (including `GpuSmoke.ListsDevices` 0.23 s and `GpuSmoke.BuildsGaussianVoxelMapGPU` 0.84 s, run with `GLIM_LOC_REQUIRE_GPU=1`), colcon test 12/12, Python tests 182, replay e2e.
   - The same image without `--gpus`: both GPU tests are reported as skipped and ctest passes. With `GLIM_LOC_REQUIRE_GPU=1` both fail.
   - Two image builds failed early on transient DNS errors resolving github.com on that machine; a retry passed. The build time is not recorded because later builds reused cached layers.
-- **CPU path**: `scripts/ci_local.sh --force` on the development Mac passes.
+- **CPU path**: `scripts/ci_local.sh --force` on the development Mac passes. One of three runs failed in `test_launch_r2_component` (71 poses for 121 frames, below the 90% bound); the next run on the same tree passed. That test does not change here, so it is a timing flake under load, not a CUDA change.
 - **Remaining for #2**: the GPU localization odometry module (`odometry_localization_gpu`), `GaussianVoxelMapGPU` tiles in MapManager, GPU memory management (LRU and prefetch), GPU replay evaluation and the CPU vs GPU comparison.
