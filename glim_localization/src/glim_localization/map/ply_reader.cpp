@@ -22,6 +22,9 @@ static_assert(__BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__, "binary PLY reading ass
 /// Vertices decoded per read in the fixed-size binary path
 constexpr size_t kBinaryChunkVertices = 1 << 16;
 
+/// Longest accepted header. Real headers are a few hundred bytes; this stops a non-PLY file from being read as one huge line.
+constexpr size_t kMaxHeaderBytes = 64 * 1024;
+
 struct PlyType {
   size_t size = 0;
   bool is_float = false;
@@ -86,8 +89,25 @@ std::optional<PlyType> parse_type(const std::string& name) {
 
 /// Reads up to and including the end_header line, leaving `ifs` at the first data byte.
 bool read_header(std::ifstream& ifs, const std::string& path, PlyHeader& header) {
+  // Read byte by byte so that a header without newlines cannot grow past the limit.
+  size_t header_bytes = 0;
+  bool too_long = false;
   const auto next_line = [&](std::string& line) {
-    if (!std::getline(ifs, line)) {
+    line.clear();
+    char c;
+    bool any = false;
+    while (ifs.get(c)) {
+      any = true;
+      if (++header_bytes > kMaxHeaderBytes) {
+        too_long = true;
+        return false;
+      }
+      if (c == '\n') {
+        break;
+      }
+      line.push_back(c);
+    }
+    if (!any) {
       return false;
     }
     if (!line.empty() && line.back() == '\r') {
@@ -98,6 +118,10 @@ bool read_header(std::ifstream& ifs, const std::string& path, PlyHeader& header)
 
   std::string line;
   if (!next_line(line) || line != "ply") {
+    if (too_long) {
+      spdlog::error("the PLY header of {} is longer than {} bytes", path, kMaxHeaderBytes);
+      return false;
+    }
     spdlog::error("{} is not a PLY file (the first line must be \"ply\")", path);
     return false;
   }
@@ -182,6 +206,10 @@ bool read_header(std::ifstream& ifs, const std::string& path, PlyHeader& header)
     }
   }
 
+  if (too_long) {
+    spdlog::error("the PLY header of {} is longer than {} bytes", path, kMaxHeaderBytes);
+    return false;
+  }
   if (!end_header) {
     spdlog::error("no end_header in {}", path);
     return false;
@@ -462,15 +490,17 @@ bool read_ascii(std::ifstream& ifs, const std::string& path, const PlyHeader& he
         t += 1 + static_cast<size_t>(*count);
         continue;
       }
+      // Every scalar must be a number, not only x, y and z, so that a shifted or garbled line is caught.
+      const std::string& text = tokens[t];
+      char* end = nullptr;
+      const double value = std::strtod(text.c_str(), &end);
+      if (end != text.c_str() + text.size()) {
+        spdlog::error("invalid value {} at vertex {} in {}", text, i, path);
+        return false;
+      }
       for (int axis = 0; axis < 3; axis++) {
         if (header.xyz[axis] == static_cast<int>(j)) {
-          const std::string& text = tokens[t];
-          char* end = nullptr;
-          p[axis] = std::strtod(text.c_str(), &end);
-          if (end != text.c_str() + text.size()) {
-            spdlog::error("invalid value {} at vertex {} in {}", text, i, path);
-            return false;
-          }
+          p[axis] = value;
         }
       }
       t++;

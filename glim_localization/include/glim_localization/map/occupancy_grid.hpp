@@ -19,7 +19,9 @@ constexpr int8_t kOccupancyOccupied = 100;
 
 /// Bounds of OccupancyGridParams
 constexpr double kMinOccupancyResolution = 0.01;
-constexpr size_t kMaxOccupancyCells = size_t(1) << 30;  ///< One byte per cell in memory and in the PGM
+/// Largest grid: 2^30 cells, for example 1.6 x 1.6 km at 0.05 m. The build needs one byte per cell (one buffer), and the
+/// PGM is one byte per cell.
+constexpr size_t kMaxOccupancyCells = size_t(1) << 30;
 
 /// How a 3D map becomes a 2D occupancy grid. Heights are map-frame z.
 /// A cell is occupied if it holds a point with z_min <= z < z_max, otherwise free if it holds a point with
@@ -44,6 +46,10 @@ struct OccupancyGrid {
 /// Empty if `params` is valid, otherwise a message that names the bad parameter.
 std::string check_occupancy_grid_params(const OccupancyGridParams& params);
 
+/// Empty if `prefix` can name the grid files, otherwise a message. The file name part must be non-empty, not "." or
+/// "..", and free of control characters (it is written into the YAML as `image`).
+std::string check_occupancy_grid_prefix(const std::string& prefix);
+
 /// Project the map's points (in the map frame) onto a grid. Cell edges are multiples of the resolution, and the
 /// grid covers the x, y extent of the points below z_max. Fails if there are no such points or the grid would
 /// exceed kMaxOccupancyCells. On failure, `grid` is unchanged.
@@ -51,7 +57,7 @@ bool build_occupancy_grid(const LoadedSubmaps& submaps, const OccupancyGridParam
 
 /// Write `<prefix>.pgm` and `<prefix>.yaml` in the map_server format (trinary, negate 0): occupied cells are 0,
 /// free cells 254 and unknown cells 205; the top PGM row is the highest y. Parent directories are created.
-/// Fails without writing if either file exists.
+/// Fails without writing if either file exists or check_occupancy_grid_prefix rejects `prefix`.
 bool save_occupancy_grid(const std::string& prefix, const OccupancyGrid& grid);
 
 /// The files save_occupancy_grid writes for `prefix`

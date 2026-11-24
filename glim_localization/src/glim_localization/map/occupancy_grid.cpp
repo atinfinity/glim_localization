@@ -23,10 +23,36 @@ constexpr double kFreeThresh = 0.1;
 /// Cell indices are int64, so keep coordinates far inside its range.
 constexpr double kMaxCell = 1e15;
 
-constexpr uint8_t kSeenBelow = 1;
-constexpr uint8_t kSeenInBand = 2;
+constexpr int8_t kSeenBelow = 1;
+constexpr int8_t kSeenInBand = 2;
+
+/// A YAML double-quoted scalar. check_occupancy_grid_prefix rules out control characters, so only \ and " need escaping.
+std::string yaml_quoted(const std::string& text) {
+  std::string quoted = "\"";
+  for (const char c : text) {
+    if (c == '\\' || c == '"') {
+      quoted.push_back('\\');
+    }
+    quoted.push_back(c);
+  }
+  quoted.push_back('"');
+  return quoted;
+}
 
 }  // namespace
+
+std::string check_occupancy_grid_prefix(const std::string& prefix) {
+  const std::string name = std::filesystem::path(prefix).filename().string();
+  if (name.empty() || name == "." || name == "..") {
+    return fmt::format("occupancy grid prefix \"{}\" has no file name (for example out/map writes out/map.pgm and out/map.yaml)", prefix);
+  }
+  for (const char c : name) {
+    if (static_cast<unsigned char>(c) < 0x20 || c == 0x7f) {
+      return fmt::format("occupancy grid prefix \"{}\" has a control character in its file name", prefix);
+    }
+  }
+  return "";
+}
 
 std::string check_occupancy_grid_params(const OccupancyGridParams& params) {
   // The negated comparisons also reject NaN.
@@ -102,34 +128,35 @@ bool build_occupancy_grid(const LoadedSubmaps& submaps, const OccupancyGridParam
     return false;
   }
 
-  std::vector<uint8_t> seen(width * height, 0);
-  for_each_point([&](const Eigen::Vector3d& p) {
-    const auto [x, y] = cell_of(p);
-    seen[static_cast<size_t>(y - min_y) * width + static_cast<size_t>(x - min_x)] |= p.z() < params.z_min ? kSeenBelow : kSeenInBand;
-    return true;
-  });
-
   OccupancyGrid result;
   result.resolution = params.resolution;
   result.origin = Eigen::Vector2d(static_cast<double>(min_x), static_cast<double>(min_y)) * params.resolution;
   result.width = static_cast<int>(width);
   result.height = static_cast<int>(height);
-  result.data.resize(seen.size());
+
+  // One buffer (one byte per cell): first the seen flags, then the cell values in place.
+  std::vector<int8_t>& cells = result.data;
+  cells.assign(width * height, 0);
+  for_each_point([&](const Eigen::Vector3d& p) {
+    const auto [x, y] = cell_of(p);
+    cells[static_cast<size_t>(y - min_y) * width + static_cast<size_t>(x - min_x)] |= p.z() < params.z_min ? kSeenBelow : kSeenInBand;
+    return true;
+  });
   size_t num_occupied = 0, num_free = 0;
-  for (size_t i = 0; i < seen.size(); i++) {
-    if (seen[i] & kSeenInBand) {
-      result.data[i] = kOccupancyOccupied;
+  for (int8_t& cell : cells) {
+    if (cell & kSeenInBand) {
+      cell = kOccupancyOccupied;
       num_occupied++;
-    } else if (seen[i] & kSeenBelow) {
-      result.data[i] = kOccupancyFree;
+    } else if (cell & kSeenBelow) {
+      cell = kOccupancyFree;
       num_free++;
     } else {
-      result.data[i] = kOccupancyUnknown;
+      cell = kOccupancyUnknown;
     }
   }
 
   spdlog::info("occupancy grid {} x {} cells of {} m: {} occupied, {} free, {} unknown", result.width, result.height, result.resolution,
-               num_occupied, num_free, seen.size() - num_occupied - num_free);
+               num_occupied, num_free, cells.size() - num_occupied - num_free);
   grid = std::move(result);
   return true;
 }
@@ -146,6 +173,10 @@ bool save_occupancy_grid(const std::string& prefix, const OccupancyGrid& grid) {
   namespace fs = std::filesystem;
   const fs::path pgm_path = occupancy_grid_pgm_path(prefix);
   const fs::path yaml_path = occupancy_grid_yaml_path(prefix);
+  if (const std::string error = check_occupancy_grid_prefix(prefix); !error.empty()) {
+    spdlog::error("{}", error);
+    return false;
+  }
   if (grid.width <= 0 || grid.height <= 0 || grid.data.size() != static_cast<size_t>(grid.width) * grid.height) {
     spdlog::error("invalid occupancy grid ({} x {}, {} cells)", grid.width, grid.height, grid.data.size());
     return false;
@@ -195,6 +226,7 @@ bool save_occupancy_grid(const std::string& prefix, const OccupancyGrid& grid) {
   }
   {
     // Fixed notation keeps every number a YAML float (an exponent without a dot is a string in YAML 1.1).
+    // The image name is quoted, so names such as "1.5", "true", "a: b" or "#x" stay strings.
     std::ofstream ofs(yaml_tmp, std::ios::trunc);
     ofs << fmt::format(
       "image: {}\n"
@@ -204,7 +236,7 @@ bool save_occupancy_grid(const std::string& prefix, const OccupancyGrid& grid) {
       "negate: 0\n"
       "occupied_thresh: {}\n"
       "free_thresh: {}\n",
-      pgm_path.filename().string(), grid.resolution, grid.origin.x(), grid.origin.y(), kOccupiedThresh, kFreeThresh);
+      yaml_quoted(pgm_path.filename().string()), grid.resolution, grid.origin.x(), grid.origin.y(), kOccupiedThresh, kFreeThresh);
     if (!ofs.flush()) {
       spdlog::error("failed to write {}", yaml_tmp.string());
       cleanup();

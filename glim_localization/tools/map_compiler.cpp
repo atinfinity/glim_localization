@@ -118,10 +118,23 @@ int main(int argc, char** argv) {
     (option.rfind("--occupancy-", 0) == 0 ? has_grid_options : has_cloud_options) = true;
   }
 
-  // Check everything about the occupancy grid before the slow part, and build it before writing anything.
+  // Check the outputs and everything about the occupancy grid before the slow part, and build the grid before writing
+  // anything. save_compiled_map checks the output again; this only fails early.
+  {
+    std::error_code ec;
+    const std::filesystem::path output_path(output);
+    if (std::filesystem::exists(output_path, ec) && (!std::filesystem::is_directory(output_path, ec) || !std::filesystem::is_empty(output_path, ec))) {
+      std::cerr << "output exists and is not an empty directory: " << output << std::endl;
+      return 1;
+    }
+  }
   if (has_grid_options) {
     if (grid_prefix.empty()) {
       std::cerr << "--occupancy-* options need --occupancy-grid <prefix>" << std::endl;
+      return 1;
+    }
+    if (const std::string error = glim_localization::check_occupancy_grid_prefix(grid_prefix); !error.empty()) {
+      std::cerr << "invalid options: " << error << std::endl;
       return 1;
     }
     if (const std::string error = glim_localization::check_occupancy_grid_params(grid_params); !error.empty()) {
@@ -182,7 +195,7 @@ int main(int argc, char** argv) {
 
   if (!grid_prefix.empty()) {
     if (!glim_localization::save_occupancy_grid(grid_prefix, grid)) {
-      spdlog::error("failed to write the occupancy grid {}", grid_prefix);
+      spdlog::error("failed to write the occupancy grid {}; the compiled map in {} was written and is complete", grid_prefix, output);
       return 1;
     }
     spdlog::info("wrote the occupancy grid {}", glim_localization::occupancy_grid_yaml_path(grid_prefix));
