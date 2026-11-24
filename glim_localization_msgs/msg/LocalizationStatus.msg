@@ -43,3 +43,49 @@ uint8 RESET_EXTERNAL=1
 # The node reset itself after an IMU gap.
 uint8 RESET_IMU_GAP=2
 uint8 last_reset_reason
+
+# Result of the search around the most recent pose given from outside (init_yaw_search in the odometry config).
+# Cleared by every reset; stays NONE when the search is disabled or the reset is not searched (relocalize, IMU gap).
+uint8 INIT_SEARCH_NONE=0
+# Every candidate was scored, the best reached the minimum inlier ratio, and it beat the runner-up by more than
+# the minimum score gap; the estimation started from its registered pose.
+uint8 INIT_SEARCH_ACCEPTED=1
+# The time budget ran out before every candidate was scored (init_search_candidates < init_search_candidates_total),
+# the best is below the minimum inlier ratio, or the runner-up is within the minimum score gap (ambiguous).
+# The state is LOST until a new pose is given.
+uint8 INIT_SEARCH_REJECTED=2
+uint8 init_search
+
+# Why the search rejected the given pose; NONE unless init_search is INIT_SEARCH_REJECTED.
+uint8 INIT_SEARCH_REASON_NONE=0
+# The time budget ran out before every candidate was scored.
+uint8 INIT_SEARCH_REASON_TRUNCATED=1
+# The best candidate is below the minimum inlier ratio.
+uint8 INIT_SEARCH_REASON_LOW_SCORE=2
+# The runner-up is within the minimum score gap of the best.
+uint8 INIT_SEARCH_REASON_AMBIGUOUS=3
+# There was no candidate to score.
+uint8 INIT_SEARCH_REASON_NO_CANDIDATE=4
+uint8 init_search_reason
+
+# Number of candidates scored before the time budget ran out.
+int32 init_search_candidates
+
+# Number of candidates generated. A search with init_search_candidates below it was cut short and is rejected.
+int32 init_search_candidates_total
+
+# Inlier ratio of the best candidate after registration, in [0, 1], also when rejected.
+float64 init_search_score
+
+# Yaw of the best candidate's registered pose relative to the given pose [rad], in [-pi, pi].
+float64 init_search_yaw_offset
+
+# Inlier ratio of the best candidate more than two search steps (at most 90 deg) away in yaw from the best, in [0, 1];
+# 0 if none.
+float64 init_search_runner_up_score
+
+# Its yaw relative to the given pose [rad], in [-pi, pi].
+float64 init_search_runner_up_yaw_offset
+
+# Wall-clock time of the search [s].
+float64 init_search_time

@@ -124,7 +124,7 @@ py scripts/evaluate.py --est /ws/out/run/traj_localization.txt --gt /ws/out/data
   --frames /ws/out/run/frames.csv --out /ws/out/run [--settle 3] [--max-trans 0.1] [--max-rot-deg 1] [--plot]
 ```
 
-- `--init-pose` is `T_world_imu`, the IMU pose in the map frame. The initial pose is applied exactly (there is no search), so it must be close to the true pose.
+- `--init-pose` is `T_world_imu`, the IMU pose in the map frame. The initial pose is applied exactly, so it must be close to the true pose, unless the [yaw search](ros2.md#initial-pose-yaw-search) is enabled in the config (it corrects the yaw, not the position).
 - `--acc-scale` is required when the accelerations look like units of g.
 - The replay exits with 0 when it succeeds. 1 is a runtime failure (including LOST or a low tracking ratio), 2 bad arguments, config, map or initial pose, 3 an invalid dataset (including IMU gaps), and 4 no pose.
 - Without a reference trajectory, skip step 3 and inspect `traj_localization.txt`, `frames.csv` and `summary.json`.
@@ -173,7 +173,7 @@ The node needs an initial pose of the base frame in the map frame; input frames 
 
 - or publish `/initialpose` (`geometry_msgs/PoseWithCovarianceStamped`), for example with the 2D Pose Estimate tool in RViz. `rviz:=true` starts `rviz2` with `rviz/localization.rviz` where `rviz2` is installed; the image has no RViz, so run RViz on another machine on the same ROS 2 network (see [Networking](#networking)).
 
-The pose is applied exactly, with no yaw search. Right after the node becomes active, the first messages can be missed, so prefer `~/initialize`, or resend `/initialpose`.
+With the shipped config the pose is applied exactly; enable the [yaw search](ros2.md#initial-pose-yaw-search) to correct a large yaw error. Right after the node becomes active, the first messages can be missed, so prefer `~/initialize`, or resend `/initialpose`.
 
 ### Play a recorded bag
 

@@ -75,15 +75,39 @@ Lifecycle: configure fails and leaves the node unconfigured on a missing config 
 | Name | Type | Notes |
 | --- | --- | --- |
 | points, imu (in) | `sensor_msgs/PointCloud2`, `sensor_msgs/Imu` | Topic names from `config_ros.json` |
-| `/initialpose` (in) | `geometry_msgs/PoseWithCovarianceStamped` | Base pose in the map frame, applied as given (no yaw search) |
+| `/initialpose` (in) | `geometry_msgs/PoseWithCovarianceStamped` | Base pose in the map frame. Applied as given, or refined by the [yaw search](#initial-pose-yaw-search) when it is enabled |
 | `~/pose` | `geometry_msgs/PoseWithCovarianceStamped` | Base pose in the map frame, LiDAR rate. Covariance is zero (not estimated) |
 | `~/odometry` | `nav_msgs/Odometry` | Pose and twist of the base |
 | `~/map` | `sensor_msgs/PointCloud2` | The loaded map in the map frame, published once, latched (reliable, transient local). One centroid per `map_cloud_voxel` (0.5 m) voxel; `publish_map: false` turns it off. Built once (R1: at node start, R2: at configure) at 12 bytes per point; with `map_cloud_voxel: 0` a map above 10 million points gets a warning, and a cloud above 1 GiB is not published |
-| `~/status` | `glim_localization_msgs/LocalizationStatus` | State, inlier ratio, tiles, map factors, residual, processing time, reset count and reason |
-| `/diagnostics` | `diagnostic_msgs/DiagnosticArray` | OK, WARN for DEGRADED, ERROR for LOST |
-| `~/initialize` (R2) | `glim_localization_msgs/srv/Initialize` | Sets the pose. `success` means accepted, applied at the next frame. `global_search=true` returns `success=false` ([#3](https://github.com/atinfinity/glim_localization/issues/3)) |
+| `~/status` | `glim_localization_msgs/LocalizationStatus` | State, inlier ratio, tiles, map factors, residual, processing time, reset count and reason, result of the initial pose search |
+| `/diagnostics` | `diagnostic_msgs/DiagnosticArray` | OK, WARN for DEGRADED, ERROR for LOST (the message says why the yaw search rejected the given pose) |
+| `~/initialize` (R2) | `glim_localization_msgs/srv/Initialize` | Sets the pose. `success` means accepted, applied at the next frame; the yaw search result comes later on `~/status`. `global_search=true` returns `success=false` ([#3](https://github.com/atinfinity/glim_localization/issues/3)) |
 | `~/relocalize` (R2) | `std_srvs/srv/Trigger` | Restarts from the newest estimate; refused unless TRACKING or DEGRADED with an estimate no older than `max_init_pose_delay` and no reset pending |
 
 States: `INITIALIZING` (started or reset) -> `TRACKING` -> `DEGRADED` (low inlier ratio, map weight lowered) -> `LOST` (left only by an external initialization). In LOST, no pose, odometry or `map->odom` is published; `odom->base_link` continues in `internal_odom`.
 
 `tf_mode` in `localization_ros`: `internal_odom` (default; publishes `map->odom` and `odom->base_link`), `external_odom` (publishes only `map->odom`, using `odom->base_link` from another source), `none` (no TF). Also set `base_frame_id` and `T_base_imu` there. Details are in [DESIGN 6](DESIGN.md#6-ros-2-support).
+
+## Initial pose yaw search
+
+A pose given from outside can have a large yaw error, for example from a 2D Pose Estimate click, and scan-to-map registration alone does not recover from one: on the synthetic map a 75 deg error ends 69 deg off while the state still says TRACKING. With `init_yaw_search: true`, the first scan after the pose is registered to the map from several yaw candidates around it, and the estimation starts from the registered pose with the highest inlier ratio.
+
+The search runs for the configured `init_T_world_imu`, `/initialpose`, `~/initialize` and the replay tool's `--init-pose`. It does not run for `~/relocalize` or for the self-reset after an IMU gap, which start from the estimate. Keys under `odometry_estimation` in `config_odometry_localization_cpu.json` (and the GPU config):
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `init_yaw_search` | `false` | Turn the search on |
+| `init_yaw_search_range_deg` | `180.0` | Candidates from -range to +range around the given yaw (180 covers the full turn) |
+| `init_yaw_search_step_deg` | `15.0` | Spacing of the candidates; 180 / 15 gives 24 candidates |
+| `init_yaw_search_min_inlier_ratio` | `0.7` | The best candidate must reach this inlier ratio (finest map voxels, after registration) |
+| `init_yaw_search_min_score_gap` | `0.05` | The best must beat the runner-up (the best candidate more than two steps, at most 90 deg, away in yaw) by more than this |
+| `init_yaw_search_time_budget` | `10.0` | Seconds for the whole search; a search cut short by it is rejected |
+| `init_yaw_search_max_iterations` | `10` | Levenberg-Marquardt iterations of each registration |
+| `init_yaw_search_min_points` | `100` | Frames with fewer points are dropped while the search is pending |
+
+The given pose is accepted only when all three hold: every candidate was scored within the time budget, the best reaches the minimum inlier ratio, and the runner-up is more than the minimum score gap below it. Otherwise it is rejected: the state goes to LOST, frames are dropped and nothing is published until a new pose is given. A truncated search is rejected because the candidates not scored could have been better or equally good; a close runner-up means the scene looks alike from two yaws (for example a symmetric room), so the search cannot choose. With the search range set to 0 only the given yaw is scored, which turns the search into a check of the given pose. The gap check needs candidates more than two steps (at most 90 deg) apart, so with range 0 or a small range only the minimum inlier ratio applies: a pose that registers well at a wrong yaw is then not caught by it.
+
+`~/status` reports the result (`init_search`: NONE, ACCEPTED or REJECTED), the reason for a rejection (`init_search_reason`: NONE, TRUNCATED, LOW_SCORE, AMBIGUOUS or NO_CANDIDATE), the candidates scored and generated (`init_search_candidates`, `init_search_candidates_total`), the best inlier ratio, the yaw correction applied [rad], the runner-up's inlier ratio and yaw, and the search time; `/diagnostics` (whose message gives the reason with the numbers that matter for it) and the replay `summary.json` (with `reason` and `truncated`) carry the same values.
+
+> [!NOTE]
+> The search runs on the first scan with enough points, in the estimation thread, so the first pose is published later by the search time. Scans that arrive meanwhile are queued. Measured on the synthetic data with 2 threads: about 30 ms per candidate on arm64 (24 candidates in about 0.8 s) and 70 to 80 ms per candidate on x86 (1.7 to 1.9 s), with the CPU module and with the GPU module on an RTX 2080 Ti (the search uses CPU factors in both). Real scans are larger and their timing is not measured; the 10 s default leaves room for that and for a loaded machine. If `init_search_candidates` is below `init_search_candidates_total`, raise the budget or narrow the range. Only the yaw is searched; position, roll and pitch come from the given pose and are refined by the registration.

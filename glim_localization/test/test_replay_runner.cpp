@@ -15,6 +15,7 @@
 #include <vector>
 
 #include <gtest/gtest.h>
+#include <nlohmann/json.hpp>
 #include <spdlog/sinks/base_sink.h>
 #include <spdlog/spdlog.h>
 #include <unistd.h>
@@ -723,6 +724,33 @@ TEST_F(ReplayRunnerTest, WritesOutputsIncrementally) {
   std::string first_line;
   std::getline(traj, first_line);
   EXPECT_EQ(first_line.substr(0, 12), "0.000000000 ");
+}
+
+TEST_F(ReplayRunnerTest, WriterReportsTheInitSearch) {
+  const fs::path out = *dir_ / "init_search";
+  ReplaySummary summary;
+  ReplaySummary::InitSearch search;
+  search.result = InitSearchResult::REJECTED;
+  search.reason = InitSearchReason::TRUNCATED;
+  search.candidates = 3;
+  search.candidates_total = 24;
+  search.score = 0.8;
+  search.yaw_offset = M_PI / 2.0;
+  search.runner_up_score = 0.4;
+  search.runner_up_yaw_offset = -M_PI / 2.0;
+  search.seconds = 10.0;
+  summary.init_search = search;
+  ReplayOutputWriter writer(out.string());
+  writer.write_summary(summary, 0.5);
+  const auto json = nlohmann::json::parse(std::ifstream(out / "summary.json"));
+  const auto& written = json.at("init_search");
+  EXPECT_EQ(written.at("result"), "REJECTED");
+  EXPECT_EQ(written.at("reason"), "TRUNCATED");
+  EXPECT_EQ(written.at("candidates"), 3);
+  EXPECT_EQ(written.at("candidates_total"), 24);
+  EXPECT_EQ(written.at("truncated"), true);
+  EXPECT_NEAR(written.at("yaw_offset_deg").get<double>(), 90.0, 1e-9);
+  EXPECT_NEAR(written.at("runner_up_yaw_offset_deg").get<double>(), -90.0, 1e-9);
 }
 
 TEST_F(ReplayRunnerTest, WriterRemovesStaleSummary) {
