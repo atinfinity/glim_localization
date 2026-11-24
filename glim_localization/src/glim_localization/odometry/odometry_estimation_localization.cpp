@@ -14,6 +14,7 @@
 #include <gtsam/nonlinear/ISAM2Params.h>
 
 #include <gtsam_points/optimizers/incremental_fixed_lag_smoother_with_fallback.hpp>
+#include <gtsam_points/types/point_cloud_cpu.hpp>
 
 #include <glim/common/cloud_covariance_estimation.hpp>
 #include <glim/common/cloud_deskewing.hpp>
@@ -23,6 +24,7 @@
 
 #include <glim_localization/odometry/imu_gap.hpp>
 #include <glim_localization/odometry/map_initial_state_estimation.hpp>
+#include <glim_localization/relocalization/candidate_search.hpp>
 
 namespace glim_localization {
 
@@ -40,7 +42,51 @@ const char* to_string(ResetReason reason) {
   return "UNKNOWN";
 }
 
+const char* to_string(InitSearchResult result) {
+  switch (result) {
+    case InitSearchResult::NONE:
+      return "NONE";
+    case InitSearchResult::ACCEPTED:
+      return "ACCEPTED";
+    case InitSearchResult::REJECTED:
+      return "REJECTED";
+  }
+  return "UNKNOWN";
+}
+
+const char* to_string(InitSearchReason reason) {
+  switch (reason) {
+    case InitSearchReason::NONE:
+      return "NONE";
+    case InitSearchReason::TRUNCATED:
+      return "TRUNCATED";
+    case InitSearchReason::LOW_SCORE:
+      return "LOW_SCORE";
+    case InitSearchReason::AMBIGUOUS:
+      return "AMBIGUOUS";
+    case InitSearchReason::NO_CANDIDATE:
+      return "NO_CANDIDATE";
+  }
+  return "UNKNOWN";
+}
+
 namespace {
+
+InitSearchReason to_init_search_reason(CandidateSearchOutcome outcome) {
+  switch (outcome) {
+    case CandidateSearchOutcome::ACCEPTED:
+      return InitSearchReason::NONE;
+    case CandidateSearchOutcome::NO_CANDIDATE:
+      return InitSearchReason::NO_CANDIDATE;
+    case CandidateSearchOutcome::TRUNCATED:
+      return InitSearchReason::TRUNCATED;
+    case CandidateSearchOutcome::LOW_SCORE:
+      return InitSearchReason::LOW_SCORE;
+    case CandidateSearchOutcome::AMBIGUOUS:
+      return InitSearchReason::AMBIGUOUS;
+  }
+  return InitSearchReason::NONE;
+}
 
 // IMU history kept before the first estimated frame, for the scan that starts it.
 constexpr double kImuHistoryWhileWaiting = 1.0;
@@ -113,6 +159,15 @@ OdometryEstimationLocalizationParams::OdometryEstimationLocalizationParams() {
   imu_gap_reset_max = config.param<double>(section, "imu_gap_reset_max", 0.5);
 
   use_keyframes = config.param<bool>(section, "use_keyframes", false);
+
+  init_yaw_search.enabled = config.param<bool>(section, "init_yaw_search", false);
+  init_yaw_search.range = config.param<double>(section, "init_yaw_search_range_deg", 180.0) * M_PI / 180.0;
+  init_yaw_search.step = config.param<double>(section, "init_yaw_search_step_deg", 15.0) * M_PI / 180.0;
+  init_yaw_search.min_inlier_ratio = config.param<double>(section, "init_yaw_search_min_inlier_ratio", 0.7);
+  init_yaw_search.min_score_gap = config.param<double>(section, "init_yaw_search_min_score_gap", 0.05);
+  init_yaw_search.time_budget = config.param<double>(section, "init_yaw_search_time_budget", 10.0);
+  init_yaw_search.max_iterations = config.param<int>(section, "init_yaw_search_max_iterations", 10);
+  init_yaw_search.min_points = config.param<int>(section, "init_yaw_search_min_points", 100);
 }
 
 OdometryEstimationLocalizationParams::~OdometryEstimationLocalizationParams() {}
@@ -124,6 +179,9 @@ OdometryEstimationLocalization::OdometryEstimationLocalization(std::unique_ptr<P
   auto init = std::make_unique<MapInitialStateEstimation>(p.T_lidar_imu, p.imu_bias);
   if (!p.estimate_init_state) {
     init->set_state(p.init_T_world_imu, p.init_v_world_imu);
+    init_search_pending_ = p.init_yaw_search.enabled;
+    init_hint_T_world_imu_ = p.init_T_world_imu;
+    init_hint_v_world_imu_ = p.init_v_world_imu;
   }
   init_estimation = std::move(init);
   if (!(p.degraded_weight_scale > 0.0)) {
@@ -137,6 +195,14 @@ OdometryEstimationLocalization::OdometryEstimationLocalization(std::unique_ptr<P
   if (!(p.max_imu_gap > 0.0) || !(p.imu_gap_reset_max >= 0.0)) {
     throw std::invalid_argument("max_imu_gap must be positive and imu_gap_reset_max must not be negative");
   }
+  const auto& search = p.init_yaw_search;
+  if (!(search.min_inlier_ratio >= 0.0 && search.min_inlier_ratio <= 1.0) || !(search.min_score_gap >= 0.0 && search.min_score_gap <= 1.0) || !(search.time_budget >= 0.0) ||
+      !std::isfinite(search.time_budget) || search.max_iterations < 1 || search.min_points < 1) {
+    throw std::invalid_argument(
+      "init_yaw_search_min_inlier_ratio and init_yaw_search_min_score_gap must be in [0, 1], init_yaw_search_time_budget finite and not negative, and "
+      "init_yaw_search_max_iterations and init_yaw_search_min_points positive");
+  }
+  candidate_generator_ = std::make_unique<YawCandidateGenerator>(search.range, search.step);  // Validates the range and step
 
   auto& registry = reset_registry();
   std::lock_guard<std::mutex> lock(registry.mutex);
@@ -198,6 +264,24 @@ glim::EstimationFrame::ConstPtr OdometryEstimationLocalization::insert_frame(
     trim_imu_queue(frame->stamp);
     // While lost or in a gap episode the window restarts at the next frame, so older stamps are not needed
     trim_imu_stamps(frame->stamp);
+    return nullptr;
+  }
+  if (init_search_pending_ && frames.empty() && frame->size() < localization_params().init_yaw_search.min_points) {
+    // Upstream would build the first frame from the unsearched pose even when it is empty, so the search would never
+    // run: keep it pending and wait for a frame that can be scored. Warned once per pending search.
+    if (!init_search_sparse_warned_) {
+      spdlog::warn("dropping the frame at {:.3f} s: {} points are too few for the initial pose search (init_yaw_search_min_points {}); later sparse frames are dropped silently until the search runs",
+        frame->stamp, frame->size(), localization_params().init_yaw_search.min_points);
+      init_search_sparse_warned_ = true;
+    }
+    trim_imu_queue(frame->stamp);
+    trim_imu_stamps(frame->stamp - kImuHistoryWhileWaiting);
+    return nullptr;
+  }
+  if (init_search_rejected_ || (init_search_pending_ && frames.empty() && !run_init_search(frame))) {
+    // The given pose was rejected: wait for another one, as before the first pose
+    trim_imu_queue(frame->stamp);
+    trim_imu_stamps(frame->stamp - kImuHistoryWhileWaiting);
     return nullptr;
   }
 
@@ -343,6 +427,76 @@ bool OdometryEstimationLocalization::handle_imu_gap(const glim::PreprocessedFram
   // Applies the self-reset, or the external reset that arrived first and won (see queue_reset)
   apply_pending_reset(frame->stamp);
   return frame->stamp < min_stamp_;
+}
+
+void OdometryEstimationLocalization::set_candidate_generator(std::unique_ptr<PoseCandidateGenerator> generator) {
+  if (!generator) {
+    throw std::invalid_argument("the candidate generator is null");
+  }
+  candidate_generator_ = std::move(generator);
+}
+
+bool OdometryEstimationLocalization::run_init_search(const glim::PreprocessedFrame::Ptr& raw_frame) {
+  const auto& p = localization_params();
+  init_search_pending_ = false;
+
+  // The first frame as upstream builds it (IMU frame, covariances from the preprocessed neighbors), without deskewing
+  const Eigen::Isometry3d T_imu_lidar = p.T_lidar_imu.inverse();
+  std::vector<Eigen::Vector4d> points_imu(raw_frame->size());
+  for (int i = 0; i < raw_frame->size(); i++) {
+    points_imu[i] = T_imu_lidar * raw_frame->points[i];
+  }
+  std::vector<Eigen::Vector4d> normals;
+  std::vector<Eigen::Matrix4d> covs;
+  covariance_estimation->estimate(points_imu, raw_frame->neighbors, normals, covs);
+  auto cloud = std::make_shared<gtsam_points::PointCloudCPU>(points_imu);
+  cloud->add_covs(covs);
+
+  CandidateQuery query;
+  query.hint = init_hint_T_world_imu_;
+  query.frame = cloud;
+  query.map = map_;
+  const PoseCandidates candidates = candidate_generator_->generate(query);
+
+  CandidateSearchParams search_params;
+  search_params.scorer.map_factors = p.map_factors;
+  search_params.scorer.max_iterations = p.init_yaw_search.max_iterations;
+  search_params.min_score = p.init_yaw_search.min_inlier_ratio;
+  search_params.min_score_gap = p.init_yaw_search.min_score_gap;
+  search_params.distinct_yaw = distinct_yaw_for_step(p.init_yaw_search.step);
+  search_params.time_budget = p.init_yaw_search.time_budget;
+  const CandidateSearchResult result = search_candidates(*map_, cloud, candidates, search_params);
+
+  {
+    std::lock_guard<std::mutex> lock(status_mutex_);
+    status_.init_search = result.accepted ? InitSearchResult::ACCEPTED : InitSearchResult::REJECTED;
+    status_.init_search_reason = to_init_search_reason(result.outcome);
+    status_.init_search_candidates = result.num_evaluated;
+    status_.init_search_candidates_total = result.num_candidates;
+    status_.init_search_score = result.best ? result.best->score : 0.0;
+    status_.init_search_yaw_offset = result.best ? result.best->yaw_offset : 0.0;
+    status_.init_search_runner_up_score = result.runner_up ? result.runner_up->score : 0.0;
+    status_.init_search_runner_up_yaw_offset = result.runner_up ? result.runner_up->yaw_offset : 0.0;
+    status_.init_search_time = result.elapsed;
+  }
+
+  if (!result.accepted) {
+    spdlog::error("initial pose search ({}) at {:.3f} s rejected the given pose: {}; the localization is lost until it is initialized again", candidate_generator_->name(), raw_frame->stamp, result.message);
+    init_search_rejected_ = true;
+    publish_lost();
+    return false;
+  }
+
+  spdlog::info("initial pose search ({}) at {:.3f} s: {}", candidate_generator_->name(), raw_frame->stamp, result.message);
+  // Start from the registered pose; the velocity turns with the yaw
+  const Eigen::Isometry3d& T = result.best->T_world_imu;
+  const Eigen::Matrix3d turn = T.linear() * init_hint_T_world_imu_.linear().transpose();
+  auto* init = dynamic_cast<MapInitialStateEstimation*>(init_estimation.get());
+  if (!init) {
+    throw std::logic_error("the initial state estimation is not a MapInitialStateEstimation");
+  }
+  init->set_state(T, turn * init_hint_v_world_imu_);
+  return true;
 }
 
 void OdometryEstimationLocalization::publish_lost() {
@@ -500,6 +654,13 @@ void OdometryEstimationLocalization::apply_pending_reset(double frame_stamp) {
   auto init = std::make_unique<MapInitialStateEstimation>(p.T_lidar_imu, imu_bias);
   init->set_state(pending->T_world_imu, pending->v_world_imu);
   init_estimation = std::move(init);
+
+  // Only a pose given from outside is searched: relocalize() and an IMU gap self-reset start from the estimate
+  init_search_pending_ = p.init_yaw_search.enabled && pending->reason == ResetReason::EXTERNAL && !pending->from_current;
+  init_search_rejected_ = false;
+  init_search_sparse_warned_ = false;
+  init_hint_T_world_imu_ = pending->T_world_imu;
+  init_hint_v_world_imu_ = pending->v_world_imu;
 
   quality_.reset();
   gap_pending_ = false;
