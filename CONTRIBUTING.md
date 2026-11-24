@@ -28,6 +28,39 @@ scripts/docker_run.sh scripts/ci.sh           # dependency check, build, all tes
 
 `scripts/ci.sh` is the same script that GitHub Actions runs. Each step (`scripts/build_core.sh`, `scripts/test_colcon.sh`, ...) can also be run alone with `scripts/docker_run.sh <script>`. See [Build and test](docs/build.md#build-and-test) for details.
 
+## ROS 2 code style
+
+The ROS 2 packages (`glim_localization_ros2/`, `glim_localization_msgs/`) follow the [ROS 2 code style](https://docs.ros.org/en/jazzy/The-ROS2-Project/Contributing/Code-Style-Language-Versions.html). `ament_lint_auto` with `ament_lint_common` adds a test per linter (uncrustify, cpplint, cppcheck, lint_cmake, xmllint, flake8, pep257, copyright), and `scripts/test_colcon.sh` fails on any finding. The core (`glim_localization/`) is not covered.
+
+Run one linter on a package inside the container (the image sources ROS):
+
+```bash
+scripts/docker_run.sh bash -c 'cd glim_localization_ros2 && ament_flake8 .'
+scripts/docker_run.sh bash -c 'cd glim_localization_ros2 && AMENT_CPPCHECK_ALLOW_SLOW_VERSIONS=1 ament_cppcheck .'
+```
+
+Fix the C++ formatting with uncrustify, then check the diff:
+
+```bash
+scripts/docker_run.sh bash -c 'cd glim_localization_ros2 && ament_uncrustify --reformat .'
+```
+
+Python uses single quotes, lines of at most 99 columns, imports in the google order, and docstrings whose one-line summary is on the line after the opening `"""`. Every source file starts with the short MIT header:
+
+```cpp
+// Copyright (c) 2026 atinfinity
+//
+// Use of this source code is governed by an MIT-style
+// license that can be found in the LICENSE file or at
+// https://opensource.org/licenses/MIT.
+```
+
+Exceptions, all in `glim_localization_ros2/CMakeLists.txt` and `scripts/test_colcon.sh`:
+
+- `src/localization_node.cpp` is derived from glim_ros2, and its provenance lines (see below) must come first and are longer than 100 columns. cpplint checks it in a test of its own (`cpplint_derived`) without the line length check; the other linters check it as usual.
+- `ament_cppcheck` skips cppcheck 2.x (Jazzy ships 2.13) unless `AMENT_CPPCHECK_ALLOW_SLOW_VERSIONS=1` is set, which `scripts/test_colcon.sh` does.
+- Imports after a `sys.path.insert` in the launch tests carry `# noqa: E402` (and `I100` on the first one).
+
 ## Engineering rules
 
 - **ROS-free core.** `glim_localization/` must not depend on ROS. Keep ROS dependencies in `glim_localization_ros2/` (and the message definitions in `glim_localization_msgs/`).
