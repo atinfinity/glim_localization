@@ -22,8 +22,8 @@ cuda_image_inputs=(
   third_party/patches/glim_ros2
 )
 
-sha256_files() { # file paths on stdin -> "<sha256>  <path>" per file
-  if command -v sha256sum >/dev/null 2>&1; then xargs sha256sum; else xargs shasum -a 256; fi
+sha256_files() { # NUL-separated file paths on stdin -> "<sha256>  <path>" per file
+  if command -v sha256sum >/dev/null 2>&1; then xargs -0 sha256sum; else xargs -0 shasum -a 256; fi
 }
 
 listing() { # "<sha256>  ./<path>" per file under the inputs, sorted by path
@@ -34,7 +34,8 @@ listing() { # "<sha256>  ./<path>" per file under the inputs, sorted by path
     fi
   done
   [[ ${#paths[@]} -gt 0 ]] || return 0
-  (cd "$1" && find "${paths[@]}" -type f | LC_ALL=C sort | sha256_files)
+  # NUL-separated so names with spaces or newlines stay whole.
+  (cd "$1" && find "${paths[@]}" -type f -print0 | LC_ALL=C sort -z | sha256_files)
 }
 
 expected="$(listing "${repo_root}")"
@@ -50,8 +51,10 @@ fi
 
 {
   echo "check_cuda_image_inputs: the CUDA image was not built from this tree (stale image)."
-  if [[ -z "${actual}" ]]; then
+  if [[ ! -d "${inputs_dir}" ]]; then
     echo "  ${inputs_dir} is missing: the image predates this check."
+  elif [[ -z "${actual}" ]]; then
+    echo "  ${inputs_dir} is empty: the image has none of the inputs."
   else
     diff <(printf '%s\n' "${expected}") <(printf '%s\n' "${actual}") | sed -n 's/^</  tree: /p; s/^>/  image:/p' || true
   fi

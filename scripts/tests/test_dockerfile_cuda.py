@@ -115,4 +115,37 @@ def test_check_cuda_image_inputs_detects_a_stale_image(tmp_path):
     assert "build dev-cuda" in stale.stderr
     assert run_check(image, GLIM_LOC_ALLOW_STALE_IMAGE="1").returncode == 0
 
-    assert run_check(tmp_path / "missing").returncode == 1
+    missing = run_check(tmp_path / "missing")
+    assert missing.returncode == 1 and "is missing" in missing.stderr
+
+    (tmp_path / "empty").mkdir()
+    empty = run_check(tmp_path / "empty")
+    assert empty.returncode == 1
+    assert "is empty" in empty.stderr and "is missing" not in empty.stderr
+
+
+def test_check_cuda_image_inputs_handles_names_with_spaces(tmp_path):
+    # A file with a space in a baked-in directory: the tree and the image both list it whole.
+    tree = tmp_path / "tree"
+    image = tmp_path / "image"
+    (tree / "scripts").mkdir(parents=True)
+    shutil.copy(CHECK_INPUTS, tree / "scripts" / CHECK_INPUTS.name)
+    for root in (tree, image):
+        for path in cuda_image_inputs():
+            source = ROOT / path
+            if source.is_dir():
+                shutil.copytree(source, root / path)
+            else:
+                (root / path).parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy(source, root / path)
+        (root / "third_party" / "patches" / "glim" / "a name with spaces.patch").write_text("same\n")
+    check = [str(tree / "scripts" / CHECK_INPUTS.name)]
+    env = {**os.environ, "GLIM_LOC_IMAGE_INPUTS_DIR": str(image)}
+    ok = subprocess.run(check, capture_output=True, text=True, env=env)
+    assert ok.returncode == 0, ok.stderr
+
+    (image / "third_party" / "patches" / "glim" / "a name with spaces.patch").write_text("changed\n")
+    stale = subprocess.run(check, capture_output=True, text=True, env=env)
+    assert stale.returncode == 1
+    assert "./third_party/patches/glim/a name with spaces.patch" in stale.stderr
+    assert "No such file" not in stale.stderr
