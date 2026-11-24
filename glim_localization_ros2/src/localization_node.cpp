@@ -16,6 +16,7 @@
 // With autostart:=true the node configures and activates itself once it is spinning (for launch files, also when it is
 // loaded as a component, where launch_ros cannot drive the lifecycle). A failed transition is logged and leaves the node
 // where it stopped; drive it by hand from there.
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -326,6 +327,9 @@ private:
     time_keeper_ = std::make_unique<glim::TimeKeeper>();
     preprocessor_ = std::make_unique<glim::CloudPreprocessor>();
     acc_scale_ = input_.acc_scale;
+    num_imu_ = 0;
+    num_points_ = 0;
+    first_points_stamp_ = std::nan("");
 
     odometry_ = glim_localization::make_localization_odometry(*odometry_params_, map_);
     bridge_->attach(
@@ -336,9 +340,9 @@ private:
       publisher_params_);
     async_odometry_ = std::make_unique<glim::AsyncOdometryEstimation>(odometry_, odometry_->requires_imu());
 
-    imu_sub_ = create_subscription<ImuMsg>(input_.imu_topic, *imu_qos_, [this](const ImuMsg::ConstSharedPtr msg) { on_imu(*msg); });
-    points_sub_ = create_subscription<PointsMsg>(input_.points_topic, *points_qos_, [this](const PointsMsg::ConstSharedPtr msg) { on_points(*msg); });
-    initial_pose_sub_ = create_subscription<PoseMsg>("/initialpose", rclcpp::QoS(10), [this](const PoseMsg::ConstSharedPtr msg) { on_initial_pose(*msg); });
+    imu_sub_ = subscribe<ImuMsg>(input_.imu_topic, *imu_qos_, [this](const ImuMsg::ConstSharedPtr msg) { on_imu(*msg); });
+    points_sub_ = subscribe<PointsMsg>(input_.points_topic, *points_qos_, [this](const PointsMsg::ConstSharedPtr msg) { on_points(*msg); });
+    initial_pose_sub_ = subscribe<PoseMsg>("/initialpose", rclcpp::QoS(10), [this](const PoseMsg::ConstSharedPtr msg) { on_initial_pose(*msg); });
     // AsyncOdometryEstimation also queues its results for get_results(); the node publishes from the callbacks, so drop them
     drain_timer_ = create_wall_timer(std::chrono::milliseconds(100), [this] {
       std::vector<glim::EstimationFrame::ConstPtr> results, marginalized;
@@ -346,6 +350,23 @@ private:
         async_odometry_->get_results(results, marginalized);
       }
     });
+  }
+
+  /// A subscription that logs each change of its matched publishers. A message sent before its publisher is matched is
+  /// lost (volatile), so "matched publishers on <topic>: N" tells whether a sender is connected yet; the launch tests
+  /// wait for it before playing a bag. Without matched events in the RMW, a plain subscription.
+  template <typename MsgT, typename CallbackT>
+  typename rclcpp::Subscription<MsgT>::SharedPtr subscribe(const std::string& topic, const rclcpp::QoS& qos, CallbackT&& callback) {
+    rclcpp::SubscriptionOptions options;
+    options.event_callbacks.matched_callback = [logger = get_logger(), topic](const rclcpp::MatchedInfo& info) {
+      RCLCPP_INFO(logger, "matched publishers on %s: %zu", topic.c_str(), info.current_count);
+    };
+    try {
+      return create_subscription<MsgT>(topic, qos, callback, options);
+    } catch (const rclcpp::UnsupportedEventTypeException&) {
+      RCLCPP_INFO(get_logger(), "matched events not supported on %s by this RMW; matched publishers are not logged", topic.c_str());
+      return create_subscription<MsgT>(topic, qos, std::forward<CallbackT>(callback));
+    }
   }
 
   /// Stop estimation. Idempotent.
@@ -356,6 +377,17 @@ private:
     imu_sub_.reset();
     async_odometry_.reset();  // stops and joins the odometry thread, so no callback comes after this
     odometry_.reset();
+    if (bridge_->attached()) {
+      // One line per active period, so that a test log tells which path lost frames. After the join, so the frames
+      // still queued in the odometry thread are counted too
+      const auto drops = bridge_->drop_counts();
+      RCLCPP_INFO(
+        get_logger(),
+        "stopping: received %zu IMU samples and %zu point clouds (first cloud stamp %.3f); dropped frames: %zu without gyro, %zu unpaired, "
+        "%zu stale; %zu TF lookup failures",
+        num_imu_.load(), num_points_.load(), first_points_stamp_.load(), drops.frames_without_gyro, drops.unpaired_frames, drops.stale_frames,
+        drops.tf_lookup_failures);
+    }
     bridge_->detach();
     preprocessor_.reset();
     time_keeper_.reset();
@@ -376,6 +408,7 @@ private:
     if (!async_odometry_) {
       return;
     }
+    ++num_imu_;
     const Eigen::Vector3d acc(msg.linear_acceleration.x, msg.linear_acceleration.y, msg.linear_acceleration.z);
     if (std::abs(acc_scale_) < 1e-6) {
       const double norm = acc.norm();
@@ -387,7 +420,7 @@ private:
         acc_scale_ = 1.0;
         RCLCPP_WARN(get_logger(), "unexpected acceleration norm %f: assuming [m/s^2]", norm);
       }
-      RCLCPP_INFO(get_logger(), "acc_scale=%f (from the first IMU sample)", acc_scale_);
+      RCLCPP_INFO(get_logger(), "acc_scale=%f (from the first IMU sample, stamp %.3f)", acc_scale_, msg.header.stamp.sec + msg.header.stamp.nanosec / 1e9);
     }
 
     const double stamp = msg.header.stamp.sec + msg.header.stamp.nanosec / 1e9 + input_.imu_time_offset;
@@ -409,6 +442,10 @@ private:
       return;
     }
     raw_points->stamp += input_.points_time_offset;
+    if (num_points_++ == 0) {
+      first_points_stamp_ = raw_points->stamp;
+      RCLCPP_INFO(get_logger(), "first point cloud (stamp %.3f)", raw_points->stamp);
+    }
     if (!time_keeper_->process(raw_points)) {
       RCLCPP_WARN(get_logger(), "skip an invalid point cloud (stamp=%f)", raw_points->stamp);
       return;
@@ -504,6 +541,11 @@ private:
 
   // Set by activate
   double acc_scale_ = 0.0;
+  // Written by the subscription callbacks, read by stop(), which can also run from on_shutdown or the destructor on
+  // another thread
+  std::atomic<size_t> num_imu_{0};
+  std::atomic<size_t> num_points_{0};
+  std::atomic<double> first_points_stamp_{0.0};
   std::unique_ptr<glim::TimeKeeper> time_keeper_;
   std::unique_ptr<glim::CloudPreprocessor> preprocessor_;
   std::shared_ptr<glim_localization::OdometryEstimationLocalization> odometry_;

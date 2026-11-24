@@ -37,8 +37,8 @@ class TestLaunchR2Component(unittest.TestCase):
         cls.client.destroy()
         rclpy.shutdown()
 
-    def test_autostart_pose_tf_and_map(self):
-        launch_file_helpers.check_r2_launch(self, self.client)
+    def test_autostart_pose_tf_and_map(self, proc_output):
+        launch_file_helpers.check_r2_launch(self, self.client, proc_output)
 
 
 @launch_testing.post_shutdown_test()

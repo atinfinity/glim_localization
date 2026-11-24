@@ -5,6 +5,7 @@ import importlib.util
 import json
 import math
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -26,7 +27,10 @@ from tf2_msgs.msg import TFMessage
 NODE = "/glim_localization"
 SERVICE_TIMEOUT_S = 30.0  # fails the test; not a success path
 DEADLINE_S = 180.0  # fails the test; not a success path
-DISCOVERY_MARGIN_S = 2.0  # after the player's publishers are visible here, for the node to match them too
+# Spun before resuming the player, after its publishers are visible here and (with node_matched) the node has matched
+# them. It covers the other direction: a reliable volatile publisher sends nothing to a reader it has not matched yet,
+# and the player's writers match the node's readers independently of the node's matched event. Not redundant.
+DISCOVERY_MARGIN_S = 2.0
 PLAYER_GRACE_S = 20.0  # after the bag ended, how long the node may go without a new pose before the test fails
 BAG_TOPICS = ["/imu", "/points", "/initialpose"]  # the topics of the synthetic bags (scripts/replay_to_bag.py)
 
@@ -78,6 +82,22 @@ def node_process(config_dir, map_path):
         cmd=[exe, "--ros-args", "-p", "use_sim_time:=true", "-p", f"config_path:={config_dir}", "-p", f"map_path:={map_path}"],
         output="screen",
     )
+
+
+def wait_for_node_matched(proc_output, timeout=SERVICE_TIMEOUT_S):
+    """A `node_matched` for R2Client.play_and_wait: wait in the launch output for the node's log line
+    "matched publishers on <topic>: N" (N >= 1) of each topic. Only for a test whose node meets one player: a line
+    from an earlier player would also match. Needs an RMW with matched events (Fast DDS, Cyclone DDS and Connext have
+    them); without them the node logs "matched events not supported on <topic>" and this times out. One deadline
+    covers all topics.
+    """
+    def wait(topics):
+        end = time.monotonic() + timeout
+        for topic in topics:
+            proc_output.assertWaitFor(
+                expected_output=re.compile(rf"matched publishers on {re.escape(topic)}: [1-9]"),
+                timeout=max(end - time.monotonic(), 0.1), stream="stderr")
+    return wait
 
 
 def read_tum(path):
@@ -169,11 +189,14 @@ class R2Client:
             rclpy.spin_once(self.node, timeout_sec=0.1)
         raise AssertionError(f"no subscriber on {topics} within {timeout} s")
 
-    def _start_player(self, bag, topics, extra_args):
+    def _start_player(self, bag, topics, extra_args, node_matched=None):
         """Start `ros2 bag play` paused and resume it once its publishers of `topics` are visible here plus a margin.
 
         The topics are reliable and volatile, so a message sent before the node has matched the player is lost (a fixed
-        --delay was not enough on a loaded host, and the lost /initialpose left the node without a pose).
+        --delay was not enough on a loaded host, and the lost /initialpose left the node without a pose). That this test
+        node sees the player says nothing about the node under test, whose discovery of the player can lag by seconds
+        (issue #20: the first 1.8 s of the bag, with the /initialpose at 0 s, never reached the node). `node_matched`,
+        if given, blocks until the node under test has matched the player's publishers (see wait_for_node_matched).
         """
         player = subprocess.Popen(["ros2", "bag", "play", bag, "--clock", "100", "--start-paused", "--disable-keyboard-controls"] + extra_args)
         try:
@@ -184,6 +207,8 @@ class R2Client:
                 if player.poll() is not None:
                     raise AssertionError(f"ros2 bag play exited with {player.returncode} before playing")
                 rclpy.spin_once(self.node, timeout_sec=0.1)
+            if node_matched:
+                node_matched(topics)
             self.spin_for(DISCOVERY_MARGIN_S)
             self.call(self.resume_player, Resume.Request())  # raises when the player does not answer
         except BaseException:
@@ -213,15 +238,15 @@ class R2Client:
         finally:
             self._stop_player(player)
 
-    def play_and_wait(self, bag, topics, during=None):
+    def play_and_wait(self, bag, topics, during=None, node_matched=None):
         """Play the bag with /clock and spin until a pose near the last ground truth stamp arrives.
 
         `during`, if given, is called after every spin while the bag plays (it may call services). Fails, never
         passes, when a deadline is reached; fails early, with the number of poses, when the bag has ended and no pose
         came for PLAYER_GRACE_S (for example a lost or rejected initial pose). The player exits at the end of the
-        bag; the node does not.
+        bag; the node does not. `node_matched`: see _start_player.
         """
-        player = self._start_player(bag, topics, [])
+        player = self._start_player(bag, topics, [], node_matched)
         try:
             last = self.gt_stamps[-1]
             deadline = time.monotonic() + DEADLINE_S
@@ -286,6 +311,30 @@ class R2Client:
         """The poses over either bound, for a failure message."""
         bad = [f"{s:.2f}: {t:.3f} m {r:.3f} deg" for s, t, r in self.pose_error_list(after) if t > max_trans or r > max_rot]
         return f"{len(bad)} poses over the bounds: " + ", ".join(bad[:20])
+
+    def coverage_report(self):
+        """Which ground truth frames have no pose, and what ~/status said, for a failure message.
+
+        The missing frames are given as runs of seconds from the first frame, so a lost start (no pose until the bag's
+        next /initialpose) reads differently from frames dropped one by one.
+        """
+        t0 = self.gt_stamps[0]
+        posed = {round(stamp_s(p.header.stamp) - t0, 2) for p in self.poses}
+        missing = [round(s - t0, 2) for s in self.gt_stamps if round(s - t0, 2) not in posed]
+        runs = []
+        for s in missing:
+            if runs and s - runs[-1][1] < 0.15:
+                runs[-1][1] = s
+            else:
+                runs.append([s, s])
+        states = {}
+        for status in self.statuses:
+            states[status.state] = states.get(status.state, 0) + 1
+        first_status = f"{stamp_s(self.statuses[0].header.stamp) - t0:.2f} s" if self.statuses else "none"
+        last_reset = self.statuses[-1].reset_count if self.statuses else "-"
+        return (
+            f"missing frames (s from the first frame): {', '.join(f'{a:.1f}-{b:.1f}' if a != b else f'{a:.1f}' for a, b in runs) or 'none'}; "
+            f"{len(self.statuses)} statuses, first at {first_status}, by state {dict(sorted(states.items()))}, last reset_count {last_reset}")
 
     def tf_pairs(self):
         """{stamp: {(parent, child): transform}} for the stamps that have both map->odom and odom->base_link."""
