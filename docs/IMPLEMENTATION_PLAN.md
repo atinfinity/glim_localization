@@ -3,7 +3,7 @@
 Development, builds, and tests run in a headless Docker container with Ubuntu 24.04 + ROS 2 Jazzy (`docker/`). The container covers **the CPU core, offline evaluation, and the ROS 2 packages**. The GPU build (`BUILD_WITH_CUDA=ON`) and real-robot evaluation need a Linux machine with an NVIDIA GPU and come later.
 When a phase meets its completion criteria, its results are recorded in `docs/PROGRESS.md`.
 
-Status: Phases 0 to 4 are done. Phase 5 is done except the launch, parameter and RViz files and the `~/aligned_points` / `~/map` topics. Phase 6 is partly done (PCD input for map_compiler, README).
+Status: Phases 0 to 4 are done. Phase 5 is done except the `~/aligned_points` topic. Phase 6 is partly done (PCD input for map_compiler, README).
 
 ## Phase 0: Environment and repository (done)
 
@@ -46,14 +46,14 @@ In the CPU version, `use_keyframes` means relative pose factors from the local m
 - Done when: replay on synthetic data reaches the same accuracy as Phase 3. If real data is available, convert and run it, and record the results in PROGRESS.md.
 - An evaluation mapper for real data (first step of #5): `glim_localization_mapper` (no ROS) and `scripts/smoke_os1_128.sh`. Build a GLIM map and a reference trajectory from a replay dataset, run localization with the same preprocessing, and measure the agreement with GLIM. Done when: a synthetic test shows the dump can be read with `load_map`. Record real-data results in PROGRESS.md.
 
-## Phase 5: ROS 2 packages (mostly done; open parts in items 3 and 6, tracked in #1)
+## Phase 5: ROS 2 packages (done except `~/aligned_points`)
 
 1. Build and test with colcon in the container (ROS 2 Jazzy). Turn synthetic data into a bag and check the R1 and R2 nodes with it.
 2. `glim_localization_msgs`: `LocalizationStatus.msg` and `Initialize.srv`.
-3. `localization_publisher` (shared by R1 and R2): `~/pose`, `~/odometry`, `~/status`, `/diagnostics`, and TF (three `tf_mode` options, DESIGN §6). `~/aligned_points` and `~/map` are not implemented yet.
+3. `localization_publisher` (shared by R1 and R2): `~/pose`, `~/odometry`, `~/status`, `/diagnostics`, and TF (three `tf_mode` options, DESIGN §6). `~/map` (latched, downsampled; `map_publisher`) is done; `~/aligned_points` is deferred.
 4. R1: `localization_extension` (`ExtensionModuleROS2`). `/initialpose` calls `reset()` through a shared queue in the core.
 5. R2: `glim_localization_node` (`rclcpp_lifecycle::LifecycleNode`, registered as a component). Base it on the input handling in `GlimROS` (copied parts carry the provenance comment).
-6. Launch files, parameter YAML, and RViz config (not implemented yet).
+6. Launch files (R1 and R2, the R2 node standalone or as a component with `autostart`), parameter YAML files and an RViz config (done). Launch tests start each launch file headless and check `~/pose`, TF and `~/map`.
 7. Done when: the build and unit tests pass in CI, and playing a bag publishes `~/pose` and TF.
 
 ## Phase 6: Finishing (optional, partly done)

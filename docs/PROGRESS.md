@@ -428,3 +428,34 @@ A private Ouster OS1-128 recording (1153 frames, about 115 s, 10 Hz LiDAR) was c
 
 > [!NOTE]
 > GitHub runners have 4 CPUs, so the core ctest gains less there. All 6 runs on the final test setup passed: 3 before the `-l` fix and the 3 above.
+
+## Phase 5: launch files, parameter YAML, RViz config and ~/map (2026-11-25, #1)
+
+- **Launch files** (`glim_localization_ros2/launch/`):
+  - `localization.launch.py` (R2) runs `glim_localization_node` standalone, or with `use_composition:=true` as a component in a new `component_container`. `config_path` and `map_path` override `params_file` only when not empty.
+  - `localization_r1.launch.py` (R1) runs `glim_rosnode`, or `glim_rosbag <bag>` with `bag:=`. R1 reads the map path only from JSON, so `map_path:=` makes a temporary copy of the config with `odometry_estimation.map_path` set. The copy is removed when the launch exits.
+  - glim_rosbag takes every argument that names an existing file as a bag, and launch_ros passes `parameters` as `--params-file <file>`. So the R1 launch file reads `params_file` itself and passes each value as `-p name:=value`. The first R1 launch test run failed this way: rosbag2 tried to open the params file as a bag.
+  - `rviz` defaults to false. `rviz2` is not a package dependency: with `rviz:=true` and no rviz2 installed, the launch file logs a warning and starts without it (checked in the container, which has no rviz2).
+- **Parameter YAML**: `config/localization.param.yaml` (every R2 node parameter, with comments) and `config/localization_r1.param.yaml` (the GlimROS and glim_rosbag parameters).
+- **RViz config**: `rviz/localization.rviz` shows the fixed frame `map`, a grid, `~/map` (transient local), `~/pose`, `~/odometry` and TF, and has the 2D Pose Estimate tool on `/initialpose`. The R1 launch file remaps its topics to `/glim_ros/...`.
+- **R2 `autostart` parameter** (default false, true in the launch file). A one-shot wall timer configures and activates the node once it spins, the same in a process and in a container. A failed step is logged and leaves the node where it stopped. The existing R2 tests keep driving the lifecycle by hand.
+- **`~/map`** (`map_publisher`, shared by R1 and R2): the loaded map in the map frame as x/y/z float32, published once with reliable, transient local QoS.
+  - Each voxel of `map_cloud_voxel` (default 0.5 m; 0 keeps every point) keeps its centroid. `publish_map` turns it off. Both keys are in `localization_ros` of `config_ros.json`.
+  - R2 publishes the map at configure.
+  - R1 publishes it when the extension is loaded. GlimROS creates the odometry module before the extensions, so the map is loaded by then.
+  - The synthetic fixture map gives 9245 points from 5 tiles.
+- **Core API additions** (no GLIM patch):
+  - `MapManager::tiles()`: every tile, sorted by id.
+  - `LocalizationCallbacks::loaded_map()`: the map of the oldest live localization odometry instance, so the R1 extension reuses the map the dlopen'd module loaded instead of loading it twice.
+  - `OdometryEstimationLocalizationCPU::map()`.
+  - Each has a core test.
+- **Deferred:** `~/aligned_points`. It needs a per-frame copy of the scan on the odometry callback and a rate and downsampling policy. It will be filed as a follow-up issue.
+- **Tests:**
+  - `test_map_publisher` (gtest) checks the map-frame transform, the voxel centroids, the skipping of non-finite points, the rejection of a bad voxel size, and delivery of the latched map to a late subscriber.
+  - Three launch tests include the installed launch files headless with the synthetic fixtures. Each checks `~/pose`, TF that composes to the last pose, and the latched `~/map` received after it was published:
+    - `test_launch_r1`: R1 with `bag:=`.
+    - `test_launch_r2`: R2 standalone.
+    - `test_launch_r2_component`: R2 as a component.
+  - The R2 tests also check that autostart reaches active.
+- **Verification**: `scripts/ci.sh` in Docker passes: core ctest 218/218 and colcon test 11/11. Launch test times: R1 5.1 s, R2 16.1 s, R2 component 17.2 s.
+- **Not done**: a manual run on a real bag with the launch files and RViz on a display.

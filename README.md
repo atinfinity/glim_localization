@@ -35,13 +35,12 @@ Design: [docs/DESIGN.md](docs/DESIGN.md). Plan: [docs/IMPLEMENTATION_PLAN.md](do
 | 3 | CPU localization odometry, quality monitoring (INITIALIZING / TRACKING / DEGRADED / LOST) | Done |
 | 4 | Offline replay, bag conversion, evaluation, evaluation mapper | Done |
 | 5 | ROS 2: glim_ros2 layer, msgs, IMU gap policy, publisher and TF, R1 extension, R2 lifecycle node | Done |
-| 5 | Launch file, YAML parameter file, RViz config | **Not done** (#1) |
+| 5 | Launch files, YAML parameter files, RViz config, `~/map` | Done |
 | 6 | `map_compiler` PCD input | Done |
 | 6 | README | This file |
 
 Not done yet (open issues):
 
-- Phase 5: launch file, parameter YAML and RViz config (#1).
 - GPU (CUDA) version of the odometry module (#2).
 - Relocalizer: multi-hypothesis refinement of `/initialpose` and global relocalization (#3).
 - `map_compiler` PLY input and 2D OccupancyGrid export (#4); PCD follow-ups such as `binary_compressed` input (#12).
@@ -146,6 +145,27 @@ py scripts/evaluate.py --est /ws/out/run/traj_localization.txt --gt /ws/out/data
 
 Source the colcon install first: `source /ws/build/colcon/install/setup.bash`. Run one localization (R1 or R2) per process.
 
+### Launch files
+
+```bash
+# R2 (deployment): the lifecycle node, configured and activated on start (autostart)
+ros2 launch glim_localization_ros2 localization.launch.py map_path:=/ws/out/map
+ros2 launch glim_localization_ros2 localization.launch.py map_path:=/ws/out/map use_composition:=true   # as a component
+# R1 (evaluation): glim_rosnode, or glim_rosbag with bag:=
+ros2 launch glim_localization_ros2 localization_r1.launch.py map_path:=/ws/out/map bag:=/ws/out/my_bag
+```
+
+| Argument | R2 `localization.launch.py` | R1 `localization_r1.launch.py` |
+| --- | --- | --- |
+| `params_file` | `config/localization.param.yaml` (every node parameter, with comments) | `config/localization_r1.param.yaml` (the GLIM node's parameters, with comments) |
+| `config_path` | empty: the value in `params_file` (`config/r2`) | `share/glim_localization_ros2/config/r1` |
+| `map_path` | empty: the value in `params_file`, then the JSON config | empty: the JSON config; otherwise a temporary copy of the config with this map |
+| `use_sim_time` | `false` | `false` |
+| `rviz` | `false` | `false` (the RViz topics are remapped to `/glim_ros/...`) |
+| others | `autostart` (`true`), `use_composition` (`false`), `container_name` | `bag` (empty: `glim_rosnode`) |
+
+`rviz:=true` starts `rviz2` with `rviz/localization.rviz` (map frame, `~/map`, `~/pose`, `~/odometry`, TF, and the 2D Pose Estimate tool on `/initialpose`). `rviz2` is not a dependency of this package: when it is not installed, the launch file prints a warning and starts without it.
+
 ### R1: GLIM extension (evaluation)
 
 `libglim_localization_extension.so` is loaded by glim_ros2's `glim_rosnode` / `glim_rosbag`, using the config in `share/glim_localization_ros2/config/r1`. Copy it and set `odometry_estimation.map_path` in `config_odometry_localization_cpu.json` (and `T_lidar_imu` in `config_sensors.json`):
@@ -167,7 +187,7 @@ Topics are on the GLIM node (`/glim_ros/pose`, ...). The initial pose comes from
 `glim_localization_node` (node name `glim_localization`, also a component `glim_localization_ros2::LocalizationNode`):
 
 ```bash
-ros2 run glim_localization_ros2 glim_localization_node --ros-args -p map_path:=/ws/out/map
+ros2 run glim_localization_ros2 glim_localization_node --ros-args -p map_path:=/ws/out/map   # or the launch file
 ros2 lifecycle set /glim_localization configure   # reads the config, loads the map, creates the services
 ros2 lifecycle set /glim_localization activate    # starts the odometry and the subscriptions
 ros2 service call /glim_localization/initialize glim_localization_msgs/srv/Initialize \
@@ -181,6 +201,7 @@ ROS parameters:
 | `config_path` | `config/r2` | GLIM-style config directory; a relative path is taken from the package share |
 | `map_path` | (empty) | GLIM dump or compiled map; overrides `odometry_estimation.map_path` |
 | `max_init_pose_delay` | 0.2 | Largest accepted delay [s] of a stamped initial pose behind the last input frame |
+| `autostart` | false (`true` in the launch file) | Configure and activate once the node spins; a failed step is logged and leaves the node in the state it reached |
 
 Everything else comes from the JSON files: input topics, QoS and time offsets from `glim_ros` in `config_ros.json` (default `/points` and `/imu`), the publisher settings from `localization_ros`, and the odometry settings from `config/r1/config_odometry_localization_cpu.json`. `config/r2/config.json` refers to the `r1` files, so copy the whole `config` directory to customize it.
 
@@ -194,6 +215,7 @@ Lifecycle: configure fails and leaves the node unconfigured on a missing config 
 | `/initialpose` (in) | `geometry_msgs/PoseWithCovarianceStamped` | Base pose in the map frame, applied as given (no yaw search) |
 | `~/pose` | `geometry_msgs/PoseWithCovarianceStamped` | Base pose in the map frame, LiDAR rate. Covariance is zero (not estimated) |
 | `~/odometry` | `nav_msgs/Odometry` | Pose and twist of the base |
+| `~/map` | `sensor_msgs/PointCloud2` | The loaded map in the map frame, published once, latched (reliable, transient local). One centroid per `map_cloud_voxel` (0.5 m) voxel; `publish_map: false` turns it off. R2 publishes it at configure |
 | `~/status` | `glim_localization_msgs/LocalizationStatus` | State, inlier ratio, tiles, map factors, residual, processing time, reset count and reason |
 | `/diagnostics` | `diagnostic_msgs/DiagnosticArray` | OK, WARN for DEGRADED, ERROR for LOST |
 | `~/initialize` (R2) | `glim_localization_msgs/srv/Initialize` | Sets the pose. `success` means accepted, applied at the next frame. `global_search=true` returns `success=false` (#3) |
@@ -207,7 +229,7 @@ States: `INITIALIZING` (started or reset) -> `TRACKING` -> `DEGRADED` (low inlie
 
 - **CPU only.** The GPU version is not written (#2). On one 10 Hz OS1-128 sequence (Docker, arm64) the mean was about 93 ms per frame for a 100 ms period, with p99 spikes over 1 s, and the ratio of processing time to data length varied between runs (1.06 and 0.64); real-time capability is not established.
 - **Not yet verified:** accuracy on real data against an independent reference (the only real-data run, one OS1-128 sequence, compares with GLIM's own trajectory: ATE translation RMSE about 0.023 to 0.025 m, a consistency figure, not accuracy); real robots and real-time sensor input; most measurements so far ran in the Docker image on arm64, and amd64 has less coverage; a multithreaded component container; PCD maps from a real mapping pipeline (for example sdf2map, #9); integration with Nav2 or an external EKF.
-- No launch file, parameter YAML or RViz config yet (planned, #1). `~/aligned_points`, `~/map` and an IMU-rate odometry are not published.
+- `~/aligned_points` and an IMU-rate odometry are not published.
 - No initial pose search: `/initialpose` and `~/initialize` are applied exactly. No global relocalization (#3).
 - Right after the node becomes active, the first messages can be missed (cause not confirmed; DDS discovery is suspected). In R2 set the first pose with `~/initialize`, which replies; otherwise publish `/initialpose` after the node is matched, or resend it.
 - IMU gaps in ROS (`on_imu_gap: reset` in the shipped config): a gap up to `imu_gap_reset_max` (0.5 s) resets the estimate from its own prediction; a longer gap goes LOST until an external initialization. The replay tool defaults to `--on-imu-gap abort` (exit code 3).
