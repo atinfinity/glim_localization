@@ -383,6 +383,21 @@ TEST_F(LocalizationOdometryTest, ResetCallbackAndStatusNotification) {
   EXPECT_EQ(statuses.back().reset_count, 1);
 }
 
+TEST_F(LocalizationOdometryTest, LoadedMapIsTheMapOfTheOldestLiveInstance) {
+  EXPECT_EQ(LocalizationCallbacks::loaded_map(), nullptr);
+  auto other_map = std::make_shared<MapManager>();
+  {
+    auto first = std::make_unique<OdometryEstimationLocalizationCPU>(reset_test_params(), *map_);
+    EXPECT_EQ(first->map(), *map_);
+    EXPECT_EQ(LocalizationCallbacks::loaded_map(), *map_);
+    OdometryEstimationLocalizationCPU second(reset_test_params(), other_map);
+    EXPECT_EQ(LocalizationCallbacks::loaded_map(), *map_);
+    first.reset();
+    EXPECT_EQ(LocalizationCallbacks::loaded_map(), other_map);
+  }
+  EXPECT_EQ(LocalizationCallbacks::loaded_map(), nullptr);
+}
+
 TEST_F(LocalizationOdometryTest, BecomesLostWhenMapIsFarAway) {
   const fs::path far_dir = fs::temp_directory_path() / ("glim_loc_odometry_far_" + std::to_string(::getpid()));
   fs::remove_all(far_dir);

@@ -75,6 +75,18 @@ TEST_F(MapManagerTest, BuildsTilesWithVoxelmaps) {
   EXPECT_EQ(manager_->tile(99), nullptr);
 }
 
+TEST_F(MapManagerTest, TilesListsEveryTileById) {
+  const auto tiles = manager_->tiles();
+  ASSERT_EQ(tiles.size(), truth_->submaps.size());
+  for (size_t i = 0; i < tiles.size(); i++) {
+    EXPECT_EQ(tiles[i], manager_->tile(tiles[i]->id));
+    if (i > 0) {
+      EXPECT_LT(tiles[i - 1]->id, tiles[i]->id);
+    }
+  }
+  EXPECT_TRUE(MapManager().tiles().empty());
+}
+
 TEST_F(MapManagerTest, QueryOrdersByDistanceThenId) {
   EXPECT_EQ(ids(manager_->query(pose_at(30.0), 25.0, 5)), (std::vector<int>{3, 2, 4, 1, 5}));
   EXPECT_EQ(ids(manager_->query(pose_at(30.0), 12.0, 5)), (std::vector<int>{3, 2, 4}));

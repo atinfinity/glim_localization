@@ -51,6 +51,9 @@ struct LocalizationCallbacks {
   /// Forward a pose reset to every live odometry instance. Safe from any thread,
   /// including while an instance is being constructed or destroyed.
   static void request_reset(const Eigen::Isometry3d& T_world_imu, const Eigen::Vector3d& v_world_imu, double min_stamp);
+  /// The map of the oldest live odometry instance, or null if there is none. Safe from any thread. Lets a module that
+  /// does not own the odometry (the R1 extension, loaded after it by glim_ros2) publish the map without loading it again.
+  static std::shared_ptr<const MapManager> loaded_map();
 };
 
 struct OdometryEstimationLocalizationCPUParams : public glim::OdometryEstimationIMUParams {
@@ -117,6 +120,9 @@ public:
 
   /// Thread-safe.
   LocalizationStatus status() const;
+
+  /// The map this instance localizes against (never null). Thread-safe.
+  const std::shared_ptr<const MapManager>& map() const { return map_; }
 
   /// Stamp of the last frame passed to insert_frame, whatever happened to it: estimated, or dropped while waiting for
   /// the first pose, before min_stamp, in an IMU gap or while LOST. A reset requested now applies at a later frame.
