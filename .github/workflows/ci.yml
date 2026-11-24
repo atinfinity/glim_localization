@@ -167,8 +167,9 @@ jobs:
       missing: ${{ steps.pull.outputs.missing }}
     steps: *build-and-test-steps
 
-  # The CUDA image needs an NVIDIA GPU machine to build and test (README, "CUDA variant"). Here only
-  # docker/Dockerfile.cuda is parsed and linted (its check directive turns warnings into errors).
+  # The CUDA image needs an NVIDIA GPU machine to build and test (docs/build.md, "CUDA variant").
+  # Here only docker/Dockerfile.cuda is parsed and linted (its check directive turns warnings into
+  # errors).
   cuda-dockerfile:
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: ubuntu-24.04
