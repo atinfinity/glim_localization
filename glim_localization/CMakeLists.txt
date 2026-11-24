@@ -103,7 +103,12 @@ if(BUILD_TESTS)
   add_subdirectory(test)
 endif()
 
-install(DIRECTORY include/ DESTINATION include)
+if(GLIM_LOCALIZATION_WITH_CUDA)
+  install(DIRECTORY include/ DESTINATION include)
+else()
+  # The GPU headers need the CUDA build of gtsam_points
+  install(DIRECTORY include/ DESTINATION include PATTERN "*gpu*" EXCLUDE)
+endif()
 install(DIRECTORY config/ DESTINATION share/glim_localization/config)
 install(TARGETS glim_localization
   EXPORT glim_localization-targets
