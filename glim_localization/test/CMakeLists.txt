@@ -72,6 +72,14 @@ add_executable(test_pcd_map test_pcd_map.cpp)
 target_link_libraries(test_pcd_map PRIVATE glim_localization_synthetic nlohmann_json::nlohmann_json GTest::gtest_main)
 gtest_discover_tests(test_pcd_map)
 
+add_executable(test_ply_reader test_ply_reader.cpp)
+target_link_libraries(test_ply_reader PRIVATE glim_localization_synthetic GTest::gtest_main)
+gtest_discover_tests(test_ply_reader)
+
+add_executable(test_occupancy_grid test_occupancy_grid.cpp)
+target_link_libraries(test_occupancy_grid PRIVATE glim_localization_synthetic GTest::gtest_main)
+gtest_discover_tests(test_occupancy_grid)
+
 # GPU smoke test (BUILD_WITH_CUDA=ON only). Skips without a visible GPU; ctest reports the skip.
 if(GLIM_LOCALIZATION_WITH_CUDA)
   find_package(CUDAToolkit REQUIRED)

@@ -247,11 +247,13 @@ TEST_F(MapCompilerTest, RejectsBadPcdOptions) {
 }
 
 TEST_F(MapCompilerTest, MissingPcdIsReportedAsNotFound) {
-  // Not as a broken GLIM dump, and not as "options apply only to .pcd input"
-  for (const std::string options : {"", "--grid-size 10"}) {
-    EXPECT_EQ(compile(dir_ / "typo.pcd", output_, options), 1) << options;
-    EXPECT_FALSE(fs::exists(output_)) << options;
-    EXPECT_NE(last_log().find("file not found"), std::string::npos) << options << ": " << last_log();
+  // Not as a broken GLIM dump, and not as "options apply only to .pcd and .ply input"
+  for (const std::string name : {"typo.pcd", "typo.ply"}) {
+    for (const std::string options : {"", "--grid-size 10"}) {
+      EXPECT_EQ(compile(dir_ / name, output_, options), 1) << name << " " << options;
+      EXPECT_FALSE(fs::exists(output_)) << name << " " << options;
+      EXPECT_NE(last_log().find("file not found"), std::string::npos) << name << " " << options << ": " << last_log();
+    }
   }
 }
 
@@ -260,6 +262,203 @@ TEST_F(MapCompilerTest, BrokenPcdLeavesNoOutput) {
   std::ofstream(pcd) << "FIELDS x y z\nSIZE 4 4 4\nTYPE F F F\nPOINTS 100\nDATA binary\n";
   EXPECT_EQ(compile(pcd, output_), 1);
   EXPECT_FALSE(fs::exists(output_));
+}
+
+TEST_F(MapCompilerTest, PlyAndPcdGiveTheSameMap) {
+  const auto points = make_synthetic_world_points(params_);
+  for (const auto& [ply_encoding, pcd_encoding] : {std::make_pair(PlyEncoding::Ascii, PcdEncoding::Ascii),
+                                                    std::make_pair(PlyEncoding::BinaryLittleEndian, PcdEncoding::Binary)}) {
+    fs::remove_all(dir_ / "from_ply");
+    fs::remove_all(dir_ / "from_pcd");
+    // Double x, y, z in both (ascii is printed with 17 digits), so both readers see the same values.
+    write_synthetic_ply((dir_ / "cloud.Ply").string(), points, ply_encoding, PlyOptions{true, true});
+    write_synthetic_pcd((dir_ / "cloud.pcd").string(), points, pcd_encoding, true);
+    ASSERT_EQ(compile(dir_ / "cloud.Ply", dir_ / "from_ply", "--grid-size 15 --k-neighbors 12"), 0) << last_log();
+    ASSERT_EQ(compile(dir_ / "cloud.pcd", dir_ / "from_pcd", "--grid-size 15 --k-neighbors 12"), 0) << last_log();
+
+    auto ply_index = nlohmann::json::parse(std::ifstream(dir_ / "from_ply" / "map_index.json"));
+    auto pcd_index = nlohmann::json::parse(std::ifstream(dir_ / "from_pcd" / "map_index.json"));
+    EXPECT_EQ(ply_index.at("source"), "ply");
+    EXPECT_EQ(pcd_index.at("source"), "pcd");
+    ply_index.erase("source");
+    pcd_index.erase("source");
+    EXPECT_EQ(ply_index, pcd_index);
+
+    LoadedSubmaps from_ply, from_pcd;
+    ASSERT_TRUE(load_map((dir_ / "from_ply").string(), from_ply));
+    ASSERT_TRUE(load_map((dir_ / "from_pcd").string(), from_pcd));
+    ASSERT_EQ(from_ply.size(), from_pcd.size());
+    ASSERT_GT(from_ply.size(), 2u);
+    for (size_t i = 0; i < from_ply.size(); i++) {
+      EXPECT_EQ(from_ply[i].T_world_origin.matrix(), from_pcd[i].T_world_origin.matrix());
+      ASSERT_EQ(from_ply[i].points->size(), from_pcd[i].points->size());
+      for (size_t j = 0; j < from_ply[i].points->size(); j++) {
+        ASSERT_EQ(from_ply[i].points->points[j], from_pcd[i].points->points[j]);
+        ASSERT_EQ(from_ply[i].points->covs[j], from_pcd[i].points->covs[j]);
+      }
+    }
+  }
+}
+
+TEST_F(MapCompilerTest, CompilesPlyWithDownsampling) {
+  const auto points = make_synthetic_world_points(params_);
+  write_synthetic_ply((dir_ / "cloud.ply").string(), points, PlyEncoding::BinaryLittleEndian);
+  ASSERT_EQ(compile(dir_ / "cloud.ply", output_, "--voxel-size 1.0"), 0) << last_log();
+  MapManager manager;
+  ASSERT_TRUE(manager.load(output_.string()));
+  EXPECT_GT(manager.size(), 0u);
+}
+
+TEST_F(MapCompilerTest, BrokenPlyLeavesNoOutput) {
+  const std::string xyz = "property float x\nproperty float y\nproperty float z\n";
+  for (const auto& [text, message] : std::vector<std::pair<std::string, std::string>>{
+         {"ply\nformat binary_big_endian 1.0\nelement vertex 1\n" + xyz + "end_header\n0123456789ab", "big-endian PLY is not supported"},
+         {"ply\nformat ascii 1.0\nelement vertex 1\nproperty float x\nproperty float y\nend_header\n1 2\n", "missing vertex property x, y or z"},
+         {"ply\nformat binary_little_endian 1.0\nelement vertex 100\n" + xyz + "end_header\n0123456789ab", "truncated binary data"}}) {
+    std::ofstream(dir_ / "broken.ply", std::ios::binary | std::ios::trunc) << text;
+    EXPECT_EQ(compile(dir_ / "broken.ply", output_), 1) << message;
+    EXPECT_FALSE(fs::exists(output_)) << message;
+    EXPECT_NE(last_log().find(message), std::string::npos) << last_log();
+  }
+}
+
+namespace {
+
+struct Pgm {
+  int width = 0;
+  int height = 0;
+  std::vector<int> pixels;  ///< Row-major from the top row
+  int at(int column, int row) const { return pixels[static_cast<size_t>(row) * width + column]; }
+};
+
+Pgm read_pgm(const fs::path& path) {
+  std::ifstream ifs(path, std::ios::binary);
+  Pgm pgm;
+  std::string magic, comment;
+  int max_value = 0;
+  std::getline(ifs, magic);
+  std::getline(ifs, comment);
+  ifs >> pgm.width >> pgm.height >> max_value;
+  ifs.get();
+  EXPECT_EQ(magic, "P5");
+  EXPECT_EQ(max_value, 255);
+  for (char c; ifs.get(c);) {
+    pgm.pixels.push_back(static_cast<unsigned char>(c));
+  }
+  EXPECT_EQ(pgm.pixels.size(), static_cast<size_t>(pgm.width) * pgm.height);
+  return pgm;
+}
+
+/// A 4 x 2 m floor at z = 10 with its lower-left corner at (100, -50), sampled every 0.1 m at cell-centred offsets,
+/// a 1 x 0.5 m box at z = 10.5 in its top-left (highest y) corner, a hole in the floor at x 103 to 103.5,
+/// y -50 to -49.5, and a ceiling at z = 15.
+void write_floor_ply(const fs::path& path) {
+  std::vector<Eigen::Vector3d> points;
+  for (int i = 0; i < 40; i++) {
+    for (int j = 0; j < 20; j++) {
+      const double x = 100.05 + 0.1 * i;
+      const double y = -49.95 + 0.1 * j;
+      if (!(i >= 30 && i < 35 && j < 5)) {
+        points.emplace_back(x, y, 10.0);
+      }
+      points.emplace_back(x, y, 15.0);
+      if (i < 10 && j >= 15) {
+        points.emplace_back(x, y, 10.5);
+      }
+    }
+  }
+  std::ofstream ofs(path, std::ios::trunc);
+  ofs << "ply\nformat ascii 1.0\nelement vertex " << points.size() << "\nproperty double x\nproperty double y\nproperty double z\nend_header\n";
+  ofs.precision(17);
+  for (const auto& p : points) {
+    ofs << p.x() << " " << p.y() << " " << p.z() << "\n";
+  }
+}
+
+}  // namespace
+
+TEST_F(MapCompilerTest, WritesOccupancyGrid) {
+  const fs::path ply = dir_ / "floor.ply";
+  write_floor_ply(ply);
+  const fs::path prefix = dir_ / "grid" / "floor2d";
+  ASSERT_EQ(compile(ply, output_, "--grid-size 2 --occupancy-grid '" + prefix.string() + "' --occupancy-resolution 0.5 --occupancy-z-min 10.2 --occupancy-z-max 12"), 0)
+    << last_log();
+  LoadedSubmaps submaps;
+  ASSERT_TRUE(load_map(output_.string(), submaps));
+
+  std::ifstream yaml(dir_ / "grid" / "floor2d.yaml");
+  const std::string text((std::istreambuf_iterator<char>(yaml)), std::istreambuf_iterator<char>());
+  EXPECT_EQ(text,
+            "image: floor2d.pgm\n"
+            "mode: trinary\n"
+            "resolution: 0.500000000\n"
+            "origin: [100.000000000, -50.000000000, 0.0]\n"
+            "negate: 0\n"
+            "occupied_thresh: 0.65\n"
+            "free_thresh: 0.1\n");
+
+  const Pgm pgm = read_pgm(dir_ / "grid" / "floor2d.pgm");
+  ASSERT_EQ(pgm.width, 8);
+  ASSERT_EQ(pgm.height, 4);
+  for (int row = 0; row < pgm.height; row++) {
+    for (int column = 0; column < pgm.width; column++) {
+      // Row 0 is the highest y: the box is in the top-left corner, the hole in the bottom row.
+      int expected = 254;
+      if (row == 0 && column < 2) {
+        expected = 0;
+      } else if (row == 3 && column == 6) {
+        expected = 205;
+      }
+      EXPECT_EQ(pgm.at(column, row), expected) << column << " " << row;
+    }
+  }
+}
+
+TEST_F(MapCompilerTest, WritesOccupancyGridFromAGlimDump) {
+  // The corridor: floor at z = 0 and walls up to 3 m along y = +-5, in a frame shifted by world_offset.
+  const double z0 = params_.world_offset.z();
+  const std::string band = " --occupancy-z-min " + std::to_string(z0 + 0.5) + " --occupancy-z-max " + std::to_string(z0 + 2.0);
+  ASSERT_EQ(compile(input_, output_, "--occupancy-grid '" + (dir_ / "corridor").string() + "' --occupancy-resolution 0.4" + band), 0) << last_log();
+  const Pgm pgm = read_pgm(dir_ / "corridor.pgm");
+  ASSERT_GT(pgm.width, 10);
+  ASSERT_GT(pgm.height, 10);
+  int occupied = 0, num_free = 0;
+  for (const int pixel : pgm.pixels) {
+    occupied += pixel == 0;
+    num_free += pixel == 254;
+  }
+  EXPECT_GT(occupied, pgm.width);  // At least the two walls along x
+  EXPECT_GT(num_free, occupied);   // The floor between them
+  // Dump options other than the occupancy grid are still refused.
+  fs::remove_all(output_);
+  EXPECT_EQ(compile(input_, output_, "--grid-size 10 --occupancy-grid '" + (dir_ / "again").string() + "'" + band), 1);
+  EXPECT_FALSE(fs::exists(dir_ / "again.pgm"));
+}
+
+TEST_F(MapCompilerTest, RejectsBadOccupancyOptions) {
+  const fs::path ply = dir_ / "floor.ply";
+  write_floor_ply(ply);
+  const std::string grid = "--occupancy-grid '" + (dir_ / "grid").string() + "'";
+  for (const auto& [options, message] : std::vector<std::pair<std::string, std::string>>{
+         {grid, "must both be set"},
+         {grid + " --occupancy-z-min 10", "must both be set"},
+         {grid + " --occupancy-z-min 12 --occupancy-z-max 10", "must be below"},
+         {grid + " --occupancy-z-min 10 --occupancy-z-max 12 --occupancy-resolution 0.001", "resolution"},
+         {"--occupancy-z-min 10 --occupancy-z-max 12", "need --occupancy-grid"},
+         // Every point is at z >= 10, so nothing is below this band's top.
+         {grid + " --occupancy-z-min 1 --occupancy-z-max 2", "no points below occupancy z_max"}}) {
+    EXPECT_EQ(compile(ply, output_, options), 1) << options;
+    EXPECT_FALSE(fs::exists(output_)) << options;
+    EXPECT_FALSE(fs::exists(dir_ / "grid.pgm")) << options;
+    EXPECT_NE(last_log().find(message), std::string::npos) << options << ": " << last_log();
+  }
+
+  // An existing grid file is refused before anything is written.
+  std::ofstream(dir_ / "grid.yaml") << "keep";
+  EXPECT_EQ(compile(ply, output_, grid + " --occupancy-z-min 10.2 --occupancy-z-max 12"), 1);
+  EXPECT_FALSE(fs::exists(output_));
+  EXPECT_FALSE(fs::exists(dir_ / "grid.pgm"));
+  EXPECT_NE(last_log().find("already exists"), std::string::npos) << last_log();
 }
 
 TEST_F(MapCompilerTest, RejectsBrokenJson) {

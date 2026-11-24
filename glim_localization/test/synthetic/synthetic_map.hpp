@@ -47,4 +47,16 @@ enum class PcdEncoding { Ascii, Binary };
 /// Write points as a PCD v0.7 file with fields x y z (F4, or F8 if `double_xyz`) and a float intensity.
 void write_synthetic_pcd(const std::string& path, const SyntheticPoints& points, PcdEncoding encoding, bool double_xyz = false);
 
+enum class PlyEncoding { Ascii, BinaryLittleEndian };
+
+struct PlyOptions {
+  bool double_xyz = false;  ///< x, y, z as double instead of float
+  /// Add a `list uchar int` property to the vertex element (variable-size binary records), an element with a list
+  /// before the vertex element, and a face element after it.
+  bool lists = false;
+};
+
+/// Write points as a PLY 1.0 file. Vertex properties: float intensity, x y z, float nx ny nz, uchar red green blue.
+void write_synthetic_ply(const std::string& path, const SyntheticPoints& points, PlyEncoding encoding, const PlyOptions& options = PlyOptions());
+
 }  // namespace glim_localization::test
