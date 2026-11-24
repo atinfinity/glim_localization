@@ -520,3 +520,36 @@ First step of #2: a CUDA build environment. There is no GPU odometry module yet.
     - `cuda-nvcc-13-1`, `cuda-crt-13-1`, `cuda-culibos-dev-13-1` and `cuda-cccl-13-1`: 13.1.115-1
     - `cuda-cudart-13-1`, `cuda-cudart-dev-13-1`, `cuda-driver-dev-13-1` and `cuda-toolkit-13-1-config-common`: 13.1.80-1
     - `cuda-toolkit-13-config-common` and `cuda-toolkit-config-common`: 13.5.37-1
+
+## GPU localization odometry module (2026-11-25, part of #2)
+
+Second step of #2: the GPU odometry module and backend selection. Design in DESIGN §5.7.
+
+- **Split**: the localization odometry is now a shared base `OdometryEstimationLocalization` (map factor bookkeeping, quality monitor and status, resets, fail-closed paths, IMU gap policy) with two backends. `OdometryEstimationLocalizationCPU` keeps its behavior and config; the CPU tests are unchanged apart from includes and a latency print. The replay runner, the publisher, the R1 extension and the R2 node use the base class.
+- **GPU module** `OdometryEstimationLocalizationGPU` (`libodometry_localization_gpu.so`, `BUILD_WITH_CUDA=ON` only), derived from GLIM's `odometry_estimation_gpu.cpp/.hpp`:
+  - Map factors: the same tile selection as the CPU module (`select_map_tiles`), then one `IntegratedVGICPFactorGPU` per tile and level against `GaussianVoxelMapGPU` tiles. A weight other than 1 (DEGRADED, LOST, `map_factor_weight`) uses `WeightedVGICPFactorGPU`, a subclass that scales error and linearization like `WeightedFactor` but stays a GPU factor, so the smoother still batches it.
+  - GPU tiles: `GpuTileCache` uploads tiles on first use and keeps at most `map_gpu_max_tiles` (default 32, must be at least `map_max_submaps`) in LRU order. Tiles referenced by factors in the smoother window stay alive after eviction.
+  - Keyframes (`use_keyframes`): upstream's scan-to-keyframe GPU factors and keyframe strategies with their upstream keys.
+  - GLIM's GPU linearization hook is registered before the base constructor, because the smoother copies the hook list when it is created.
+- **Backend selection**: the replay tool and the R2 node read `so_name` from `config_odometry`. `libodometry_localization_cpu.so` or `_gpu.so` select the backend; anything else, or the GPU module in a CPU build, is an error (replay exit 2, R2 configure fails). `replay_args.json` records the backend in `effective.backend`. R1 loads the module through GLIM as before.
+- **Configs**: `config_odometry_localization_gpu.json` (common keys identical to the CPU file; a test checks this), `glim_localization/config/gpu`, and `config/r1_gpu`, `config/r2_gpu` in the ROS package. They share every other file with the CPU configs.
+- **Tests**: `test_localization_odometry_gpu` (CUDA builds): convergence from a perturbed start, with keyframes, with map weight 0.5, waiting for the initial pose with two resets; the parameter checks; tile cache eviction; the weighted GPU factor against the unweighted one; the factory and the plugin load. They skip without a GPU, and fail instead under `GLIM_LOC_REQUIRE_GPU=1`. `test_localization_backend` runs in both builds. `test_replay_e2e.sh` adds a GPU replay with the same limits when the build is CUDA and a GPU is visible, and prints the accuracy and odometry time of both backends.
+- **Verification on the GPU machine** (NVIDIA GeForce RTX 2080 Ti, sm_75, 11 GiB; driver 595.99.02; CUDA 13.1 image `glim_localization:dev-cuda`, unchanged inputs, so the stale check passes):
+  - `scripts/docker_run.sh --cuda scripts/ci.sh` passes: core ctest 235/235 (one skip by design: `GpuNeedsACudaBuild` only applies to CPU builds), colcon test 12/12, Python tests 187, replay e2e including the GPU replay.
+  - The first CUDA build failed: the GPU module used the smoother and `GaussianFactorGraph` through forward declarations only. Fixed by including their headers. The CPU build does not compile that file.
+  - A rebuild of the CUDA image failed on a transient network error while cloning GLIM; the existing image had the same inputs and was used.
+- **CPU vs GPU** (same machine, same synthetic sequence: 12 s, 121 frames at 10 Hz, initial pose off by 0.3 / -0.2 / 0.1 m and 3 degrees; errors after 3 s):
+
+  | Run | Backend | ATE translation RMSE / max [m] | Max rotation [deg] | Odometry time per frame, mean / p95 [ms] |
+  | --- | --- | --- | --- | --- |
+  | Replay e2e (`frames.csv`, `t_odometry_ms`) | CPU | 0.0058 / 0.0119 | 0.080 | 19.2 / 17.4 |
+  | Replay e2e | GPU | 0.0058 / 0.0119 | 0.080 | 3.5 / 3.7 |
+  | Unit test (`status().processing_time`) | CPU | (passes, < 0.1 m) | | 15.6 / 13.1 |
+  | Unit test | GPU | tail RMS 0.0043, max 0.0119 | 0.080 | 2.7 / 2.9 |
+  | Unit test, `use_keyframes` | GPU | tail RMS 0.0036, max 0.0090 | 0.086 | 7.0 / 19.2 |
+
+  - The CPU and GPU replay trajectories differ by at most 1.1e-6 m over 121 poses: the GPU path computes the same factors (residuals differ in the 7th digit) and converges to the same optimum.
+  - CPU means are above their p95 because of the first frames (initialization and the first factor builds); the GPU first frame includes the tile uploads (22 ms in replay).
+  - These are small synthetic scans (about 4300 points); real-data timing on the GPU is not measured yet.
+- **CPU path**: `scripts/ci_local.sh --force` on the development Mac passes: core ctest 224/224, colcon test 12/12, Python tests 187, replay e2e (GPU replay reported as skipped).
+- **Remaining for #2**: tile prefetch along the predicted path (uploads are synchronous today), a GPU memory budget in bytes instead of a tile count, streaming tiles from disk (the whole map stays in host memory), real-data accuracy and timing on the GPU, and GPU CI (GitHub-hosted runners have no GPU; verification stays manual).
