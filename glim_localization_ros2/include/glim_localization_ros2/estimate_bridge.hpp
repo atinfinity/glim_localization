@@ -63,6 +63,16 @@ public:
   /// Frames that were not published because no gyro sample was near their stamp
   size_t frames_without_gyro() const;
 
+  /// What the attached publisher dropped, for a log line when it is detached
+  struct DropCounts {
+    size_t frames_without_gyro = 0;
+    size_t unpaired_frames = 0;
+    size_t stale_frames = 0;
+    size_t tf_lookup_failures = 0;
+  };
+  /// The counts of the attached publisher; all zero when none is attached
+  DropCounts drop_counts() const;
+
 private:
   mutable std::mutex mutex_;
   std::unique_ptr<LocalizationPublisher> publisher_;

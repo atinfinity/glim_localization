@@ -117,6 +117,18 @@ size_t EstimateBridge::frames_without_gyro() const {
   return frames_without_gyro_;
 }
 
+EstimateBridge::DropCounts EstimateBridge::drop_counts() const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  DropCounts counts;
+  if (publisher_) {
+    counts.frames_without_gyro = frames_without_gyro_;
+    counts.unpaired_frames = publisher_->unpaired_frames();
+    counts.stale_frames = publisher_->stale_frames();
+    counts.tf_lookup_failures = publisher_->tf_lookup_failures();
+  }
+  return counts;
+}
+
 std::string EstimateBridge::to_T_map_imu(const PoseMsg& msg, Eigen::Isometry3d& T_map_imu, double& min_stamp) const {
   std::lock_guard<std::mutex> lock(mutex_);
   if (!publisher_) {
