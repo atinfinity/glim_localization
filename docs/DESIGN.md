@@ -66,7 +66,7 @@ With the CPU default (`use_keyframes: false`), the map factors are the only scan
 | Module | Kind | Source / existing parts used | Role | Status |
 | --- | --- | --- | --- | --- |
 | Odometry module (`libodometry_localization_cpu.so`) | Modified | Copies `odometry_estimation_cpu.cpp/.hpp`. Inherits `OdometryEstimationIMU` | Adds map factors to `create_factors()`, an option to disable keyframes, a weaker initial prior, adds `reset()` | Implemented |
-| GPU odometry module (`libodometry_localization_gpu.so`) | Modified | Copies `odometry_estimation_gpu.cpp/.hpp`. Inherits the shared base `OdometryEstimationLocalization` | Same map factors, status and resets as the CPU module, on GPU voxel maps (§5.7) | Implemented (`BUILD_WITH_CUDA=ON` only). Tile prefetch and a memory-based budget are planned ([#2](https://github.com/atinfinity/glim_localization/issues/2)) |
+| GPU odometry module (`libodometry_localization_gpu.so`) | Modified | Copies `odometry_estimation_gpu.cpp/.hpp`. Inherits the shared base `OdometryEstimationLocalization` | Same map factors, status and resets as the CPU module, on GPU voxel maps (§5.7) | Implemented (`BUILD_WITH_CUDA=ON` only). Tile prefetch and a memory-based budget are planned ([#23](https://github.com/atinfinity/glim_localization/issues/23)) |
 | MapManager | New | `SubMap::load`, `GaussianVoxelMapCPU` | Map loading, nearby submap selection, voxel generation | Implemented (whole map resident in host memory). The GPU module keeps a bounded LRU of GPU tiles (§5.7) |
 | MapFactorBuilder | New | Unary constructor of `IntegratedVGICPFactor` | Map factor generation, overlap and inlier ratios, weight control | Implemented (CPU) |
 | Relocalizer | New | GICP, RANSAC / GNC of gtsam_points | Multi-hypothesis yaw refinement for /initialpose, optional global relocalization | Planned ([#3](https://github.com/atinfinity/glim_localization/issues/3)) |
@@ -84,7 +84,7 @@ With the CPU default (`use_keyframes: false`), the map factors are the only scan
 - `map_compiler` (offline): strips frame data, keeps the covariances from the dump (recomputation is planned, [#4](https://github.com/atinfinity/glim_localization/issues/4)), and writes `map_index.json` (center coordinates, BBox). A mode that splits a PCD into a grid and writes the same format is also provided (PLY input is planned).
 - Voxels: multi-resolution `GaussianVoxelMap` per submap (e.g. 0.5 / 1.0 / 2.0 m).
 - Selection: get the submaps within radius R (e.g. 60 m) of the predicted pose with a KD-tree, and take up to K (e.g. 5) nearest first. Submaps whose overlap ratio (`gtsam_points::overlap`) is below a threshold are excluded.
-- Memory: the whole map is loaded and stays resident in host memory. The GPU module uploads tiles on first use into a bounded LRU (§5.7); prefetch and streaming tiles from disk are planned ([#2](https://github.com/atinfinity/glim_localization/issues/2)).
+- Memory: the whole map is loaded and stays resident in host memory. The GPU module uploads tiles on first use into a bounded LRU (§5.7); prefetch and streaming tiles from disk are planned ([#23](https://github.com/atinfinity/glim_localization/issues/23)).
 - API: `load(path)`, `query(T_world_imu, radius, k) -> std::vector<MapTile::ConstPtr>`, `MapTile = { id, T_world_origin, points, voxelmaps, bbox_min, bbox_max }`. After loading, the map is shared as an immutable snapshot and is thread-safe.
 
 Points settled by the Phase 2 implementation:
