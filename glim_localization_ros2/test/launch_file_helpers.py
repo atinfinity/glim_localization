@@ -71,16 +71,23 @@ def r2_launch(use_composition):
     return include_launch("localization.launch.py", arguments)
 
 
-def check_r2_launch(test, client):
-    """Autostart reaches active and publishes ~/map; the bag gives ~/pose and TF that composes to it."""
+def check_r2_launch(test, client, proc_output):
+    """Autostart reaches active and publishes ~/map; the bag gives ~/pose and TF that composes to it.
+
+    The bag is resumed only after the node has logged a matched publisher on each bag topic: the first pose comes from
+    the bag's /initialpose at 0 s, and when it was lost the node localized only from the next one at 5 s (issue #20).
+    """
     client.wait_until(lambda: client.state() == r2_helpers.State.PRIMARY_STATE_ACTIVE, "the node did not become active (autostart)")
     # Published at configure, before this subscription
     check_map(test, wait_for_latched_map(client.node, f"{r2_helpers.NODE}/map"))
 
     client.wait_for_subscribers(["/imu", "/points", "/initialpose"])
-    client.play_and_wait(r2_helpers.require_env("GLIM_R1_BAG"), r2_helpers.BAG_TOPICS)
+    client.play_and_wait(
+        r2_helpers.require_env("GLIM_R1_BAG"), r2_helpers.BAG_TOPICS, node_matched=r2_helpers.wait_for_node_matched(proc_output))
     num_frames = len(client.gt)
-    test.assertGreaterEqual(len(client.poses), MIN_POSE_RATIO * num_frames, f"{len(client.poses)} poses for {num_frames} frames")
+    print(f"{len(client.poses)} poses for {num_frames} frames; {client.coverage_report()}", flush=True)
+    test.assertGreaterEqual(
+        len(client.poses), MIN_POSE_RATIO * num_frames, f"{len(client.poses)} poses for {num_frames} frames; {client.coverage_report()}")
     test.assertTrue(all(p.header.frame_id == "map" for p in client.poses))
     pairs = client.tf_pairs()
     test.assertGreaterEqual(len(pairs), MIN_POSE_RATIO * num_frames, f"{len(pairs)} stamps with map->odom and odom->base_link")
