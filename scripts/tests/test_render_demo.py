@@ -63,7 +63,7 @@ def replay(tmp_path):
 
 
 def args(base, out, *extra):
-    return ["--data", str(base / "data"), "--run", str(base / "run"), "--map", str(base / "map.pcd"), "--out", str(out), "--width", "200", *extra]
+    return ["--data", str(base / "data"), "--run", str(base / "run"), "--map", str(base / "map.pcd"), "--out", str(out), "--width", "200", "--scale", "1", "--font", "DejaVu Sans", *extra]
 
 
 def test_gif_has_one_frame_per_estimate(replay):
@@ -143,3 +143,27 @@ def test_bad_frames_and_unwritable_output_exit_2(replay):
     frames.write_text(good)
     (replay / "not_a_dir").write_text("")
     assert render_demo.main(args(replay, replay / "not_a_dir" / "c.gif")) == 2
+
+
+def test_missing_font_falls_back_with_a_warning(replay, capsys):
+    out = replay / "font.gif"
+    assert render_demo.main(args(replay, out, "--font", "No Such Font Family 25", "--scale", "1")) == 0
+    assert "warning: font 'No Such Font Family 25' not found, using DejaVu Sans" in capsys.readouterr().err
+    assert Image.open(out).size[0] == 200
+
+
+def test_scale_and_palette_keep_drawing_colors(replay):
+    out = replay / "scaled.gif"
+    assert render_demo.main(args(replay, out, "--scale", "2")) == 0
+    image = Image.open(out)
+    assert image.size[0] == 400
+    # Drawing colors come out exactly (no near neighbor from the adaptive part of the palette).
+    drawn = {color for _, color in image.convert("RGB").getcolors(1 << 20)}
+    for color in ((255, 255, 255), (0, 0, 0), (0x22, 0x22, 0x22)):
+        assert color in drawn, color
+    # The palette holds the drawing colors exactly even when the sampled frames do not contain them.
+    images = [Image.new("RGB", (8, 8), "#808080") for _ in range(3)]
+    palette = render_demo.gif_palette(images, 256).getpalette()
+    entries = {tuple(palette[k:k + 3]) for k in range(0, len(palette), 3)}
+    for color in ("#000000", "#ffffff", render_demo.POSE_COLOR, render_demo.SCAN_COLOR, render_demo.ESTIMATE_COLOR, *render_demo.STATE_COLORS.values()):
+        assert tuple(int(color[k:k + 2], 16) for k in (1, 3, 5)) in entries, color
