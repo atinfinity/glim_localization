@@ -72,6 +72,17 @@ add_executable(test_pcd_map test_pcd_map.cpp)
 target_link_libraries(test_pcd_map PRIVATE glim_localization_synthetic nlohmann_json::nlohmann_json GTest::gtest_main)
 gtest_discover_tests(test_pcd_map)
 
+# GPU smoke test (BUILD_WITH_CUDA=ON only). Skips without a visible GPU; ctest reports the skip.
+if(GLIM_LOCALIZATION_WITH_CUDA)
+  find_package(CUDAToolkit REQUIRED)
+  add_executable(test_gpu_smoke test_gpu_smoke.cpp)
+  target_link_libraries(test_gpu_smoke PRIVATE glim_localization CUDA::cudart GTest::gtest_main)
+  gtest_discover_tests(test_gpu_smoke PROPERTIES
+    TIMEOUT 120
+    SKIP_REGULAR_EXPRESSION "\\[  SKIPPED \\]"
+  )
+endif()
+
 if(TARGET map_compiler)
   add_executable(test_map_compiler test_map_compiler.cpp)
   target_compile_definitions(test_map_compiler PRIVATE MAP_COMPILER_PATH="$<TARGET_FILE:map_compiler>")

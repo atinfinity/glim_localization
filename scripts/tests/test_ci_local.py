@@ -830,16 +830,19 @@ def ci_dir(tmp_path):
     directory.mkdir()
     shutil.copy(SCRIPTS / "ci.sh", directory / "ci.sh")
     log = tmp_path / "ci.log"
-    for name in ("check_deps", "build_core", "build_colcon", "test_colcon", "test_interfaces", "test_python", "test_replay_e2e"):
+    for name in ("check_cuda_image_inputs", "check_deps", "build_core", "build_colcon", "test_colcon", "test_interfaces",
+                 "test_python", "test_replay_e2e"):
         path = directory / f"{name}.sh"
         path.write_text(f'#!/bin/bash\necho {name} >> "{log}"\n')
         path.chmod(0o755)
     return directory, log
 
 
-def run_ci(ci_dir, *args):
+def run_ci(ci_dir, *args, cuda="OFF"):
+    # The mode is set explicitly: these tests also run in the CUDA image, which sets it to ON.
     directory, _ = ci_dir
-    return subprocess.run(["bash", str(directory / "ci.sh"), *args], capture_output=True, text=True, check=False)
+    env = {**os.environ, "GLIM_LOC_BUILD_WITH_CUDA": cuda}
+    return subprocess.run(["bash", str(directory / "ci.sh"), *args], capture_output=True, text=True, check=False, env=env)
 
 
 def test_ci_runs_the_dependency_check_by_default(ci_dir):
@@ -852,6 +855,21 @@ def test_ci_runs_test_colcon_after_build_colcon(ci_dir):
     steps = ci_dir[1].read_text().splitlines()
     assert "test_colcon" in steps
     assert steps.index("build_colcon") < steps.index("test_colcon") < steps.index("test_interfaces")
+
+
+def test_ci_checks_the_cuda_image_inputs_first_in_cuda_mode_only(ci_dir):
+    assert run_ci(ci_dir, cuda="ON").returncode == 0
+    assert ci_dir[1].read_text().splitlines()[:2] == ["check_cuda_image_inputs", "check_deps"]
+    ci_dir[1].unlink()
+    assert run_ci(ci_dir).returncode == 0
+    assert "check_cuda_image_inputs" not in ci_dir[1].read_text().splitlines()
+
+
+def test_ci_stops_on_a_stale_cuda_image(ci_dir):
+    stale = ci_dir[0] / "check_cuda_image_inputs.sh"
+    stale.write_text("#!/bin/bash\nexit 1\n")
+    assert run_ci(ci_dir, cuda="ON").returncode != 0
+    assert not ci_dir[1].exists()
 
 
 def test_ci_skips_the_dependency_check_only_on_request(ci_dir):

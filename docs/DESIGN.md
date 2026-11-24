@@ -66,7 +66,7 @@ With the CPU default (`use_keyframes: false`), the map factors are the only scan
 | Module | Kind | Source / existing parts used | Role | Status |
 | --- | --- | --- | --- | --- |
 | Odometry module (`libodometry_localization_cpu.so`) | Modified | Copies `odometry_estimation_cpu.cpp/.hpp`. Inherits `OdometryEstimationIMU` | Adds map factors to `create_factors()`, an option to disable keyframes, a weaker initial prior, adds `reset()` | Implemented |
-| GPU odometry module (`libodometry_localization_gpu.so`) | Modified | Would copy `odometry_estimation_gpu.cpp/.hpp` | Same as the CPU module, with GPU voxel maps | Planned (#2). `BUILD_WITH_CUDA=ON` only checks that gtsam_points has CUDA; no GPU sources are built |
+| GPU odometry module (`libodometry_localization_gpu.so`) | Modified | Would copy `odometry_estimation_gpu.cpp/.hpp` | Same as the CPU module, with GPU voxel maps | Planned (#2). The CUDA image and `BUILD_WITH_CUDA=ON` build are in place (§5.6); with it only a GPU smoke test is built, no GPU module yet |
 | MapManager | New | `SubMap::load`, `GaussianVoxelMapCPU` | Map loading, nearby submap selection, voxel generation | Implemented (CPU, whole map resident). LRU tile management is planned with the GPU module |
 | MapFactorBuilder | New | Unary constructor of `IntegratedVGICPFactor` | Map factor generation, overlap and inlier ratios, weight control | Implemented (CPU) |
 | Relocalizer | New | GICP, RANSAC / GNC of gtsam_points | Multi-hypothesis yaw refinement for /initialpose, optional global relocalization | Planned (#3) |
@@ -84,7 +84,7 @@ With the CPU default (`use_keyframes: false`), the map factors are the only scan
 - `map_compiler` (offline): strips frame data, keeps the covariances from the dump (recomputation is planned, #4), and writes `map_index.json` (center coordinates, BBox). A mode that splits a PCD into a grid and writes the same format is also provided (PLY input is planned).
 - Voxels: multi-resolution `GaussianVoxelMap` per submap (e.g. 0.5 / 1.0 / 2.0 m).
 - Selection: get the submaps within radius R (e.g. 60 m) of the predicted pose with a KD-tree, and take up to K (e.g. 5) nearest first. Submaps whose overlap ratio (`gtsam_points::overlap`) is below a threshold are excluded.
-- Memory: the whole map is loaded and stays resident. LRU tile management and prefetch on the GPU are planned with the GPU module (#2).
+- Memory: the whole map is loaded and stays resident. LRU tile management and prefetch on the GPU are planned with the GPU module (#2; build environment in §5.6).
 - API: `load(path)`, `query(T_world_imu, radius, k) -> std::vector<MapTile::ConstPtr>`, `MapTile = { id, T_world_origin, points, voxelmaps, bbox_min, bbox_max }`. After loading, the map is shared as an immutable snapshot and is thread-safe.
 
 Points settled by the Phase 2 implementation:
@@ -148,6 +148,18 @@ Pose reset at runtime: `reset(T_world_imu, v_world_imu, min_stamp)` (thread-safe
 ```
 
 `so_name` in `config_sub_mapping` is empty, and `config_ros` has `enable_global_mapping: false`.
+
+### 5.6 GPU (CUDA) build
+
+The GPU module (#2) needs gtsam_points built with CUDA, which the CPU image cannot provide (the PPA's `libgtsam-points-dev` has no CUDA, the Mac is arm64, and GitHub-hosted runners have no NVIDIA GPU). The first step is a second image and a build mode; the GPU module, `GaussianVoxelMapGPU` tiles in MapManager and the GPU memory LRU (§5.1) follow.
+
+- Image: `docker/Dockerfile.cuda`, a copy of `docker/Dockerfile` with the changes marked `CUDA:`. Same base (`ros:jazzy-ros-base`), plus NVIDIA's CUDA 13.1 apt toolkit (`cuda-nvcc`, `cuda-cudart-dev`, `cuda-cccl`, pinned; repository key fingerprint pinned like the PPA key), `libgtsam-points-cuda13.1-dev=1.2.2` from the koide3 PPA instead of `libgtsam-points-dev` (the two install the same files and must not be installed together), and GLIM and glim_ros2 with `BUILD_WITH_CUDA=ON`. GLIM's GPU odometry at `1a197c9` calls `IndexedSlidingWindow::has_index`, which gtsam_points added after 1.2.2, so the CUDA image also applies `third_party/patches/glim_cuda/` (the same range test through `size()` and `inner_size()`); the CPU image does not build that file. amd64 only. A Python test keeps the shared pins and lines of the two Dockerfiles in sync, and GitHub Actions lints the CUDA Dockerfile (`docker build --check`) without building it.
+- Why CUDA 13.1 and the PPA package: gtsam_points 1.2.2 and GLIM `1a197c9` are both tested upstream with CUDA 13.1, and the PPA's CUDA 13.1 build has native SASS for sm_75 to sm_120. A source build of gtsam_points (about 10 to 20 minutes more) is the fallback if the PPA binary proves problematic.
+- GPU architectures: `CMAKE_CUDA_ARCHITECTURES` comes from the build argument `CUDA_ARCHITECTURES` (default `75`) through `CUDAARCHS`, and is never `native`: `docker build` sees no GPU. GLIM has no `.cu` files and our package has none yet, so today it only matters for future CUDA sources; the PPA binaries are prebuilt.
+- Build mode: the image sets `GLIM_LOC_BUILD_WITH_CUDA=ON`, and `build_core.sh` / `build_colcon.sh` pass it as `BUILD_WITH_CUDA`. Our CMake then requires `GTSAM_POINTS_USE_CUDA` and builds `test_gpu_smoke` (links `CUDA::cudart`); the CPU module, tools and tests build and run unchanged, with `BUILD_WITH_CUDA=OFF` in the CPU image.
+- GPU tests: a GPU test calls `GTEST_SKIP` when `cudaGetDeviceCount` finds no device, and ctest reports it as skipped. `GLIM_LOC_REQUIRE_GPU=1` turns the skip into a failure; `ci.sh` sets it when `nvidia-smi` lists a GPU, so a broken device setup on a GPU machine cannot pass as a skip.
+- Stale image check: `docker compose run` never rebuilds an existing tag, and the CUDA image is outside `ci_local.sh`'s image check. Like the CPU image, it copies the repository files it bakes in to `/etc/glim_localization/inputs/`. In CUDA mode `ci.sh` runs `check_cuda_image_inputs.sh`, which fails when they differ from the mounted tree.
+- Runtime: compose service `dev-cuda` (`scripts/docker_run.sh --cuda`) with all GPUs through a device reservation (`deploy.resources.reservations.devices`; the newer `gpus:` key would make Compose before v2.30 reject the whole file, the CPU service included). The image does not set `NVIDIA_VISIBLE_DEVICES`, so GPUs come only from a device request, also with the `nvidia` default runtime. It also has a separate image tag (`glim_localization:dev-cuda`) and a separate build volume. Verification runs on a maintainer's GPU machine (docs/PROGRESS.md); CI stays CPU-only.
 
 ## 6. ROS 2 support
 

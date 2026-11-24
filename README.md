@@ -41,7 +41,7 @@ Design: [docs/DESIGN.md](docs/DESIGN.md). Plan: [docs/IMPLEMENTATION_PLAN.md](do
 
 Not done yet (open issues):
 
-- GPU (CUDA) version of the odometry module (#2).
+- GPU (CUDA) version of the odometry module (#2). The CUDA image and build mode are in place ([CUDA variant](#cuda-variant)).
 - Relocalizer: multi-hypothesis refinement of `/initialpose` and global relocalization (#3).
 - `map_compiler` PLY input and 2D OccupancyGrid export (#4); PCD follow-ups such as `binary_compressed` input (#12).
 - Evaluation on real data against an independent reference (#5) and in simulation (#9).
@@ -51,7 +51,7 @@ Not done yet (open issues):
 ## Requirements
 
 - Docker with Compose. Builds and tests run in an Ubuntu 24.04 + ROS 2 Jazzy image (`docker/Dockerfile`). Builds outside this image are not supported.
-- The image pins GLIM (commit `1a197c9`), glim_ros2 (commit `4d4ec52`, with a build-only patch that drops the cv_bridge dependency), GTSAM 4.3.0 and gtsam_points 1.2.2, all built for CPU (`BUILD_WITH_CUDA=OFF`). See [docs/DEPENDENCIES.md](docs/DEPENDENCIES.md).
+- The image pins GLIM (commit `1a197c9`), glim_ros2 (commit `4d4ec52`, with a build-only patch that drops the cv_bridge dependency), GTSAM 4.3.0 and gtsam_points 1.2.2, all built for CPU (`BUILD_WITH_CUDA=OFF`). See [docs/DEPENDENCIES.md](docs/DEPENDENCIES.md). An optional CUDA image for amd64 NVIDIA hosts is described in [CUDA variant](#cuda-variant).
 - A LiDAR with an IMU. LiDAR-only input is not supported.
 
 > [!NOTE]
@@ -80,6 +80,27 @@ GitHub Actions runs `scripts/ci.sh` in an image tagged with `scripts/image_input
 To use ccache locally, set `GLIM_LOC_CCACHE_DIR` to a host directory when calling `scripts/docker_run.sh`. It is mounted as given, so its files are owned by the container user (root), and the path must not contain `:`.
 
 Unless prefixed with `scripts/docker_run.sh`, the commands below run inside the container (`scripts/docker_run.sh` with no arguments opens a shell there) after `scripts/ci.sh` or the build scripts have run.
+
+### CUDA variant
+
+`docker/Dockerfile.cuda` is a second image for a Linux amd64 host with an NVIDIA GPU, a driver that supports CUDA 13.1 or later, and the NVIDIA Container Toolkit. It is the CPU image plus the CUDA 13.1 toolkit from NVIDIA's apt repository, the CUDA 13.1 build of gtsam_points 1.2.2 from the same PPA, and GLIM and glim_ros2 built with `BUILD_WITH_CUDA=ON`. The CPU image stays the default; the Mac (arm64) and GitHub Actions use only the CPU image.
+
+```bash
+docker compose -f docker/compose.yaml build dev-cuda   # glim_localization:dev-cuda
+scripts/docker_run.sh --cuda scripts/ci.sh             # the same checks in CUDA mode
+```
+
+`--cuda` selects the compose service `dev-cuda`: the image `glim_localization:dev-cuda` (or `GLIM_LOC_CUDA_IMAGE`), all GPUs, and its own build volume, so CPU and CUDA builds do not share `/ws/build`. In this image `scripts/ci.sh` runs in CUDA mode (`GLIM_LOC_BUILD_WITH_CUDA=ON`): our packages are configured with `BUILD_WITH_CUDA=ON`, `check_deps.sh` checks the CUDA packages and GLIM's GPU odometry module, and the GPU smoke test (`test_gpu_smoke`) builds a GPU voxel map. Without a visible GPU that test is reported as skipped; when `nvidia-smi` lists a GPU, `ci.sh` sets `GLIM_LOC_REQUIRE_GPU=1` and a skip fails.
+
+The GPUs come from a device reservation in compose (`deploy.resources.reservations.devices`, which any Compose v2 accepts). The image does not set `NVIDIA_VISIBLE_DEVICES`, so a container started without a device request (`docker run` without `--gpus`) sees no GPU, even on a host whose default Docker runtime is `nvidia`. On such a host, passing `-e NVIDIA_VISIBLE_DEVICES=...` exposes GPUs anyway.
+
+> [!IMPORTANT]
+> `docker compose run` does not rebuild an existing image. After you change `docker/Dockerfile.cuda`, `docker/entrypoint.sh`, `scripts/requirements.txt` or a patch under `third_party/patches/`, rebuild with `docker compose -f docker/compose.yaml build dev-cuda`. In CUDA mode `ci.sh` first runs `scripts/check_cuda_image_inputs.sh`, which fails when the image was built from other versions of these files. `GLIM_LOC_ALLOW_STALE_IMAGE=1` turns that failure into a warning.
+
+> [!NOTE]
+> The CUDA image only prepares the build. The GPU odometry module (`libodometry_localization_gpu.so`) is not written yet (#2), so localization still runs on the CPU module in both images.
+
+The build argument `CUDA_ARCHITECTURES` (default `75`, Turing; for example `"75;86;89"`) sets `CMAKE_CUDA_ARCHITECTURES` for any CUDA code compiled in the image. It is never `native`, because no GPU is visible during `docker build`. The prebuilt gtsam_points package already contains code for sm_75 and newer. Set it with `CUDA_ARCHITECTURES=86 docker compose -f docker/compose.yaml build dev-cuda`.
 
 ## Map preparation
 
@@ -229,7 +250,7 @@ States: `INITIALIZING` (started or reset) -> `TRACKING` -> `DEGRADED` (low inlie
 
 ## Limitations
 
-- **CPU only.** The GPU version is not written (#2). On one 10 Hz OS1-128 sequence (Docker, arm64) the mean was about 93 ms per frame for a 100 ms period, with p99 spikes over 1 s, and the ratio of processing time to data length varied between runs (1.06 and 0.64); real-time capability is not established.
+- **CPU only.** The GPU version is not written (#2); the CUDA image builds and tests the CPU module against the CUDA dependencies. On one 10 Hz OS1-128 sequence (Docker, arm64) the mean was about 93 ms per frame for a 100 ms period, with p99 spikes over 1 s, and the ratio of processing time to data length varied between runs (1.06 and 0.64); real-time capability is not established.
 - **Not yet verified:** accuracy on real data against an independent reference (the only real-data run, one OS1-128 sequence, compares with GLIM's own trajectory: ATE translation RMSE about 0.023 to 0.025 m, a consistency figure, not accuracy); real robots and real-time sensor input; most measurements so far ran in the Docker image on arm64, and amd64 has less coverage; a multithreaded component container; PCD maps from a real mapping pipeline (for example sdf2map, #9); integration with Nav2 or an external EKF.
 - `~/aligned_points` (#18) and an IMU-rate odometry are not published.
 - No initial pose search: `/initialpose` and `~/initialize` are applied exactly. No global relocalization (#3).

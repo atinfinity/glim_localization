@@ -138,6 +138,17 @@ jobs:
           path: ${{ runner.temp }}/ccache
           key: ${{ steps.ccache.outputs.cache-primary-key }}
 
+  # The CUDA image needs an NVIDIA GPU machine to build and test (README, "CUDA variant"). Here only
+  # docker/Dockerfile.cuda is parsed and linted (its check directive turns warnings into errors).
+  cuda-dockerfile:
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - name: Check the CUDA Dockerfile
+        run: docker build --check -f docker/Dockerfile.cuda .
+
   # Pushes the image only after the checks passed on main, and only when it was not on GHCR yet.
   # Never runs for PRs or forks, so only this job gets packages: write.
   publish-image:

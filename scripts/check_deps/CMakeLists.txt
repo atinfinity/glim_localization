@@ -9,3 +9,7 @@ find_package(glim REQUIRED)
 
 add_executable(check_deps main.cpp)
 target_link_libraries(check_deps PRIVATE glim::glim gtsam_points::gtsam_points ${CMAKE_DL_LIBS})
+# The CUDA image: also check GLIM's GPU odometry module.
+if(GTSAM_POINTS_USE_CUDA)
+  target_compile_definitions(check_deps PRIVATE CHECK_DEPS_WITH_CUDA)
+endif()
