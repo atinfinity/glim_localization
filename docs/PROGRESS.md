@@ -584,3 +584,40 @@ Second step of #2: the GPU odometry module and backend selection. Design in DESI
   - In both loops, a few R2 launch tests got 120 of 121 poses (before: 1 of 40; after: 2 of 80). Frame 0.0 is missing because the first `/points` callback ran about 3 ms before the `/initialpose` callback, so the core dropped that frame as before any pose. There is no ordering across topics, the cost is at most one frame, and it is within the bound.
 - **Review fixes** (PR #22): the stop line is logged after the odometry thread is joined, so frames still queued are counted; the counters read by `stop()` are atomic; the node logs when the RMW has no matched events (the tests then time out on the matched line); the wait for the three matched lines shares one deadline; the comment on `DISCOVERY_MARGIN_S` says why it stays (the player's writers must match the node's readers too); the coverage report is printed only on failure.
 - **Docs**: the "Early messages can be lost" note in DESIGN ("R2 node: differences from the plan") now names the cause and the new log lines.
+
+## Relocalizer: yaw search around a given initial pose (2026-11-25, part of #3)
+
+A pose from outside (a 2D Pose Estimate click, `~/initialize`, the configured `init_T_world_imu`, the replay `--init-pose`) can be off in yaw by tens of degrees, and scan-to-map registration alone does not recover from it. This adds an opt-in yaw search on the first scan. Design in DESIGN §5.3, keys in the README ([Initial pose yaw search](../README.md#initial-pose-yaw-search)).
+
+- **Core** (`glim_localization/relocalization/`, no ROS):
+  - `PoseCandidateGenerator` (`generate(CandidateQuery{hint, frame, map})`) is the plug point; `YawCandidateGenerator` turns the hint about world z by 0, +s, -s, ... up to the range (180 deg and 15 deg give 24 candidates; -180 is dropped as the same yaw as +180). A global relocalizer will implement the same interface without a hint (`set_candidate_generator`).
+  - `score_candidate` registers the scan from the candidate with the unary VGICP map factors of all levels (the odometry's `create_map_factors`) and Levenberg-Marquardt (10 iterations), then scores the registered pose by the finest-voxel inlier ratio, the same quantity as the status inlier ratio. No overlapping tile or a non-finite solve scores 0.
+  - `search_candidates` scores in order until the time budget (the first candidate always), and `select_best_candidate` takes the highest score at or above the minimum (ties to the earlier, nearer candidate; NaN never passes). The best one is reported also when rejected.
+- **Odometry**: the search runs for the configured pose and EXTERNAL resets that are not `from_current`; `relocalize()` and IMU gap self-resets are not searched. Accepted: start from the registered 6-DoF pose, velocity turned by the yaw. Rejected: LOST, and frames are dropped until the next reset. Parameters are validated at construction (also when the search is off). Status fields `init_search`, `init_search_candidates`, `init_search_score`, `init_search_yaw_offset`, `init_search_time`, cleared by each reset.
+- **Decisions**:
+  - Opt-in (`init_yaw_search: false`), so existing behaviour and tests are unchanged.
+  - The reported yaw correction is the registered pose's, not the candidate's offset: in the first run neighbouring candidates (for example -45 and -60 deg for a 75 deg error) converged to the same correct pose and the earlier one won the tie, so the candidate offset was 30 deg off the applied correction.
+  - Inlier ratio as the score, rather than the residual, so that `init_yaw_search_min_inlier_ratio` and the quality monitor's thresholds mean the same thing.
+  - The search runs synchronously in the estimation thread on the first scan; it happens once per given pose.
+- **ROS**: `LocalizationStatus.msg` gets `INIT_SEARCH_NONE/ACCEPTED/REJECTED`, `init_search`, `init_search_candidates`, `init_search_score`, `init_search_yaw_offset`, `init_search_time`; the publisher maps them and adds them to the diagnostics (a rejected search says so in the diagnostic message). `test_message_constants` pins the enum, `test_localization_publisher` checks the mapping. `Initialize.srv` notes that its `score` cannot carry the search result (the pose is applied at the next frame).
+- **Replay**: `summary.json` gets `init_search` (result, candidates, score, yaw_offset_deg, seconds).
+- **Verification** (synthetic map `replay_map_params()`, Docker on the development Mac, arm64; position error 0.3 / -0.2 / 0.1 m on top of the yaw error in the odometry tests):
+
+  | Case | Result | Search | Error after 3 s (max) |
+  | --- | --- | --- | --- |
+  | Odometry, 75 deg, search off | LOST at 12 s | | 25.2 m, 87.6 deg (last) |
+  | Odometry, configured pose, 75 deg | ACCEPTED, correction -74.99 deg, inlier ratio 0.997 | 24 candidates, 0.83 s | 0.011 m, 0.090 deg |
+  | Odometry, configured pose, -90 deg | ACCEPTED, 90.01 deg, 0.997 | 24, 0.84 s | 0.011 m, 0.090 deg |
+  | Odometry, `reset()` at 0.5 s, -80 deg | ACCEPTED, 80.01 deg, 0.998 | 24, 0.84 s | 0.011 m, 0.090 deg |
+  | Odometry, pose 500 m off the map | REJECTED, LOST, no estimate | 24, < 0.1 ms (no tiles) | |
+  | Odometry, new pose after the rejection, 60 deg | ACCEPTED, -59.99 deg | 24, 0.86 s | 0.006 m, 0.090 deg |
+  | Scoring unit test, 60 / 75 / 90 / -80 deg | Correction within 1 deg of the error | 24, 0.60 to 0.63 s | 0.002 to 0.003 m, 0.03 to 0.04 deg |
+  | Replay tool, 75 deg, search off | exit 0, all frames TRACKING | | 3.39 m, 69.1 deg (last pose) |
+  | Replay tool, 75 deg, search on | exit 0, ACCEPTED, -75 deg | 24, 0.86 s | 0.006 m, 0.052 deg (last pose) |
+  | Replay tool, pose 200 m above the map, search on | exit 1 at the first LOST frame, log says the pose was rejected | | |
+
+  - The first estimated frame takes about 0.84 s with the search instead of about 4 ms; later frames are 5 to 7 ms, as before.
+  - The replay run without the search passes the tracking-ratio gate with a 69 deg error: the quality monitor alone does not catch a wrong yaw on this map.
+  - Under parallel ctest the search slowed 2.5 times and the default 2 s budget stopped at 11 of 24 candidates (still the right yaw, since the candidates are ordered by distance from the given yaw). The tests that count candidates now set a 30 s budget.
+  - Not verified: the GPU module (it shares the code path in the base class, but no CUDA build was run), real scans and real-scan timing.
+- **Remaining for #3**: global relocalization (FPFH + RANSAC/GNC on accumulated scans, a `PoseCandidateGenerator` without a hint, and `global_search` in `~/initialize`); roll and pitch from gravity and height from the map; accumulating several scans before scoring; running the search off the estimation thread; evaluation on real data.

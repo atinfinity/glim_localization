@@ -58,7 +58,7 @@ In the CPU version, `use_keyframes` means relative pose factors from the local m
 
 ## Phase 6: Finishing (optional, partly done)
 
-- Relocalizer (multiple yaw hypotheses, FPFH + RANSAC/GNC): planned (#3).
+- Relocalizer (#3): multiple yaw hypotheses around a given pose implemented (`init_yaw_search`, opt-in; DESIGN §5.3). Global relocalization (FPFH + RANSAC/GNC), roll and pitch from gravity, height from the map and accumulated scans: planned.
 - PCD input for map_compiler: done. PLY input and 2D OccupancyGrid output: planned (#4).
 - Write the GPU version (`OdometryEstimationLocalizationGPU`); build it in a CUDA environment: done (CUDA image, `config/gpu`). Tile prefetch and a GPU memory budget: planned (#2).
 - README (build steps, usage, limitations): done.

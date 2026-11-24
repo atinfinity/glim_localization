@@ -43,7 +43,7 @@ Design: [docs/DESIGN.md](docs/DESIGN.md). Plan: [docs/IMPLEMENTATION_PLAN.md](do
 Not done yet (open issues):
 
 - GPU follow-ups (#2): tile prefetch and a GPU memory budget, real-data timing on the GPU. The GPU module itself is in place ([CUDA variant](#cuda-variant)).
-- Relocalizer: multi-hypothesis refinement of `/initialpose` and global relocalization (#3).
+- Relocalizer (#3): global relocalization (no pose given), and a better use of the yaw search (accumulated scans, roll and pitch from gravity, height from the map). The yaw search around a given pose is in place ([Initial pose yaw search](#initial-pose-yaw-search)).
 - `map_compiler` PLY input and 2D OccupancyGrid export (#4); PCD follow-ups such as `binary_compressed` input (#12).
 - Evaluation on real data against an independent reference (#5) and in simulation (#9).
 - Optional wheel odometry fusion (#14).
@@ -248,25 +248,45 @@ Lifecycle: configure fails and leaves the node unconfigured on a missing config 
 | Name | Type | Notes |
 | --- | --- | --- |
 | points, imu (in) | `sensor_msgs/PointCloud2`, `sensor_msgs/Imu` | Topic names from `config_ros.json` |
-| `/initialpose` (in) | `geometry_msgs/PoseWithCovarianceStamped` | Base pose in the map frame, applied as given (no yaw search) |
+| `/initialpose` (in) | `geometry_msgs/PoseWithCovarianceStamped` | Base pose in the map frame. Applied as given, or refined by the [yaw search](#initial-pose-yaw-search) when it is enabled |
 | `~/pose` | `geometry_msgs/PoseWithCovarianceStamped` | Base pose in the map frame, LiDAR rate. Covariance is zero (not estimated) |
 | `~/odometry` | `nav_msgs/Odometry` | Pose and twist of the base |
 | `~/map` | `sensor_msgs/PointCloud2` | The loaded map in the map frame, published once, latched (reliable, transient local). One centroid per `map_cloud_voxel` (0.5 m) voxel; `publish_map: false` turns it off. Built once (R1: at node start, R2: at configure) at 12 bytes per point; with `map_cloud_voxel: 0` a map above 10 million points gets a warning, and a cloud above 1 GiB is not published |
-| `~/status` | `glim_localization_msgs/LocalizationStatus` | State, inlier ratio, tiles, map factors, residual, processing time, reset count and reason |
-| `/diagnostics` | `diagnostic_msgs/DiagnosticArray` | OK, WARN for DEGRADED, ERROR for LOST |
-| `~/initialize` (R2) | `glim_localization_msgs/srv/Initialize` | Sets the pose. `success` means accepted, applied at the next frame. `global_search=true` returns `success=false` (#3) |
+| `~/status` | `glim_localization_msgs/LocalizationStatus` | State, inlier ratio, tiles, map factors, residual, processing time, reset count and reason, result of the initial pose search |
+| `/diagnostics` | `diagnostic_msgs/DiagnosticArray` | OK, WARN for DEGRADED, ERROR for LOST (the message says when the yaw search rejected the given pose) |
+| `~/initialize` (R2) | `glim_localization_msgs/srv/Initialize` | Sets the pose. `success` means accepted, applied at the next frame; the yaw search result comes later on `~/status`. `global_search=true` returns `success=false` (#3) |
 | `~/relocalize` (R2) | `std_srvs/srv/Trigger` | Restarts from the newest estimate; refused unless TRACKING or DEGRADED with an estimate no older than `max_init_pose_delay` and no reset pending |
 
 States: `INITIALIZING` (started or reset) -> `TRACKING` -> `DEGRADED` (low inlier ratio, map weight lowered) -> `LOST` (left only by an external initialization). In LOST, no pose, odometry or `map->odom` is published; `odom->base_link` continues in `internal_odom`.
 
 `tf_mode` in `localization_ros`: `internal_odom` (default; publishes `map->odom` and `odom->base_link`), `external_odom` (publishes only `map->odom`, using `odom->base_link` from another source), `none` (no TF). Also set `base_frame_id` and `T_base_imu` there. Details are in [DESIGN 6](docs/DESIGN.md#6-ros-2-support).
 
+### Initial pose yaw search
+
+A pose given from outside can have a large yaw error, for example from a 2D Pose Estimate click, and scan-to-map registration alone does not recover from one: on the synthetic map a 75 deg error ends 69 deg off while the state still says TRACKING. With `init_yaw_search: true`, the first scan after the pose is registered to the map from several yaw candidates around it, and the estimation starts from the registered pose with the highest inlier ratio.
+
+The search runs for the configured `init_T_world_imu`, `/initialpose`, `~/initialize` and the replay tool's `--init-pose`. It does not run for `~/relocalize` or for the self-reset after an IMU gap, which start from the estimate. Keys under `odometry_estimation` in `config_odometry_localization_cpu.json` (and the GPU config):
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `init_yaw_search` | `false` | Turn the search on |
+| `init_yaw_search_range_deg` | `180.0` | Candidates from -range to +range around the given yaw (180 covers the full turn) |
+| `init_yaw_search_step_deg` | `15.0` | Spacing of the candidates; 180 / 15 gives 24 candidates |
+| `init_yaw_search_min_inlier_ratio` | `0.5` | The best candidate must reach this inlier ratio (finest map voxels, after registration) |
+| `init_yaw_search_time_budget` | `2.0` | Seconds; no candidate is started after it (the given yaw itself is always scored) |
+| `init_yaw_search_max_iterations` | `10` | Levenberg-Marquardt iterations of each registration |
+
+When no candidate reaches the minimum inlier ratio, the given pose is rejected: the state goes to LOST, frames are dropped and nothing is published until a new pose is given. It is never accepted silently. `~/status` reports the result (`init_search`: NONE, ACCEPTED or REJECTED), the number of candidates scored, the best inlier ratio, the yaw correction applied [rad] and the search time; `/diagnostics` and the replay `summary.json` carry the same values.
+
+> [!NOTE]
+> The search runs on the first scan, in the estimation thread: about 0.85 s for 24 candidates on the synthetic data (Docker, arm64, 2 threads). Scans that arrive meanwhile are queued. On a loaded machine the time budget can stop it early (11 of 24 candidates under parallel tests); the candidates nearest the given yaw are scored first. Real scans are larger than the synthetic ones, so check `init_search_candidates` and raise the budget or narrow the range if it is cut short. The search uses only the position and yaw of the given pose; roll, pitch and height are taken as given and refined by the registration.
+
 ## Limitations
 
 - **GPU module tested on synthetic data only.** The GPU module (CUDA image) is verified on one Turing GPU with synthetic data ([PROGRESS](docs/PROGRESS.md)); it uploads map tiles on first use, without prefetch (#2). With the CPU module, on one 10 Hz OS1-128 sequence (Docker, arm64) the mean was about 93 ms per frame for a 100 ms period, with p99 spikes over 1 s, and the ratio of processing time to data length varied between runs (1.06 and 0.64); real-time capability is not established.
 - **Not yet verified:** accuracy on real data against an independent reference (the only real-data run, one OS1-128 sequence, compares with GLIM's own trajectory: ATE translation RMSE about 0.023 to 0.025 m, a consistency figure, not accuracy); real robots and real-time sensor input; most measurements so far ran in the Docker image on arm64, and amd64 has less coverage; a multithreaded component container; PCD maps from a real mapping pipeline (for example sdf2map, #9); integration with Nav2 or an external EKF.
 - `~/aligned_points` (#18) and an IMU-rate odometry are not published.
-- No initial pose search: `/initialpose` and `~/initialize` are applied exactly. No global relocalization (#3).
+- The initial pose yaw search is off by default and needs a position close to the true one; it is verified on synthetic data only. No global relocalization (#3).
 - Right after the node becomes active, the first messages can be missed (cause not confirmed; DDS discovery is suspected). In R2 set the first pose with `~/initialize`, which replies; otherwise publish `/initialpose` after the node is matched, or resend it.
 - IMU gaps in ROS (`on_imu_gap: reset` in the shipped config): a gap up to `imu_gap_reset_max` (0.5 s) resets the estimate from its own prediction; a longer gap goes LOST until an external initialization. The replay tool defaults to `--on-imu-gap abort` (exit code 3).
 - Degenerate directions are not detected, and pose covariance is not estimated. Objects thinner than a voxel can bias the estimate.
