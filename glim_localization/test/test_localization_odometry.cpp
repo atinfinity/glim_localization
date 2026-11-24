@@ -105,6 +105,7 @@ TEST_F(LocalizationOdometryTest, ConvergesFromPerturbedInitialPose) {
   double max_rotation_deg = 0.0;
   double sum_sq_translation = 0.0;
   int num_tail = 0;
+  std::vector<double> latencies;
 
   for (const auto& frame : *frames_) {
     while (imu_cursor < imu_->size() && (*imu_)[imu_cursor].stamp <= frame->stamp + 0.02) {
@@ -116,6 +117,7 @@ TEST_F(LocalizationOdometryTest, ConvergesFromPerturbedInitialPose) {
     const auto estimate = odometry.insert_frame(frame, marginalized);
     ASSERT_TRUE(estimate) << "t=" << frame->stamp;
     ASSERT_TRUE(estimate->T_world_imu.matrix().allFinite()) << "t=" << frame->stamp;
+    latencies.push_back(odometry.status().processing_time);
 
     const Eigen::Isometry3d error = synthetic_T_world_imu(frame->stamp).inverse() * estimate->T_world_imu;
     const double translation = error.translation().norm();
@@ -137,6 +139,16 @@ TEST_F(LocalizationOdometryTest, ConvergesFromPerturbedInitialPose) {
   std::cout << "max_translation=" << max_translation << " m, max_rotation=" << max_rotation_deg
             << " deg, tail_rms=" << std::sqrt(sum_sq_translation / std::max(num_tail, 1)) << " m, inlier_ratio=" << status.inlier_ratio
             << ", residual=" << status.residual << ", elapsed=" << elapsed << " s" << std::endl;
+  // Per-frame latency of insert_frame, to compare with the GPU module (test_localization_odometry_gpu)
+  double mean_latency = 0.0;
+  for (const double t : latencies) {
+    mean_latency += t;
+  }
+  mean_latency /= std::max<size_t>(latencies.size(), 1);
+  std::sort(latencies.begin(), latencies.end());
+  const double p95_latency = latencies.empty() ? 0.0 : latencies[std::min(latencies.size() - 1, latencies.size() * 95 / 100)];
+  std::cout << "cpu: latency_mean=" << mean_latency * 1e3 << " ms, latency_p95=" << p95_latency * 1e3 << " ms, frames=" << latencies.size()
+            << std::endl;
 
   EXPECT_EQ(status.state, LocalizationState::TRACKING) << to_string(status.state);
   EXPECT_GT(status.inlier_ratio, 0.5);

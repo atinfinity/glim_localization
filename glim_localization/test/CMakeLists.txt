@@ -81,6 +81,23 @@ if(GLIM_LOCALIZATION_WITH_CUDA)
     TIMEOUT 120
     SKIP_REGULAR_EXPRESSION "\\[  SKIPPED \\]"
   )
+
+  add_executable(test_localization_odometry_gpu test_localization_odometry_gpu.cpp)
+  target_compile_definitions(test_localization_odometry_gpu PRIVATE
+    GLIM_LOCALIZATION_CONFIG_DIR="${PROJECT_SOURCE_DIR}/config"
+    GLIM_LOCALIZATION_GPU_PLUGIN_PATH="$<TARGET_FILE:odometry_localization_gpu>"
+  )
+  target_link_libraries(test_localization_odometry_gpu PRIVATE
+    glim_localization_synthetic
+    nlohmann_json::nlohmann_json
+    CUDA::cudart
+    GTest::gtest_main
+  )
+  add_dependencies(test_localization_odometry_gpu odometry_localization_gpu)
+  gtest_discover_tests(test_localization_odometry_gpu PROPERTIES
+    TIMEOUT 300
+    SKIP_REGULAR_EXPRESSION "\\[  SKIPPED \\]"
+  )
 endif()
 
 add_executable(test_localization_backend test_localization_backend.cpp)
