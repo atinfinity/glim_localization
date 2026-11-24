@@ -150,11 +150,12 @@ jobs:
           key: ${{ steps.ccache.outputs.cache-primary-key }}
 
   # The same checks on arm64 (GitHub-hosted arm64 runner, free for public repositories), with the
-  # steps of build-and-test. A cold image build takes longer here, hence the longer timeout.
+  # steps of build-and-test. The first run with an uncached image build and no ccache took 14 min
+  # (image 6 min, checks 7.5 min); the timeout leaves room for slower runners.
   build-and-test-arm64:
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: ubuntu-24.04-arm
-    timeout-minutes: 60
+    timeout-minutes: 45
     permissions:
       contents: read
       packages: read
@@ -224,7 +225,7 @@ jobs:
       github.event_name == 'push' && github.ref == 'refs/heads/main' && !github.event.repository.fork
       && needs.build-and-test-arm64.outputs.missing == 'true'
     runs-on: ubuntu-24.04-arm
-    timeout-minutes: 60
+    timeout-minutes: 30
     permissions:
       contents: read
       packages: write
