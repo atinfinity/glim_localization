@@ -3,12 +3,12 @@
 Development, builds, and tests run in a headless Docker container with Ubuntu 24.04 + ROS 2 Jazzy (`docker/`). The container covers **the CPU core, offline evaluation, and the ROS 2 packages**. The GPU build (`BUILD_WITH_CUDA=ON`) and real-robot evaluation need a Linux machine with an NVIDIA GPU and come later.
 When a phase meets its completion criteria, its results are recorded in `docs/PROGRESS.md`.
 
-Status: Phases 0 to 4 are done. Phase 5 is done except the `~/aligned_points` topic (#18). Phase 6 is partly done (PCD input for map_compiler, README).
+Status: Phases 0 to 4 are done. Phase 5 is done except the `~/aligned_points` topic ([#18](https://github.com/atinfinity/glim_localization/issues/18)). Phase 6 is partly done (PCD input for map_compiler, README).
 
 ## Phase 0: Environment and repository (done)
 
 1. Check the environment: `uname -m`, `docker version`, and inside the container `cmake --version` and `g++ --version`.
-2. Put the dependencies in a Docker image (`docker/Dockerfile`, Ubuntu 24.04 + ROS 2 Jazzy, headless). CPU builds outside this container are not supported; the GPU build environment is tracked in #2:
+2. Put the dependencies in a Docker image (`docker/Dockerfile`, Ubuntu 24.04 + ROS 2 Jazzy, headless). CPU builds outside this container are not supported; the GPU build environment is tracked in [#2](https://github.com/atinfinity/glim_localization/issues/2):
    - GTSAM / gtsam_points: `libgtsam-notbb-dev=4.3.0` and `libgtsam-points-dev=1.2.2` from the koide3 PPA
    - glim (commit `1a197c9`): build from source with `-DBUILD_WITH_CUDA=OFF -DBUILD_WITH_VIEWER=OFF -DBUILD_WITH_OPENCV=OFF -DBUILD_WITH_MARCH_NATIVE=OFF` and install to `/opt/glim`
    - Iridescence, GLFW, OpenCV, and rviz2 are not in the image. If a build needs a change to upstream code, save the patch in `third_party/patches/<pkg>/` and `git apply` it from the Dockerfile.
@@ -44,13 +44,13 @@ In the CPU version, `use_keyframes` means relative pose factors from the local m
 - A converter for real data, `scripts/bag_to_replay.py`: convert a ROS 2 bag (db3/mcap) to the simple format with the Python `rosbags` package (no ROS needed).
 - An evaluation script, `scripts/evaluate.py`: ATE/RPE with evo, and processing time statistics.
 - Done when: replay on synthetic data reaches the same accuracy as Phase 3. If real data is available, convert and run it, and record the results in PROGRESS.md.
-- An evaluation mapper for real data (first step of #5): `glim_localization_mapper` (no ROS) and `scripts/smoke_os1_128.sh`. Build a GLIM map and a reference trajectory from a replay dataset, run localization with the same preprocessing, and measure the agreement with GLIM. Done when: a synthetic test shows the dump can be read with `load_map`. Record real-data results in PROGRESS.md.
+- An evaluation mapper for real data (first step of [#5](https://github.com/atinfinity/glim_localization/issues/5)): `glim_localization_mapper` (no ROS) and `scripts/smoke_os1_128.sh`. Build a GLIM map and a reference trajectory from a replay dataset, run localization with the same preprocessing, and measure the agreement with GLIM. Done when: a synthetic test shows the dump can be read with `load_map`. Record real-data results in PROGRESS.md.
 
 ## Phase 5: ROS 2 packages (done except `~/aligned_points`)
 
 1. Build and test with colcon in the container (ROS 2 Jazzy). Turn synthetic data into a bag and check the R1 and R2 nodes with it.
 2. `glim_localization_msgs`: `LocalizationStatus.msg` and `Initialize.srv`.
-3. `localization_publisher` (shared by R1 and R2): `~/pose`, `~/odometry`, `~/status`, `/diagnostics`, and TF (three `tf_mode` options, DESIGN §6). `~/map` (latched, downsampled; `map_publisher`) is done; `~/aligned_points` is deferred (#18).
+3. `localization_publisher` (shared by R1 and R2): `~/pose`, `~/odometry`, `~/status`, `/diagnostics`, and TF (three `tf_mode` options, DESIGN §6). `~/map` (latched, downsampled; `map_publisher`) is done; `~/aligned_points` is deferred ([#18](https://github.com/atinfinity/glim_localization/issues/18)).
 4. R1: `localization_extension` (`ExtensionModuleROS2`). `/initialpose` calls `reset()` through a shared queue in the core.
 5. R2: `glim_localization_node` (`rclcpp_lifecycle::LifecycleNode`, registered as a component). Base it on the input handling in `GlimROS` (copied parts carry the provenance comment).
 6. Launch files (R1 and R2, the R2 node standalone or as a component with `autostart`), parameter YAML files and an RViz config (done). Launch tests start each launch file headless and check `~/pose`, TF and `~/map`.
@@ -58,9 +58,9 @@ In the CPU version, `use_keyframes` means relative pose factors from the local m
 
 ## Phase 6: Finishing (optional, partly done)
 
-- Relocalizer (#3): multiple yaw hypotheses around a given pose implemented (`init_yaw_search`, opt-in; DESIGN §5.3). Global relocalization (FPFH + RANSAC/GNC), roll and pitch from gravity, height from the map and accumulated scans: planned.
-- PCD input for map_compiler: done. PLY input and 2D OccupancyGrid output: planned (#4).
-- Write the GPU version (`OdometryEstimationLocalizationGPU`); build it in a CUDA environment: done (CUDA image, `config/gpu`). Tile prefetch and a GPU memory budget: planned (#2).
+- Relocalizer ([#3](https://github.com/atinfinity/glim_localization/issues/3)): multiple yaw hypotheses around a given pose implemented (`init_yaw_search`, opt-in; DESIGN §5.3). Global relocalization (FPFH + RANSAC/GNC), roll and pitch from gravity, height from the map and accumulated scans: planned.
+- PCD input for map_compiler: done. PLY input and 2D OccupancyGrid output: planned ([#4](https://github.com/atinfinity/glim_localization/issues/4)).
+- Write the GPU version (`OdometryEstimationLocalizationGPU`); build it in a CUDA environment: done (CUDA image, `config/gpu`). Tile prefetch and a GPU memory budget: planned ([#23](https://github.com/atinfinity/glim_localization/issues/23)).
 - README (build steps, usage, limitations): done.
 
 ## Out of scope for the default container

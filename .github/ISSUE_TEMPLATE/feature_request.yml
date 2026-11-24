@@ -6,7 +6,7 @@ body:
     attributes:
       value: |
         > [!TIP]
-        > Check the open issues and the Limitations section of the README first; some features are already planned.
+        > Check the open issues and the Limitations section of docs/status.md first; some features are already planned.
   - type: textarea
     id: problem
     attributes:
