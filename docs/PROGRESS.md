@@ -511,7 +511,7 @@ First step of #2: a CUDA build environment. There is no GPU odometry module yet.
   - The `ci.sh` tests in `test_ci_local.py` set the mode explicitly. In the CUDA image they had failed: the image sets `GLIM_LOC_BUILD_WITH_CUDA=ON`, and the new check was not stubbed.
   - `test_gpu_smoke` also checks the y range of the voxel means.
 - **build_colcon.sh** passes `-DBUILD_WITH_CUDA=ON` only in CUDA mode, so its CPU command line is the same as before the CUDA mode.
-- **Flaky `test_launch_r2_component`**: tracked in #20 (drop counters to log, single-threaded component container).
+- **Flaky `test_launch_r2_component`**: tracked in #20 (drop counters to log, single-threaded component container). Resolved: see "R2 launch tests: lost start of the bag" below.
 - **Verification on the GPU machine** (same machine as above; default Docker runtime runc):
   - `ci.sh` with the image built before this fix fails at once on the stale check.
   - After a rebuild (2.55 GB), `scripts/docker_run.sh --cuda scripts/ci.sh` passes in 278 s. The image check matches, and the GPU is visible through the device reservation. Core ctest is 220/220, with the two GPU tests passing under `GLIM_LOC_REQUIRE_GPU=1`. colcon test is 12/12, the Python tests 186, and replay e2e passes.
@@ -562,3 +562,23 @@ Second step of #2: the GPU odometry module and backend selection. Design in DESI
   - Re-verified on the GPU machine: core ctest 237/237 (one skip by design), colcon test 12/12, Python tests 187, replay e2e. The CPU and GPU replays differ by at most 1.1e-5 m and 3.4e-4 degrees over 121 poses (1.1e-6 m in the earlier run: the GPU sums are not deterministic). The first colcon run hit the #20 flake in `test_launch_r2` (71 of 121 poses) on that machine too; the rerun passed.
 - **Behavior change for release notes**: the replay tool and the R2 node now read `so_name` and need exactly `libodometry_localization_cpu.so` or `libodometry_localization_gpu.so` (a file name). An empty or missing `so_name`, a full path, or another module is an error (replay exit 2, R2 configure fails). Before this change both ignored `so_name`. R1 is unchanged.
 - **Remaining for #2**: tile prefetch along the predicted path (uploads are synchronous today), a GPU memory budget in bytes instead of a tile count, streaming tiles from disk (the whole map stays in host memory), real-data accuracy and timing on the GPU, and GPU CI (GitHub-hosted runners have no GPU; verification stays manual).
+
+## R2 launch tests: lost start of the bag (2026-11-25, #20)
+
+`test_launch_r2` and `test_launch_r2_component` sometimes got 71 of 121 poses (bound: 90%).
+
+- **Cause**: the node under test had not yet matched the bag player's publishers when playback resumed. With reliable, volatile QoS, messages that go out before the match are lost, and DDS discovery runs per participant: the test client could already see the player while the node could not.
+  - In a failing run, the player resumed about 2 s after it started. The node's first IMU sample had bag stamp 1.790 and its first cloud 1.800.
+  - The `/initialpose` at 0 s (the offset pose) never arrived. The node only logged the reset from the second pose at 5 s, and the core drops frames before the first pose. That leaves the frames from 5.0 s to 12.0 s: 71 poses.
+  - No drop counter was non-zero: 0 frames without gyro, 0 unpaired, 0 stale, 0 TF failures, in every run. The coverage report showed frames 0.0 to 4.9 s missing, 72 statuses, the first at 5.00 s, and reset_count 1.
+  - So this is not a drop in the product code. The publisher, the pairing, the executor and the QoS depth are ruled out, and the non-component launch is affected the same way. It is the same "unknown cause" startup loss recorded for the IMU gap test above, which `test_r2_node` and `test_r2_imu_gap` already avoid by calling `~/initialize`.
+- **Diagnostics in the R2 node**:
+  - The imu, points and `/initialpose` subscriptions log `matched publishers on <topic>: N` when a publisher matches or unmatches. If the RMW does not support the event, the node falls back to a plain subscription.
+  - The node logs the stamp of its first point cloud (and of its first IMU sample, in the existing `acc_scale` line).
+  - On stop (deactivate, shutdown) it logs how many IMU samples and clouds it received, the frames it dropped (without gyro, unpaired, stale) and the TF lookup failures. `EstimateBridge::drop_counts()` exposes these.
+- **Test fix**: `check_r2_launch` starts the player paused, then waits for the node's own `matched publishers on <topic>: [1-9]` lines for `/points`, `/imu` and `/initialpose` (through `proc_output`) before the discovery margin and the resume. On failure, the pose-count assertion includes a coverage report: missing frames, status count and states, last reset_count.
+- **Rates** (`scripts/test_colcon.sh` in a loop, Docker on the development Mac):
+  - Before: 20 runs, 1 failed (5%): `test_launch_r2_component`, 71 of 121 poses.
+  - After (on top of the GPU odometry merge): 40 runs, 0 failed. All 80 R2 launch tests got the first cloud at stamp 0.000. The node matched all three topics 2 ms after the player started (median; max 2.9 s).
+  - In both loops, a few R2 launch tests got 120 of 121 poses (before: 1 of 40; after: 2 of 80). Frame 0.0 is missing because the first `/points` callback ran about 3 ms before the `/initialpose` callback, so the core dropped that frame as before any pose. There is no ordering across topics, the cost is at most one frame, and it is within the bound.
+- **Docs**: the "Early messages can be lost" note in DESIGN ("R2 node: differences from the plan") now names the cause and the new log lines.
