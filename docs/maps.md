@@ -24,4 +24,4 @@ PCD options (rejected for dump input):
 
 PCD input reads `DATA ascii` and `binary` with x, y, z as F4 or F8; other fields are ignored. Localization uses up to `map_max_submaps` (default 5) tiles nearest to the robot, so 20 m tiles cover only about 40 x 40 m. For long-range LiDAR use `--grid-size` 50 to 100, or raise `map_max_submaps`.
 
-Not supported yet: PLY input, compressed PCD and 2D map export (#4, #12). See [Status and limitations](status.md).
+Not supported yet: PLY input, compressed PCD and 2D map export ([#4](https://github.com/atinfinity/glim_localization/issues/4), [#12](https://github.com/atinfinity/glim_localization/issues/12)). See [Status and limitations](status.md).

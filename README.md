@@ -67,9 +67,9 @@ The step-by-step guide, including real bags and setting the initial pose, is [do
 ## Limitations
 
 - Real-time capability and accuracy on real data are not established; the GPU module is tested on synthetic data only.
-- No initial pose search and no global relocalization (#3): `/initialpose` and `~/initialize` are applied exactly.
-- `~/aligned_points` (#18) and an IMU-rate odometry are not published; pose covariance is not estimated.
-- Map input: no PLY, no compressed PCD, no 2D map export (#4, #12).
+- No initial pose search and no global relocalization ([#3](https://github.com/atinfinity/glim_localization/issues/3)): `/initialpose` and `~/initialize` are applied exactly.
+- `~/aligned_points` ([#18](https://github.com/atinfinity/glim_localization/issues/18)) and an IMU-rate odometry are not published; pose covariance is not estimated.
+- Map input: no PLY, no compressed PCD, no 2D map export ([#4](https://github.com/atinfinity/glim_localization/issues/4), [#12](https://github.com/atinfinity/glim_localization/issues/12)).
 - A LiDAR with an IMU is required; LiDAR-only input is not supported.
 
 The full list is in [Status and limitations](docs/status.md#limitations).

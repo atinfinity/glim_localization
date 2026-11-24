@@ -103,7 +103,7 @@ Both packages match the expected upstream revisions at the header level: GTSAM `
 gtsam_points `9d32e7d` (v1.2.2).
 
 Decision: keep the PPA packages; no source build. The Dockerfile checks the PPA key
-fingerprint (see "The koide3 PPA" above). Further hardening is tracked in #11: pinning the
+fingerprint (see "The koide3 PPA" above). Further hardening is tracked in [#11](https://github.com/atinfinity/glim_localization/issues/11): pinning the
 deb SHA256 values, asserting the version strings in `scripts/check_deps.sh` (it only prefix-matches
 the deb versions today, so for example `4.3.0.1` would pass), and pinning the base image.
 
