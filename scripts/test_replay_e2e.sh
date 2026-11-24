@@ -148,6 +148,45 @@ check_init_stamp_hole imu_from_5 5.0 8.0
 imu_variant imu_hole_4_6 "ns <= 4000000000 or ns >= 6000000000"
 check_init_stamp_hole imu_hole_4_6 6.0 9.0
 
+# GPU backend (CUDA image with a visible GPU): the same run with config/gpu, the same accuracy limits, and
+# the per-frame odometry time of both backends. ci.sh sets GLIM_LOC_REQUIRE_GPU=1 when nvidia-smi lists a GPU.
+if [[ "${GLIM_LOC_BUILD_WITH_CUDA:-OFF}" == ON && "${GLIM_LOC_REQUIRE_GPU:-0}" == 1 ]]; then
+  # shellcheck disable=SC2086
+  "${replay}" --data "${out}/input/data" --config "${repo_root}/glim_localization/config/gpu" \
+    --map "${out}/input/map" --out "${out}/run_gpu" --init-pose ${init_pose} > "${out}/run_gpu.log" 2>&1
+  py "${repo_root}/scripts/evaluate.py" --est "${out}/run_gpu/traj_localization.txt" --gt "${out}/input/data/traj_gt.txt" \
+    --frames "${out}/run_gpu/frames.csv" --out "${out}/run_gpu" --settle 3 --max-trans 0.1 --max-rot-deg 1
+  py - "${out}/run1" "${out}/run_gpu" <<'PY'
+import json
+import sys
+cpu, gpu = sys.argv[1:3]
+assert json.load(open(f"{cpu}/replay_args.json"))["effective"]["backend"] == "cpu"
+assert json.load(open(f"{gpu}/replay_args.json"))["effective"]["backend"] == "gpu"
+for name, d in (("cpu", cpu), ("gpu", gpu)):
+    report = json.load(open(f"{d}/eval.json"))
+    t, r, o = report["errors"]["ate_trans_m"], report["errors"]["ate_rot_deg"], report["timing"]["odometry_ms"]
+    print(f"{name}: ATE trans rmse {t['rmse']:.4f} m, max {t['max']:.4f} m, rot max {r['max']:.3f} deg; "
+          f"odometry mean {o['mean']:.1f} ms, p95 {o['p95']:.1f} ms")
+
+# Same factors, same optimum: the two backends must agree far closer than the accuracy limit, so a GPU regression
+# that stays inside it (a wrong level, a dropped tile, a weight not applied) still fails.
+import numpy as np
+a = np.loadtxt(f"{cpu}/traj_localization.txt", ndmin=2)
+b = np.loadtxt(f"{gpu}/traj_localization.txt", ndmin=2)
+assert a.shape == b.shape and len(a) > 0, f"cpu {a.shape} vs gpu {b.shape} poses"
+assert np.allclose(a[:, 0], b[:, 0], rtol=0.0, atol=1e-6), "the backends estimated different frames"
+dp = np.linalg.norm(a[:, 1:4] - b[:, 1:4], axis=1).max()
+dot = np.clip(np.abs(np.sum(a[:, 4:8] * b[:, 4:8], axis=1)) / (np.linalg.norm(a[:, 4:8], axis=1) * np.linalg.norm(b[:, 4:8], axis=1)), 0.0, 1.0)
+dr = np.degrees(2.0 * np.arccos(dot)).max()
+print(f"cpu vs gpu over {len(a)} poses: max position diff {dp:.3e} m, max rotation diff {dr:.3e} deg")
+assert dp < 1e-3, f"cpu and gpu trajectories differ by {dp} m"
+assert dr < 0.05, f"cpu and gpu trajectories differ by {dr} deg"
+PY
+  echo "gpu replay ok"
+else
+  echo "SKIPPED: GPU replay (not a CUDA build with a visible GPU)"
+fi
+
 # Exit codes
 set +e
 "${replay}" --data "${out}/input/data" --config "${repo_root}/glim_localization/config" --map "${out}/input/map" --out "${out}/no_init" >/dev/null 2>&1

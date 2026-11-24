@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
@@ -18,6 +19,7 @@
 #include <glim/util/config.hpp>
 
 #include <glim_localization/map/map_manager.hpp>
+#include <glim_localization/odometry/localization_backend.hpp>
 #include <glim_localization/replay/replay_runner.hpp>
 
 namespace fs = std::filesystem;
@@ -222,7 +224,16 @@ int main(int argc, char** argv) {
     // Configuration and initial pose
     check_config_dir(args.config);
     glim::GlobalConfig::instance(args.config, true);
-    OdometryEstimationLocalizationCPU::Params params;
+    // The backend (CPU or GPU) follows the so_name of the odometry config, as it does for GLIM.
+    LocalizationBackend backend = LocalizationBackend::CPU;
+    std::unique_ptr<OdometryEstimationLocalizationParams> params_ptr;
+    try {
+      backend = localization_backend_from_config();
+      params_ptr = make_localization_params(backend);
+    } catch (const std::runtime_error& e) {
+      throw UsageError(e.what());
+    }
+    auto& params = *params_ptr;
     params.map_path = args.map;
     std::string pose_source = "config";
     if (args.init_pose) {
@@ -266,7 +277,8 @@ int main(int argc, char** argv) {
     const double map_load_seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - map_begin).count();
 
     glim::CloudPreprocessor preprocessor;
-    OdometryEstimationLocalizationCPU odometry(params, map);
+    const auto odometry_ptr = make_localization_odometry(params, map);
+    auto& odometry = *odometry_ptr;
 
     options.start = args.start;
     options.end = args.end;
@@ -296,6 +308,7 @@ int main(int argc, char** argv) {
       json["min_tracking_ratio"] = args.min_tracking_ratio;
       json["max_frames"] = args.max_frames ? nlohmann::json(*args.max_frames) : nlohmann::json(nullptr);
       json["effective"] = {
+        {"backend", to_string(backend)},
         {"init_pose_source", pose_source},
         {"init_T_world_imu_xyz_qxyzw", pose_vector(params.init_T_world_imu)},
         {"init_v_world_imu", std::vector<double>(params.init_v_world_imu.data(), params.init_v_world_imu.data() + 3)},

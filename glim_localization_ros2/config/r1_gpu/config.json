@@ -1,0 +1,13 @@
+{
+  // R1 with the GPU odometry (BUILD_WITH_CUDA=ON). Everything else is shared with r1.
+  "global": {
+    "config_path": "",
+    "config_ros": "../r1/config_ros.json",
+    "config_logging": "../r1/config_logging.json",
+    "config_sensors": "../r1/config_sensors.json",
+    "config_preprocess": "../r1/config_preprocess.json",
+    "config_odometry": "../r1/config_odometry_localization_gpu.json",
+    "config_sub_mapping": "../r1/config_sub_mapping_none.json",
+    "config_global_mapping": "../r1/config_global_mapping_none.json"
+  }
+}

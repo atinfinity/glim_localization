@@ -19,7 +19,7 @@
 #include <glim/util/config.hpp>
 #include <glim/util/extension_module_ros2.hpp>
 
-#include <glim_localization/odometry/odometry_estimation_localization_cpu.hpp>
+#include <glim_localization/odometry/odometry_estimation_localization.hpp>
 #include <glim_localization_ros2/estimate_bridge.hpp>
 #include <glim_localization_ros2/localization_publisher.hpp>
 #include <glim_localization_ros2/map_publisher.hpp>

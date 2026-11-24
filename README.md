@@ -21,7 +21,7 @@ flowchart LR
   bag["rosbag2"] -->|bag_to_replay.py| dataset["replay dataset"]
   dataset --> replay["glim_localization_replay"] --> eval["evaluate.py"]
   core --> replay
-  core -->|libodometry_localization_cpu.so| r1["R1: glim_rosnode / glim_rosbag<br/>+ extension"]
+  core -->|libodometry_localization_cpu.so / _gpu.so| r1["R1: glim_rosnode / glim_rosbag<br/>+ extension"]
   core --> r2["R2: glim_localization_node<br/>(lifecycle)"]
 ```
 
@@ -38,10 +38,11 @@ Design: [docs/DESIGN.md](docs/DESIGN.md). Plan: [docs/IMPLEMENTATION_PLAN.md](do
 | 5 | Launch files, YAML parameter files, RViz config, `~/map` | Done |
 | 6 | `map_compiler` PCD input | Done |
 | 6 | README | This file |
+| 6 | GPU (CUDA) odometry module, selected by the odometry config (CUDA image) | Done; tile prefetch open (#2) |
 
 Not done yet (open issues):
 
-- GPU (CUDA) version of the odometry module (#2). The CUDA image and build mode are in place ([CUDA variant](#cuda-variant)).
+- GPU follow-ups (#2): tile prefetch and a GPU memory budget, real-data timing on the GPU. The GPU module itself is in place ([CUDA variant](#cuda-variant)).
 - Relocalizer: multi-hypothesis refinement of `/initialpose` and global relocalization (#3).
 - `map_compiler` PLY input and 2D OccupancyGrid export (#4); PCD follow-ups such as `binary_compressed` input (#12).
 - Evaluation on real data against an independent reference (#5) and in simulation (#9).
@@ -90,15 +91,27 @@ docker compose -f docker/compose.yaml build dev-cuda   # glim_localization:dev-c
 scripts/docker_run.sh --cuda scripts/ci.sh             # the same checks in CUDA mode
 ```
 
-`--cuda` selects the compose service `dev-cuda`: the image `glim_localization:dev-cuda` (or `GLIM_LOC_CUDA_IMAGE`), all GPUs, and its own build volume, so CPU and CUDA builds do not share `/ws/build`. In this image `scripts/ci.sh` runs in CUDA mode (`GLIM_LOC_BUILD_WITH_CUDA=ON`): our packages are configured with `BUILD_WITH_CUDA=ON`, `check_deps.sh` checks the CUDA packages and GLIM's GPU odometry module, and the GPU smoke test (`test_gpu_smoke`) builds a GPU voxel map. Without a visible GPU that test is reported as skipped; when `nvidia-smi` lists a GPU, `ci.sh` sets `GLIM_LOC_REQUIRE_GPU=1` and a skip fails.
+`--cuda` selects the compose service `dev-cuda`: the image `glim_localization:dev-cuda` (or `GLIM_LOC_CUDA_IMAGE`), all GPUs, and its own build volume, so CPU and CUDA builds do not share `/ws/build`. In this image `scripts/ci.sh` runs in CUDA mode (`GLIM_LOC_BUILD_WITH_CUDA=ON`): our packages are configured with `BUILD_WITH_CUDA=ON`, `check_deps.sh` checks the CUDA packages and GLIM's GPU odometry module, and the GPU tests (`test_gpu_smoke`, `test_localization_odometry_gpu`) and a GPU replay in `test_replay_e2e.sh` run on the GPU. When `nvidia-smi` lists a GPU, `ci.sh` sets `GLIM_LOC_REQUIRE_GPU=1`: the GPU tests then fail instead of skipping, and the GPU replay runs and must agree with the CPU replay. Without it, ctest reports the GPU tests as skipped and `test_replay_e2e.sh` prints `SKIPPED: GPU replay`.
 
 The GPUs come from a device reservation in compose (`deploy.resources.reservations.devices`, which any Compose v2 accepts). The image does not set `NVIDIA_VISIBLE_DEVICES`, so a container started without a device request (`docker run` without `--gpus`) sees no GPU, even on a host whose default Docker runtime is `nvidia`. On such a host, passing `-e NVIDIA_VISIBLE_DEVICES=...` exposes GPUs anyway.
 
 > [!IMPORTANT]
 > `docker compose run` does not rebuild an existing image. After you change `docker/Dockerfile.cuda`, `docker/entrypoint.sh`, `scripts/requirements.txt` or a patch under `third_party/patches/`, rebuild with `docker compose -f docker/compose.yaml build dev-cuda`. In CUDA mode `ci.sh` first runs `scripts/check_cuda_image_inputs.sh`, which fails when the image was built from other versions of these files. `GLIM_LOC_ALLOW_STALE_IMAGE=1` turns that failure into a warning.
 
-> [!NOTE]
-> The CUDA image only prepares the build. The GPU odometry module (`libodometry_localization_gpu.so`) is not written yet (#2), so localization still runs on the CPU module in both images.
+The CUDA build adds the GPU odometry module `libodometry_localization_gpu.so`. A config selects it through `so_name` in its odometry config; the shipped GPU configs share every other file with the CPU ones:
+
+| Use | CPU config | GPU config |
+| --- | --- | --- |
+| Replay (`--config`) | `glim_localization/config` | `glim_localization/config/gpu` |
+| R1 (`config_path`) | `config/r1` | `config/r1_gpu` |
+| R2 (`config_path`) | `config/r2` | `config/r2_gpu` |
+
+The GPU odometry config (`config_odometry_localization_gpu.json`) has the same common keys as the CPU one, plus `map_gpu_max_tiles` (map tiles kept on the GPU, least recently used dropped; at least `map_max_submaps`) and GLIM's GPU keyframe keys for `use_keyframes`. In a CPU build, the replay tool exits with code 2 and the R2 node fails to configure when the config names the GPU module. The GPU module also fails closed when CUDA is unusable: with no visible device it does not start (replay exits with code 1, the R2 node fails to activate), and a failed tile upload throws. The replay tool turns that into exit code 1. In R1 and R2 the exception escapes GLIM's background odometry thread and aborts the whole node process.
+
+> [!WARNING]
+> Behavior change in this release: the replay tool and the R2 node now read `so_name` in `config_odometry` and need exactly `libodometry_localization_cpu.so` or `libodometry_localization_gpu.so` (a file name, not a path). An empty or missing `so_name`, a full path, or another module is an error (replay exit 2, R2 configure fails). Before, both ignored `so_name`. R1 loads the module through GLIM and is unchanged.
+
+For R1, copy the whole `config` directory, because `r1_gpu` refers to `../r1`.
 
 The build argument `CUDA_ARCHITECTURES` (default `75`, Turing; for example `"75;86;89"`) sets `CMAKE_CUDA_ARCHITECTURES` for any CUDA code compiled in the image. It is never `native`, because no GPU is visible during `docker build`. The prebuilt gtsam_points package already contains code for sm_75 and newer. Set it with `CUDA_ARCHITECTURES=86 docker compose -f docker/compose.yaml build dev-cuda`.
 
@@ -250,7 +263,7 @@ States: `INITIALIZING` (started or reset) -> `TRACKING` -> `DEGRADED` (low inlie
 
 ## Limitations
 
-- **CPU only.** The GPU version is not written (#2); the CUDA image builds and tests the CPU module against the CUDA dependencies. On one 10 Hz OS1-128 sequence (Docker, arm64) the mean was about 93 ms per frame for a 100 ms period, with p99 spikes over 1 s, and the ratio of processing time to data length varied between runs (1.06 and 0.64); real-time capability is not established.
+- **GPU module tested on synthetic data only.** The GPU module (CUDA image) is verified on one Turing GPU with synthetic data ([PROGRESS](docs/PROGRESS.md)); it uploads map tiles on first use, without prefetch (#2). With the CPU module, on one 10 Hz OS1-128 sequence (Docker, arm64) the mean was about 93 ms per frame for a 100 ms period, with p99 spikes over 1 s, and the ratio of processing time to data length varied between runs (1.06 and 0.64); real-time capability is not established.
 - **Not yet verified:** accuracy on real data against an independent reference (the only real-data run, one OS1-128 sequence, compares with GLIM's own trajectory: ATE translation RMSE about 0.023 to 0.025 m, a consistency figure, not accuracy); real robots and real-time sensor input; most measurements so far ran in the Docker image on arm64, and amd64 has less coverage; a multithreaded component container; PCD maps from a real mapping pipeline (for example sdf2map, #9); integration with Nav2 or an external EKF.
 - `~/aligned_points` (#18) and an IMU-rate odometry are not published.
 - No initial pose search: `/initialpose` and `~/initialize` are applied exactly. No global relocalization (#3).

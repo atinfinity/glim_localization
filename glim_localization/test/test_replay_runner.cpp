@@ -25,6 +25,7 @@
 #include <glim/util/config.hpp>
 
 #include <glim_localization/map/map_manager.hpp>
+#include <glim_localization/odometry/odometry_estimation_localization_cpu.hpp>
 #include <glim_localization/replay/replay_runner.hpp>
 
 #include "synthetic/synthetic_map.hpp"

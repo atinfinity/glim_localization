@@ -46,7 +46,8 @@
 #include <glim/util/time_keeper.hpp>
 
 #include <glim_localization/map/map_manager.hpp>
-#include <glim_localization/odometry/odometry_estimation_localization_cpu.hpp>
+#include <glim_localization/odometry/localization_backend.hpp>
+#include <glim_localization/odometry/odometry_estimation_localization.hpp>
 #include <glim_localization_msgs/srv/initialize.hpp>
 #include <glim_localization_ros2/estimate_bridge.hpp>
 #include <glim_localization_ros2/init_pose_delay.hpp>
@@ -63,7 +64,7 @@ using ImuMsg = sensor_msgs::msg::Imu;
 using PointsMsg = sensor_msgs::msg::PointCloud2;
 using InitializeSrv = glim_localization_msgs::srv::Initialize;
 using TriggerSrv = std_srvs::srv::Trigger;
-using OdometryParams = glim_localization::OdometryEstimationLocalizationCPU::Params;
+using OdometryParams = glim_localization::OdometryEstimationLocalizationParams;
 
 bool init_qos_profile(const std::string& name, rmw_qos_profile_t& profile) {
   if (name == "default") {
@@ -270,7 +271,15 @@ private:
     publisher_params_ = read_publisher_params(config_ros);
     const MapPublisherParams map_publisher_params = read_map_publisher_params(config_ros);
 
-    odometry_params_ = std::make_unique<OdometryParams>();
+    // CPU or GPU, as selected by the so_name of the odometry config
+    try {
+      const auto backend = glim_localization::localization_backend_from_config();
+      odometry_params_ = glim_localization::make_localization_params(backend);
+      RCLCPP_INFO(get_logger(), "odometry backend: %s", glim_localization::to_string(backend).c_str());
+    } catch (const std::exception& e) {
+      RCLCPP_ERROR(get_logger(), "%s", e.what());
+      return false;
+    }
     const std::string map_path = get_parameter("map_path").as_string();
     if (!map_path.empty()) {
       odometry_params_->map_path = map_path;
@@ -318,7 +327,7 @@ private:
     preprocessor_ = std::make_unique<glim::CloudPreprocessor>();
     acc_scale_ = input_.acc_scale;
 
-    odometry_ = std::make_shared<glim_localization::OdometryEstimationLocalizationCPU>(*odometry_params_, map_);
+    odometry_ = glim_localization::make_localization_odometry(*odometry_params_, map_);
     bridge_->attach(
       std::make_unique<LocalizationPublisher>(
         LocalizationPublisher::NodeInterfaces(
@@ -497,7 +506,7 @@ private:
   double acc_scale_ = 0.0;
   std::unique_ptr<glim::TimeKeeper> time_keeper_;
   std::unique_ptr<glim::CloudPreprocessor> preprocessor_;
-  std::shared_ptr<glim_localization::OdometryEstimationLocalizationCPU> odometry_;
+  std::shared_ptr<glim_localization::OdometryEstimationLocalization> odometry_;
   std::unique_ptr<glim::AsyncOdometryEstimation> async_odometry_;
   rclcpp::Subscription<ImuMsg>::SharedPtr imu_sub_;
   rclcpp::Subscription<PointsMsg>::SharedPtr points_sub_;

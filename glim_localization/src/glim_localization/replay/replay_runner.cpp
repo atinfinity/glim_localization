@@ -47,7 +47,7 @@ const char* to_string(ReplayResult result) {
 
 ReplayRunner::ReplayRunner(
   const ReplayDataset& dataset,
-  OdometryEstimationLocalizationCPU& odometry,
+  OdometryEstimationLocalization& odometry,
   glim::CloudPreprocessor& preprocessor,
   const ReplayOptions& options)
 : dataset_(dataset),

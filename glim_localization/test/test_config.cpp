@@ -51,4 +51,33 @@ TEST(ConfigTest, OdometryUsesLocalizationModule) {
   EXPECT_DOUBLE_EQ(odometry.at("init_pose_damping_scale").get<double>(), 1e2);
 }
 
+TEST(ConfigTest, GpuConfigSelectsGpuModule) {
+  const json global = read_config("gpu/config.json").at("global");
+  for (const auto& [key, value] : global.items()) {
+    if (key == "config_path") {
+      continue;
+    }
+    const std::string name = value.get<std::string>();
+    EXPECT_TRUE(fs::is_regular_file(fs::path(GLIM_LOCALIZATION_CONFIG_DIR) / "gpu" / name)) << key << ": " << name;
+  }
+  const json odometry = read_config("gpu/" + global.at("config_odometry").get<std::string>()).at("odometry_estimation");
+  EXPECT_EQ(odometry.at("so_name").get<std::string>(), "libodometry_localization_gpu.so");
+  EXPECT_GE(odometry.at("map_gpu_max_tiles").get<int>(), odometry.at("map_max_submaps").get<int>());
+}
+
+TEST(ConfigTest, GpuConfigSharesCommonKeysWithCpu) {
+  // The keys of the shared module (map, status, IMU gap, smoother) must mean the same for both backends.
+  const json cpu = read_config("config_odometry_localization_cpu.json").at("odometry_estimation");
+  const json gpu = read_config("config_odometry_localization_gpu.json").at("odometry_estimation");
+  const std::vector<std::string> cpu_only = {
+    "so_name", "max_iterations", "lru_thresh", "target_downsampling_rate", "vgicp_resolution", "vgicp_voxelmap_levels", "vgicp_voxelmap_scaling_factor"};
+  for (const auto& [key, value] : cpu.items()) {
+    if (std::count(cpu_only.begin(), cpu_only.end(), key)) {
+      continue;
+    }
+    ASSERT_TRUE(gpu.contains(key)) << key;
+    EXPECT_EQ(gpu.at(key), value) << key;
+  }
+}
+
 }  // namespace

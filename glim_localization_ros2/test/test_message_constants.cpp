@@ -2,7 +2,7 @@
 // Pin them here, where both are visible.
 #include <gtest/gtest.h>
 
-#include <glim_localization/odometry/odometry_estimation_localization_cpu.hpp>
+#include <glim_localization/odometry/odometry_estimation_localization.hpp>
 #include <glim_localization_msgs/msg/localization_status.hpp>
 
 namespace {

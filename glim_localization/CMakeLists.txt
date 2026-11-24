@@ -33,7 +33,9 @@ add_library(glim_localization SHARED
   src/glim_localization/map/map_manager.cpp
   src/glim_localization/map/pcd_map.cpp
   src/glim_localization/odometry/map_factor_builder.cpp
+  src/glim_localization/odometry/localization_backend.cpp
   src/glim_localization/odometry/map_initial_state_estimation.cpp
+  src/glim_localization/odometry/odometry_estimation_localization.cpp
   src/glim_localization/odometry/odometry_estimation_localization_cpu.cpp
   src/glim_localization/odometry/quality_monitor.cpp
   src/glim_localization/odometry/weighted_factor.cpp
@@ -43,6 +45,17 @@ add_library(glim_localization SHARED
 target_compile_definitions(glim_localization PRIVATE
   GLIM_LOCALIZATION_VERSION="${PROJECT_VERSION}"
 )
+if(GLIM_LOCALIZATION_WITH_CUDA)
+  find_package(CUDAToolkit REQUIRED)
+  target_sources(glim_localization PRIVATE
+    src/glim_localization/map/gpu_tile_cache.cpp
+    src/glim_localization/odometry/gpu_linearization_hook.cpp
+    src/glim_localization/odometry/odometry_estimation_localization_gpu.cpp
+    src/glim_localization/odometry/weighted_vgicp_factor_gpu.cpp
+  )
+  target_compile_definitions(glim_localization PRIVATE GLIM_LOCALIZATION_WITH_CUDA)
+  target_link_libraries(glim_localization PRIVATE CUDA::cudart)
+endif()
 target_compile_options(glim_localization PRIVATE -Wall -Wextra)
 target_include_directories(glim_localization PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -67,6 +80,20 @@ set_target_properties(odometry_localization_cpu PROPERTIES
   INSTALL_RPATH "$ORIGIN"
 )
 
+if(GLIM_LOCALIZATION_WITH_CUDA)
+  add_library(odometry_localization_gpu MODULE
+    src/glim_localization/odometry/odometry_estimation_localization_gpu_create.cpp
+  )
+  target_compile_options(odometry_localization_gpu PRIVATE -Wall -Wextra)
+  target_link_libraries(odometry_localization_gpu PRIVATE glim_localization)
+  set_target_properties(odometry_localization_gpu PROPERTIES
+    PREFIX "lib"
+    SUFFIX ".so"
+    INSTALL_RPATH "$ORIGIN"
+  )
+  install(TARGETS odometry_localization_gpu LIBRARY DESTINATION lib)
+endif()
+
 if(BUILD_TOOLS)
   add_subdirectory(tools)
 endif()
@@ -76,7 +103,12 @@ if(BUILD_TESTS)
   add_subdirectory(test)
 endif()
 
-install(DIRECTORY include/ DESTINATION include)
+if(GLIM_LOCALIZATION_WITH_CUDA)
+  install(DIRECTORY include/ DESTINATION include)
+else()
+  # The GPU headers need the CUDA build of gtsam_points
+  install(DIRECTORY include/ DESTINATION include PATTERN "*gpu*" EXCLUDE)
+endif()
 install(DIRECTORY config/ DESTINATION share/glim_localization/config)
 install(TARGETS glim_localization
   EXPORT glim_localization-targets

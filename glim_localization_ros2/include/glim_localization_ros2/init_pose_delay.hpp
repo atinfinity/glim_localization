@@ -9,7 +9,7 @@ namespace glim_localization_ros2 {
 ///
 /// The core applies a stamped pose at the first frame at or after its stamp that it has not taken yet. Online, the
 /// node compares the pose stamp with the stamp of the last frame the odometry thread took off its queue
-/// (OdometryEstimationLocalizationCPU::last_input_frame_stamp). That frame counts whatever happened to it: estimated,
+/// (OdometryEstimationLocalization::last_input_frame_stamp). That frame counts whatever happened to it: estimated,
 /// or dropped while waiting for the first pose, in an IMU gap or while LOST. The pose applies at that frame or a later
 /// one, so it is at least last_frame_stamp - stamp late. That lower bound is checked when the request arrives: a pose
 /// that is already more than max_delay late is rejected; a shorter delay is accepted with a warning. Frames still in

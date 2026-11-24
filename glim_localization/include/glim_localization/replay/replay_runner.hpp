@@ -14,7 +14,7 @@
 #include <glim/preprocess/cloud_preprocessor.hpp>
 
 #include <glim_localization/odometry/imu_gap.hpp>
-#include <glim_localization/odometry/odometry_estimation_localization_cpu.hpp>
+#include <glim_localization/odometry/odometry_estimation_localization.hpp>
 #include <glim_localization/replay/replay_dataset.hpp>
 
 namespace glim_localization {
@@ -108,7 +108,7 @@ class ReplayRunner {
 public:
   ReplayRunner(
     const ReplayDataset& dataset,
-    OdometryEstimationLocalizationCPU& odometry,
+    OdometryEstimationLocalization& odometry,
     glim::CloudPreprocessor& preprocessor,
     const ReplayOptions& options = ReplayOptions());
 
@@ -122,7 +122,7 @@ public:
 
 private:
   const ReplayDataset& dataset_;
-  OdometryEstimationLocalizationCPU& odometry_;
+  OdometryEstimationLocalization& odometry_;
   glim::CloudPreprocessor& preprocessor_;
   ReplayOptions options_;
 };

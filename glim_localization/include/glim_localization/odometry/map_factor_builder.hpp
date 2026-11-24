@@ -26,6 +26,14 @@ struct MapFactors {
   std::vector<MapTile::ConstPtr> tiles;   ///< Tiles that passed the overlap filter
 };
 
+/// The tiles near the predicted pose whose coarsest voxelmap overlaps the frame by at least params.min_overlap
+/// (CPU voxelmaps; the GPU module uploads only these).
+std::vector<MapTile::ConstPtr> select_map_tiles(
+  const MapManager& map,
+  const gtsam_points::PointCloud::ConstPtr& frame,
+  const Eigen::Isometry3d& T_world_imu,
+  const MapFactorParams& params);
+
 /// Create unary VGICP factors against fixed map tiles. Holds no state.
 /// @param map          Map to query
 /// @param key          Pose key of the frame
