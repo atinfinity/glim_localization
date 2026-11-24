@@ -3,6 +3,8 @@
 #include <cstdlib>
 #include <filesystem>
 #include <functional>
+#include <iostream>
+#include <limits>
 #include <fstream>
 #include <sstream>
 #include <string>
@@ -288,6 +290,18 @@ std::string far_init_pose_args() {
   return text;
 }
 
+/// The ground truth start pose turned by yaw_deg about world z
+std::string yawed_init_pose_args(double yaw_deg) {
+  Eigen::Isometry3d T = synthetic_T_world_imu(0.0);
+  T.linear() = Eigen::AngleAxisd(yaw_deg * M_PI / 180.0, Eigen::Vector3d::UnitZ()).toRotationMatrix() * T.linear();
+  const Eigen::Quaterniond q(T.linear());
+  char text[256];
+  std::snprintf(
+    text, sizeof(text), "--init-pose %.17g %.17g %.17g %.17g %.17g %.17g %.17g", T.translation().x(), T.translation().y(), T.translation().z(), q.x(), q.y(),
+    q.z(), q.w());
+  return text;
+}
+
 }  // namespace
 
 TEST_F(ReplayToolTest, OnImuGapResetRecoversFromAGapJustUnderTheLimit) {
@@ -451,4 +465,70 @@ TEST_F(ReplayToolTest, LocalizesOnAMapBuiltFromPcd) {
     checked++;
   }
   EXPECT_EQ(checked, 21);
+}
+
+// A wrong initial yaw: the plain run never tracks, the yaw search corrects it, and a pose off the map is rejected
+TEST_F(ReplayToolTest, InitYawSearchCorrectsAWrongInitialYaw) {
+  const fs::path config = *root_ / "config_yaw_search";
+  fs::remove_all(config);
+  fs::copy(GLIM_LOCALIZATION_CONFIG_DIR, config, fs::copy_options::recursive);
+  {
+    const auto path = config / "config_odometry_localization_cpu.json";
+    std::ifstream ifs(path);
+    std::stringstream buffer;
+    buffer << ifs.rdbuf();
+    std::string text = buffer.str();
+    const std::string key = "\"init_yaw_search\": false";
+    const auto pos = text.find(key);
+    ASSERT_NE(pos, std::string::npos);
+    text.replace(pos, key.size(), "\"init_yaw_search\": true");
+    std::ofstream(path, std::ios::trunc) << text;
+  }
+  const std::string wrong = yawed_init_pose_args(75.0);
+  // Error of the last pose against the ground truth: translation [m], rotation [deg]
+  struct PoseError {
+    double translation;
+    double rotation;
+  };
+  const auto last_error = [&]() -> PoseError {
+    const auto traj = read_lines(out_ / "traj_localization.txt");
+    if (traj.empty()) {
+      return {std::numeric_limits<double>::infinity(), std::numeric_limits<double>::infinity()};
+    }
+    std::istringstream last(traj.back());
+    double stamp, x, y, z, qx, qy, qz, qw;
+    last >> stamp >> x >> y >> z >> qx >> qy >> qz >> qw;
+    Eigen::Isometry3d T = Eigen::Isometry3d::Identity();
+    T.translation() << x, y, z;
+    T.linear() = Eigen::Quaterniond(qw, qx, qy, qz).normalized().toRotationMatrix();
+    const Eigen::Isometry3d error = synthetic_T_world_imu(stamp).inverse() * T;
+    return {error.translation().norm(), Eigen::AngleAxisd(error.linear()).angle() * 180.0 / M_PI};
+  };
+
+  // The default config does not search: the run fails its gates, or ends far from the ground truth
+  const int plain = run(wrong);
+  const auto [plain_translation, plain_rotation] = last_error();
+  std::cout << "no search: exit " << plain << ", last pose error " << plain_translation << " m, " << plain_rotation << " deg" << std::endl;
+  EXPECT_TRUE(plain != 0 || plain_rotation > 10.0 || plain_translation > 1.0);
+
+  ASSERT_EQ(run(wrong, fs::path(), config), 0);
+  const auto summary = nlohmann::json::parse(std::ifstream(out_ / "summary.json"));
+  EXPECT_DOUBLE_EQ(summary.at("tracking_ratio").get<double>(), 1.0);
+  const auto& search = summary.at("init_search");
+  EXPECT_EQ(search.at("result"), "ACCEPTED");
+  EXPECT_EQ(search.at("candidates"), 24);
+  EXPECT_GT(search.at("score").get<double>(), 0.5);
+  EXPECT_NEAR(search.at("yaw_offset_deg").get<double>(), -75.0, 1.0);
+  EXPECT_EQ(read_lines(out_ / "traj_localization.txt").size(), 31u);
+  const auto [translation, rotation] = last_error();
+  std::cout << "search: last pose error " << translation << " m, " << rotation << " deg, search " << search.at("seconds").get<double>() << " s" << std::endl;
+  EXPECT_LT(translation, 0.1);
+  EXPECT_LT(rotation, 1.0);
+
+  // Off the map, no candidate passes: the pose is rejected and the run stops at the first LOST frame
+  EXPECT_EQ(run(far_init_pose_args() + " --min-tracking-ratio 0", fs::path(), config), 1);
+  std::ifstream log(out_.string() + ".log");
+  std::stringstream buffer;
+  buffer << log.rdbuf();
+  EXPECT_NE(buffer.str().find("rejected the given pose"), std::string::npos) << buffer.str();
 }

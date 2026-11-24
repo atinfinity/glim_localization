@@ -95,6 +95,15 @@ struct ReplaySummary {
   std::map<std::string, int> estimated_by_state;
   double wall_seconds = 0.0;
   int imu_gap_resets = 0;  ///< Resets the odometry made after an IMU gap (OnImuGap::RESET)
+  /// The most recent initial pose search (init_yaw_search), if the odometry ran one
+  struct InitSearch {
+    InitSearchResult result = InitSearchResult::NONE;
+    int candidates = 0;
+    double score = 0.0;
+    double yaw_offset = 0.0;  ///< [rad]
+    double seconds = 0.0;
+  };
+  std::optional<InitSearch> init_search;
   /// Set by the replay tool, not by ReplayRunner
   std::optional<double> tracking_ratio;      ///< TRACKING share of the estimated frames from the first TRACKING frame on
   std::optional<double> min_tracking_ratio;  ///< The gate that tracking_ratio was checked against
