@@ -91,7 +91,6 @@ protected:
     p.init_yaw_search.enabled = search;
     p.init_yaw_search.range = M_PI;
     p.init_yaw_search.step = 15.0 * kDeg;
-    p.init_yaw_search.min_inlier_ratio = 0.5;
     p.init_yaw_search.time_budget = 30.0;  // Not the subject here; a loaded CI machine must not cut the search short
     return p;
   }
@@ -140,8 +139,9 @@ protected:
 
   static void print(const std::string& name, const RunStats& stats, const LocalizationStatus& status) {
     std::cout << name << ": state=" << to_string(status.state) << " search=" << to_string(status.init_search)
-              << " candidates=" << status.init_search_candidates << " score=" << status.init_search_score
-              << " yaw_offset=" << status.init_search_yaw_offset / kDeg << " deg search_time=" << status.init_search_time * 1e3
+              << " candidates=" << status.init_search_candidates << "/" << status.init_search_candidates_total << " score=" << status.init_search_score
+              << " yaw_offset=" << status.init_search_yaw_offset / kDeg
+              << " deg runner_up=" << status.init_search_runner_up_score << " at " << status.init_search_runner_up_yaw_offset / kDeg << " deg search_time=" << status.init_search_time * 1e3
               << " ms first_frame=" << stats.first_frame_time * 1e3 << " ms mean_frame=" << stats.mean_frame_time * 1e3
               << " ms max_translation=" << stats.max_translation << " m max_rotation=" << stats.max_rotation_deg
               << " deg last_translation=" << stats.last_translation << " m last_rotation=" << stats.last_rotation_deg << " deg" << std::endl;
@@ -192,8 +192,12 @@ TEST_F(InitYawSearchTest, ConfiguredPoseWithLargeYawErrorConverges) {
     EXPECT_EQ(status.state, LocalizationState::TRACKING) << to_string(status.state);
     EXPECT_EQ(status.init_search, InitSearchResult::ACCEPTED);
     EXPECT_EQ(status.init_search_candidates, 24);
-    EXPECT_GT(status.init_search_score, 0.5);
+    EXPECT_EQ(status.init_search_candidates_total, 24);
+    EXPECT_GT(status.init_search_score, 0.9);
     EXPECT_NEAR(status.init_search_yaw_offset / kDeg, -yaw_error_deg, 1.0);
+    // The corridor flipped by a half turn is the runner-up
+    EXPECT_LT(status.init_search_runner_up_score, status.init_search_score - p.init_yaw_search.min_score_gap);
+    EXPECT_GT(std::abs(std::remainder(status.init_search_runner_up_yaw_offset - status.init_search_yaw_offset, 2.0 * M_PI)), 2.0 * p.init_yaw_search.step);
     EXPECT_LT(stats.max_translation, kMaxTranslationError);
     EXPECT_LT(stats.max_rotation_deg, kMaxRotationErrorDeg);
   }
@@ -271,6 +275,187 @@ TEST_F(InitYawSearchTest, PoseOffTheMapIsRejectedUntilANewPose) {
   EXPECT_LT(recovered.last_rotation_deg, kMaxRotationErrorDeg);
 }
 
+TEST_F(InitYawSearchTest, TruncatedSearchIsRejected) {
+  // A budget that ends the search after the hint: the hint registers into a wrong minimum, which must not be accepted
+  auto p = params(true);
+  p.estimate_init_state = false;
+  p.init_T_world_imu = perturbed_pose(0.0, 75.0 * kDeg);
+  p.init_v_world_imu.setZero();
+  p.init_yaw_search.time_budget = 0.0;
+  OdometryEstimationLocalizationCPU odometry(p, *map_);
+
+  size_t imu_cursor = 0;
+  const auto stats = run(odometry, imu_cursor, 0, 5);
+  const auto status = odometry.status();
+  print("search, budget 0, yaw error 75 deg", stats, status);
+  EXPECT_EQ(stats.estimated, 0);
+  EXPECT_EQ(status.state, LocalizationState::LOST);
+  EXPECT_EQ(status.init_search, InitSearchResult::REJECTED);
+  EXPECT_EQ(status.init_search_candidates, 1);
+  EXPECT_EQ(status.init_search_candidates_total, 24);
+}
+
+TEST_F(InitYawSearchTest, WrongYawOnTheMapIsRejectedWithoutASearchRange) {
+  // range 0 scores the given pose alone: on the map, but at a wrong yaw that registers into a wrong minimum
+  auto p = params(true);
+  p.estimate_init_state = false;
+  p.init_T_world_imu = perturbed_pose(0.0, 75.0 * kDeg);
+  p.init_v_world_imu.setZero();
+  p.init_yaw_search.range = 0.0;
+  OdometryEstimationLocalizationCPU odometry(p, *map_);
+
+  size_t imu_cursor = 0;
+  const auto stats = run(odometry, imu_cursor, 0, 5);
+  const auto status = odometry.status();
+  print("search range 0, yaw error 75 deg", stats, status);
+  EXPECT_EQ(stats.estimated, 0);
+  EXPECT_EQ(status.state, LocalizationState::LOST);
+  EXPECT_EQ(status.init_search, InitSearchResult::REJECTED);
+  EXPECT_EQ(status.init_search_candidates, 1);
+  EXPECT_EQ(status.init_search_candidates_total, 1);
+  EXPECT_GT(status.init_search_score, 0.0) << "the pose is on the map";
+  EXPECT_LT(status.init_search_score, p.init_yaw_search.min_inlier_ratio);
+}
+
+TEST_F(InitYawSearchTest, EmptyAndSparseFramesKeepTheSearchPending) {
+  auto p = params(true);
+  p.estimate_init_state = false;
+  p.init_T_world_imu = perturbed_pose(0.0, 75.0 * kDeg);
+  p.init_v_world_imu.setZero();
+  OdometryEstimationLocalizationCPU odometry(p, *map_);
+
+  // Frame 0 without points, frame 1 with 50 (fewer than min_points); their neighbor lists stay consistent
+  auto empty = std::make_shared<glim::PreprocessedFrame>(*(*frames_)[0]);
+  empty->points.clear();
+  empty->times.clear();
+  empty->intensities.clear();
+  empty->neighbors.clear();
+  auto sparse = std::make_shared<glim::PreprocessedFrame>(*(*frames_)[1]);
+  constexpr int kSparse = 50;
+  ASSERT_LT(kSparse, p.init_yaw_search.min_points);
+  sparse->points.resize(kSparse);
+  sparse->times.resize(std::min<size_t>(sparse->times.size(), kSparse));
+  sparse->intensities.resize(std::min<size_t>(sparse->intensities.size(), kSparse));
+  sparse->neighbors.resize(kSparse * sparse->k_neighbors);
+  for (auto& n : sparse->neighbors) {
+    n %= kSparse;
+  }
+
+  size_t imu_cursor = 0;
+  std::vector<glim::EstimationFrame::ConstPtr> marginalized;
+  for (const auto& frame : {empty, sparse}) {
+    while (imu_cursor < imu_->size() && (*imu_)[imu_cursor].stamp <= frame->stamp + 0.02) {
+      odometry.insert_imu((*imu_)[imu_cursor].stamp, (*imu_)[imu_cursor].linear_acc, (*imu_)[imu_cursor].angular_vel);
+      imu_cursor++;
+    }
+    EXPECT_FALSE(odometry.insert_frame(frame, marginalized)) << frame->size() << " points";
+    EXPECT_EQ(odometry.status().init_search, InitSearchResult::NONE) << "still pending";
+  }
+
+  // The first full frame runs the search
+  const auto stats = run(odometry, imu_cursor, 2, frames_->size());
+  const auto status = odometry.status();
+  print("search after an empty and a sparse frame, yaw error 75 deg", stats, status);
+  EXPECT_EQ(stats.estimated, static_cast<int>(frames_->size()) - 2);
+  EXPECT_EQ(status.init_search, InitSearchResult::ACCEPTED);
+  EXPECT_NEAR(status.init_search_yaw_offset / kDeg, -75.0, 1.0);
+  EXPECT_EQ(status.state, LocalizationState::TRACKING) << to_string(status.state);
+  EXPECT_LT(stats.max_translation, kMaxTranslationError);
+}
+
+TEST_F(InitYawSearchTest, VelocityTurnsWithTheYaw) {
+  // A reset while moving: the given velocity is in the frame of the given (wrong) heading, so it turns with the yaw
+  auto p = params(true);
+  p.estimate_init_state = true;
+  OdometryEstimationLocalizationCPU odometry(p, *map_);
+  size_t imu_cursor = 0;
+
+  constexpr size_t kResetIndex = 30;
+  const double stamp = (*frames_)[kResetIndex]->stamp;
+  const Eigen::Vector3d v_true = synthetic_v_world_imu(stamp);
+  ASSERT_GT(v_true.norm(), 1.0) << "moving";
+  constexpr double kYawError = 60.0 * kDeg;
+  const Eigen::Matrix3d R_error = Eigen::AngleAxisd(kYawError, Eigen::Vector3d::UnitZ()).toRotationMatrix();
+  run(odometry, imu_cursor, 0, kResetIndex);
+  ASSERT_TRUE(odometry.reset(perturbed_pose(stamp, kYawError), R_error * v_true, stamp));
+
+  glim::EstimationFrame::ConstPtr first;
+  const auto stats = run(odometry, imu_cursor, kResetIndex, kResetIndex + 40, [&](size_t, const glim::EstimationFrame::ConstPtr& estimate) {
+    if (!first && estimate) {
+      first = estimate;
+    }
+  });
+  const auto status = odometry.status();
+  print("search, reset() while moving, yaw error 60 deg", stats, status);
+  ASSERT_TRUE(first);
+  EXPECT_EQ(status.init_search, InitSearchResult::ACCEPTED);
+  const Eigen::Vector3d v_error = first->v_world_imu - synthetic_v_world_imu(first->stamp);
+  std::cout << "first velocity error " << v_error.norm() << " m/s (unturned it would be about "
+            << ((R_error - Eigen::Matrix3d::Identity()) * v_true).norm() << " m/s)" << std::endl;
+  EXPECT_LT(v_error.norm(), 0.3);
+  EXPECT_EQ(status.state, LocalizationState::TRACKING) << to_string(status.state);
+  EXPECT_LT(stats.last_translation, kMaxTranslationError);
+}
+
+TEST_F(InitYawSearchTest, ImuGapSelfResetDoesNotSearch) {
+  auto p = params(true);
+  p.estimate_init_state = false;
+  p.init_T_world_imu = perturbed_pose(0.0, 75.0 * kDeg);
+  p.init_v_world_imu.setZero();
+  OdometryEstimationLocalizationCPU odometry(p, *map_);
+  size_t imu_cursor = 0;
+
+  constexpr size_t kGapIndex = 40;
+  run(odometry, imu_cursor, 0, kGapIndex);
+  ASSERT_EQ(odometry.status().init_search, InitSearchResult::ACCEPTED);
+  // Drop 0.2 s of IMU data (below imu_gap_reset_max): the odometry resets itself from its estimate
+  while (imu_cursor < imu_->size() && (*imu_)[imu_cursor].stamp <= (*frames_)[kGapIndex + 1]->stamp + 0.02) {
+    imu_cursor++;
+  }
+  const auto stats = run(odometry, imu_cursor, kGapIndex, kGapIndex + 30);
+  const auto status = odometry.status();
+  print("search, IMU gap self-reset", stats, status);
+  EXPECT_EQ(status.reset_count, 1);
+  EXPECT_EQ(status.last_reset_reason, ResetReason::IMU_GAP);
+  EXPECT_EQ(status.init_search, InitSearchResult::NONE) << "a self-reset starts from the estimate";
+  EXPECT_EQ(status.init_search_candidates, 0);
+  EXPECT_EQ(status.state, LocalizationState::TRACKING) << to_string(status.state);
+  EXPECT_LT(stats.last_translation, kMaxTranslationError);
+}
+
+TEST_F(InitYawSearchTest, NonIdentityLidarImuExtrinsic) {
+  // The LiDAR turned by 90 deg and shifted on the IMU: the search scores the points in the IMU frame
+  auto p = params(true);
+  p.estimate_init_state = false;
+  p.init_T_world_imu = perturbed_pose(0.0, 75.0 * kDeg);
+  p.init_v_world_imu.setZero();
+  Eigen::Isometry3d T_lidar_imu = Eigen::Isometry3d::Identity();
+  T_lidar_imu.linear() = Eigen::AngleAxisd(90.0 * kDeg, Eigen::Vector3d::UnitZ()).toRotationMatrix();
+  T_lidar_imu.translation() = Eigen::Vector3d(0.2, -0.1, 0.3);
+  p.T_lidar_imu = T_lidar_imu;
+  OdometryEstimationLocalizationCPU odometry(p, *map_);
+
+  std::vector<glim::PreprocessedFrame::Ptr> lidar_frames;
+  for (const auto& frame : *frames_) {
+    auto copy = std::make_shared<glim::PreprocessedFrame>(*frame);
+    for (auto& point : copy->points) {
+      point = T_lidar_imu * point;  // The synthetic points are in the IMU frame
+    }
+    lidar_frames.push_back(copy);
+  }
+  std::swap(*frames_, lidar_frames);
+  size_t imu_cursor = 0;
+  const auto stats = run(odometry, imu_cursor, 0, 60);
+  std::swap(*frames_, lidar_frames);
+  const auto status = odometry.status();
+  print("search, non-identity T_lidar_imu, yaw error 75 deg", stats, status);
+  EXPECT_EQ(status.init_search, InitSearchResult::ACCEPTED);
+  EXPECT_NEAR(status.init_search_yaw_offset / kDeg, -75.0, 1.0);
+  EXPECT_EQ(status.state, LocalizationState::TRACKING) << to_string(status.state);
+  EXPECT_LT(stats.max_translation, kMaxTranslationError);
+  EXPECT_LT(stats.max_rotation_deg, kMaxRotationErrorDeg);
+}
+
 TEST_F(InitYawSearchTest, InvalidParametersAreRejected) {
   auto p = params(true);
   p.init_yaw_search.step = 0.0;
@@ -283,6 +468,15 @@ TEST_F(InitYawSearchTest, InvalidParametersAreRejected) {
   EXPECT_THROW(OdometryEstimationLocalizationCPU(p, *map_), std::invalid_argument);
   p = params(true);
   p.init_yaw_search.max_iterations = 0;
+  EXPECT_THROW(OdometryEstimationLocalizationCPU(p, *map_), std::invalid_argument);
+  p = params(true);
+  p.init_yaw_search.min_points = 0;
+  EXPECT_THROW(OdometryEstimationLocalizationCPU(p, *map_), std::invalid_argument);
+  p = params(true);
+  p.init_yaw_search.min_score_gap = -0.1;
+  EXPECT_THROW(OdometryEstimationLocalizationCPU(p, *map_), std::invalid_argument);
+  p = params(true);
+  p.init_yaw_search.step = 0.4 * kDeg;  // Below the 0.5 deg floor
   EXPECT_THROW(OdometryEstimationLocalizationCPU(p, *map_), std::invalid_argument);
   // Validated also when disabled: a typo should not wait until someone turns the search on
   p = params(false);

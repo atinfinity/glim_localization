@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cmath>
 #include <memory>
 #include <optional>
 #include <string>
@@ -47,11 +48,15 @@ public:
   virtual PoseCandidates generate(const CandidateQuery& query) const = 0;
 };
 
+/// Smallest yaw search step [rad] (0.5 deg). It bounds the number of yaw candidates to 720, and catches a step given in
+/// radians where degrees are expected.
+constexpr double kMinYawSearchStep = 0.5 * M_PI / 180.0;
+
 /// Yaw offsets in [-range, range] at multiples of step, ordered by distance from 0 (0, +step, -step, +2 step, ...).
 /// With a range of 180 deg or more the offset +180 deg is kept and -180 deg is dropped (the same yaw).
 /// @param range  Half width [rad], at least 0
-/// @param step   Step [rad], positive
-/// @throw std::invalid_argument for a negative or non-finite range or a step that is not positive and finite
+/// @param step   Step [rad], at least kMinYawSearchStep
+/// @throw std::invalid_argument for a negative or non-finite range or a step that is not finite or below kMinYawSearchStep
 std::vector<double> yaw_search_offsets(double range, double step);
 
 /// The hint rotated about the world z axis through its own position by each of yaw_search_offsets(range, step).

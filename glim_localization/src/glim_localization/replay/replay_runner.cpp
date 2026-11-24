@@ -213,7 +213,14 @@ ReplaySummary ReplayRunner::run(const std::function<void(const ReplayFrameRecord
     last_reset_count = status.reset_count;
     if (status.init_search != InitSearchResult::NONE) {
       summary.init_search = ReplaySummary::InitSearch{
-        status.init_search, status.init_search_candidates, status.init_search_score, status.init_search_yaw_offset, status.init_search_time};
+        status.init_search,
+        status.init_search_candidates,
+        status.init_search_candidates_total,
+        status.init_search_score,
+        status.init_search_yaw_offset,
+        status.init_search_runner_up_score,
+        status.init_search_runner_up_yaw_offset,
+        status.init_search_time};
     }
     if (record.result == ReplayResult::ESTIMATED) {
       record.frame_id = status.frame_id;
@@ -301,8 +308,12 @@ void ReplayOutputWriter::write_summary(const ReplaySummary& summary, double map_
     json["init_search"] = {
       {"result", to_string(search.result)},
       {"candidates", search.candidates},
+      {"candidates_total", search.candidates_total},
+      {"truncated", search.candidates < search.candidates_total},
       {"score", search.score},
       {"yaw_offset_deg", search.yaw_offset * 180.0 / M_PI},
+      {"runner_up_score", search.runner_up_score},
+      {"runner_up_yaw_offset_deg", search.runner_up_yaw_offset * 180.0 / M_PI},
       {"seconds", search.seconds}};
   }
 

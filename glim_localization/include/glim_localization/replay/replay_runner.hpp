@@ -98,9 +98,12 @@ struct ReplaySummary {
   /// The most recent initial pose search (init_yaw_search), if the odometry ran one
   struct InitSearch {
     InitSearchResult result = InitSearchResult::NONE;
-    int candidates = 0;
+    int candidates = 0;        ///< Scored; fewer than candidates_total means the time budget ran out
+    int candidates_total = 0;  ///< Generated
     double score = 0.0;
     double yaw_offset = 0.0;  ///< [rad]
+    double runner_up_score = 0.0;
+    double runner_up_yaw_offset = 0.0;  ///< [rad]
     double seconds = 0.0;
   };
   std::optional<InitSearch> init_search;

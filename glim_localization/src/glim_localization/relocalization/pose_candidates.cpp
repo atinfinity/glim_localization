@@ -10,10 +10,10 @@ std::vector<double> yaw_search_offsets(double range, double step) {
   if (!std::isfinite(range) || range < 0.0) {
     throw std::invalid_argument("the yaw search range must be finite and not negative");
   }
-  if (!std::isfinite(step) || !(step > 0.0)) {
-    throw std::invalid_argument("the yaw search step must be finite and positive");
-  }
   constexpr double kTolerance = 1e-9;
+  if (!std::isfinite(step) || !(step >= kMinYawSearchStep - kTolerance)) {
+    throw std::invalid_argument("the yaw search step must be finite and at least 0.5 deg");
+  }
   const double half_turn = M_PI;
   const double limit = std::min(range, half_turn);
   const int count = static_cast<int>(std::floor(limit / step + kTolerance));

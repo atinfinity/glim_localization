@@ -131,9 +131,11 @@ OdometryEstimationLocalizationParams::OdometryEstimationLocalizationParams() {
   init_yaw_search.enabled = config.param<bool>(section, "init_yaw_search", false);
   init_yaw_search.range = config.param<double>(section, "init_yaw_search_range_deg", 180.0) * M_PI / 180.0;
   init_yaw_search.step = config.param<double>(section, "init_yaw_search_step_deg", 15.0) * M_PI / 180.0;
-  init_yaw_search.min_inlier_ratio = config.param<double>(section, "init_yaw_search_min_inlier_ratio", 0.5);
-  init_yaw_search.time_budget = config.param<double>(section, "init_yaw_search_time_budget", 2.0);
+  init_yaw_search.min_inlier_ratio = config.param<double>(section, "init_yaw_search_min_inlier_ratio", 0.7);
+  init_yaw_search.min_score_gap = config.param<double>(section, "init_yaw_search_min_score_gap", 0.05);
+  init_yaw_search.time_budget = config.param<double>(section, "init_yaw_search_time_budget", 10.0);
   init_yaw_search.max_iterations = config.param<int>(section, "init_yaw_search_max_iterations", 10);
+  init_yaw_search.min_points = config.param<int>(section, "init_yaw_search_min_points", 100);
 }
 
 OdometryEstimationLocalizationParams::~OdometryEstimationLocalizationParams() {}
@@ -162,8 +164,11 @@ OdometryEstimationLocalization::OdometryEstimationLocalization(std::unique_ptr<P
     throw std::invalid_argument("max_imu_gap must be positive and imu_gap_reset_max must not be negative");
   }
   const auto& search = p.init_yaw_search;
-  if (!(search.min_inlier_ratio >= 0.0 && search.min_inlier_ratio <= 1.0) || !(search.time_budget >= 0.0) || search.max_iterations < 1) {
-    throw std::invalid_argument("init_yaw_search_min_inlier_ratio must be in [0, 1], init_yaw_search_time_budget not negative and init_yaw_search_max_iterations positive");
+  if (!(search.min_inlier_ratio >= 0.0 && search.min_inlier_ratio <= 1.0) || !(search.min_score_gap >= 0.0 && search.min_score_gap <= 1.0) || !(search.time_budget >= 0.0) ||
+      !std::isfinite(search.time_budget) || search.max_iterations < 1 || search.min_points < 1) {
+    throw std::invalid_argument(
+      "init_yaw_search_min_inlier_ratio and init_yaw_search_min_score_gap must be in [0, 1], init_yaw_search_time_budget finite and not negative, and "
+      "init_yaw_search_max_iterations and init_yaw_search_min_points positive");
   }
   candidate_generator_ = std::make_unique<YawCandidateGenerator>(search.range, search.step);  // Validates the range and step
 
@@ -229,7 +234,16 @@ glim::EstimationFrame::ConstPtr OdometryEstimationLocalization::insert_frame(
     trim_imu_stamps(frame->stamp);
     return nullptr;
   }
-  if (init_search_rejected_ || (init_search_pending_ && frames.empty() && frame->size() > 0 && !run_init_search(frame))) {
+  if (init_search_pending_ && frames.empty() && frame->size() < localization_params().init_yaw_search.min_points) {
+    // Upstream would build the first frame from the unsearched pose even when it is empty, so the search would never
+    // run: keep it pending and wait for a frame that can be scored
+    spdlog::warn("dropping the frame at {:.3f} s: {} points are too few for the initial pose search (init_yaw_search_min_points {})", frame->stamp, frame->size(),
+      localization_params().init_yaw_search.min_points);
+    trim_imu_queue(frame->stamp);
+    trim_imu_stamps(frame->stamp - kImuHistoryWhileWaiting);
+    return nullptr;
+  }
+  if (init_search_rejected_ || (init_search_pending_ && frames.empty() && !run_init_search(frame))) {
     // The given pose was rejected: wait for another one, as before the first pose
     trim_imu_queue(frame->stamp);
     trim_imu_stamps(frame->stamp - kImuHistoryWhileWaiting);
@@ -413,6 +427,8 @@ bool OdometryEstimationLocalization::run_init_search(const glim::PreprocessedFra
   search_params.scorer.map_factors = p.map_factors;
   search_params.scorer.max_iterations = p.init_yaw_search.max_iterations;
   search_params.min_score = p.init_yaw_search.min_inlier_ratio;
+  search_params.min_score_gap = p.init_yaw_search.min_score_gap;
+  search_params.distinct_yaw = 2.0 * p.init_yaw_search.step;
   search_params.time_budget = p.init_yaw_search.time_budget;
   const CandidateSearchResult result = search_candidates(*map_, cloud, candidates, search_params);
 
@@ -420,8 +436,11 @@ bool OdometryEstimationLocalization::run_init_search(const glim::PreprocessedFra
     std::lock_guard<std::mutex> lock(status_mutex_);
     status_.init_search = result.accepted ? InitSearchResult::ACCEPTED : InitSearchResult::REJECTED;
     status_.init_search_candidates = result.num_evaluated;
+    status_.init_search_candidates_total = result.num_candidates;
     status_.init_search_score = result.best ? result.best->score : 0.0;
     status_.init_search_yaw_offset = result.best ? result.best->yaw_offset : 0.0;
+    status_.init_search_runner_up_score = result.runner_up ? result.runner_up->score : 0.0;
+    status_.init_search_runner_up_yaw_offset = result.runner_up ? result.runner_up->yaw_offset : 0.0;
     status_.init_search_time = result.elapsed;
   }
 

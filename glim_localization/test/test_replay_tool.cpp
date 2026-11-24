@@ -483,7 +483,7 @@ TEST_F(ReplayToolTest, InitYawSearchCorrectsAWrongInitialYaw) {
     ASSERT_NE(pos, std::string::npos);
     text.replace(pos, key.size(), "\"init_yaw_search\": true");
     // A loaded CI machine must not cut the search short (parallel ctest slowed it 2.5 times, to 11 of 24 candidates)
-    const std::string budget = "\"init_yaw_search_time_budget\": 2.0";
+    const std::string budget = "\"init_yaw_search_time_budget\": 10.0";
     const auto budget_pos = text.find(budget);
     ASSERT_NE(budget_pos, std::string::npos);
     text.replace(budget_pos, budget.size(), "\"init_yaw_search_time_budget\": 30.0");
@@ -522,7 +522,10 @@ TEST_F(ReplayToolTest, InitYawSearchCorrectsAWrongInitialYaw) {
   const auto& search = summary.at("init_search");
   EXPECT_EQ(search.at("result"), "ACCEPTED");
   EXPECT_EQ(search.at("candidates"), 24);
-  EXPECT_GT(search.at("score").get<double>(), 0.5);
+  EXPECT_EQ(search.at("candidates_total"), 24);
+  EXPECT_EQ(search.at("truncated"), false);
+  EXPECT_GT(search.at("score").get<double>(), 0.9);
+  EXPECT_LT(search.at("runner_up_score").get<double>(), search.at("score").get<double>() - 0.05);
   EXPECT_NEAR(search.at("yaw_offset_deg").get<double>(), -75.0, 1.0);
   EXPECT_EQ(read_lines(out_ / "traj_localization.txt").size(), 31u);
   const auto [translation, rotation] = last_error();
