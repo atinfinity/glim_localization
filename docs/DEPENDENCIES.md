@@ -119,7 +119,7 @@ Not verified:
 
 ## CUDA image (`docker/Dockerfile.cuda`)
 
-The optional CUDA image (amd64 only; README, "CUDA variant") uses the same GTSAM, GLIM and glim_ros2
+The optional CUDA image (amd64 only; [CUDA variant](build.md#cuda-variant)) uses the same GTSAM, GLIM and glim_ros2
 pins as the CPU image (a Python test checks that the shared arguments are equal) and differs in:
 
 | Dependency | Pinned as | Source | Notes |
