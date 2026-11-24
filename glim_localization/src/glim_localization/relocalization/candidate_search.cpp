@@ -63,14 +63,28 @@ CandidateScore score_candidate(
   gtsam_points::LevenbergMarquardtExtParams lm_params;
   lm_params.setMaxIterations(params.max_iterations);
   bool interrupted = false;
+  const gtsam_points::LevenbergMarquardtOptimizerExt* running = nullptr;
+  double previous_error = 0.0;
   if (deadline) {
-    // Checked after every iteration, so one registration overruns the deadline by at most one iteration
+    // Checked after every iteration, so one registration overruns the deadline by at most one iteration. The deadline
+    // interrupts only a registration that the optimizer would have continued: one that converged or reached
+    // max_iterations on that same iteration is complete (the same tests as LevenbergMarquardtOptimizerExt::optimize).
     lm_params.termination_criteria = [&](const gtsam::Values&) {
-      interrupted = std::chrono::steady_clock::now() >= *deadline;
-      return interrupted;
+      const double error = running->error();
+      const double delta = std::abs(previous_error - error);
+      const bool stops_anyway = running->iterations() > lm_params.maxIterations || !std::isfinite(error) || delta < lm_params.absoluteErrorTol ||
+                                delta / std::abs(previous_error) < lm_params.relativeErrorTol || error < lm_params.errorTol;
+      previous_error = error;
+      if (std::chrono::steady_clock::now() < *deadline) {
+        return false;
+      }
+      interrupted = !stops_anyway;
+      return true;
     };
   }
   gtsam_points::LevenbergMarquardtOptimizerExt optimizer(factors.factors, values, lm_params);
+  running = &optimizer;
+  previous_error = optimizer.error();
   values = optimizer.optimize();
   if (interrupted) {
     result.completed = false;
@@ -151,8 +165,9 @@ CandidateSearchResult search_candidates(
   const CandidateSearchParams& params) {
   const auto begin = std::chrono::steady_clock::now();
   constexpr double kMaxBudget = 1e6;  // Keeps the deadline representable
-  const auto deadline =
-    begin + std::chrono::duration_cast<std::chrono::steady_clock::duration>(std::chrono::duration<double>(std::clamp(params.time_budget, 0.0, kMaxBudget)));
+  // A non-finite budget counts as 0 (std::clamp would pass NaN through)
+  const double budget = std::isfinite(params.time_budget) ? std::clamp(params.time_budget, 0.0, kMaxBudget) : 0.0;
+  const auto deadline = begin + std::chrono::duration_cast<std::chrono::steady_clock::duration>(std::chrono::duration<double>(budget));
   const auto elapsed = [&]() { return std::chrono::duration<double>(std::chrono::steady_clock::now() - begin).count(); };
 
   CandidateSearchResult result;

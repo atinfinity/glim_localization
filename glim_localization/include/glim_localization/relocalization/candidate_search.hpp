@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <optional>
@@ -58,6 +59,13 @@ std::optional<size_t> select_best_candidate(const std::vector<CandidateScore, Ei
 /// Index of the highest finite score among the candidates whose registered yaw differs from that of scores[best] by
 /// more than distinct_yaw (wrapped); ties go to the earlier candidate. Empty if there is none.
 std::optional<size_t> select_runner_up(const std::vector<CandidateScore, Eigen::aligned_allocator<CandidateScore>>& scores, size_t best, double distinct_yaw);
+
+/// Yaw separation [rad] beyond which two registered poses of a yaw search with this step are different hypotheses:
+/// two steps, capped at 90 deg so that a coarse step (90 deg or more) still has candidates far enough apart for the
+/// ambiguity check.
+inline double distinct_yaw_for_step(double step) {
+  return std::min(2.0 * step, 0.5 * M_PI);
+}
 
 struct CandidateSearchParams {
   CandidateScorerParams scorer;
