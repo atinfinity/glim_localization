@@ -40,7 +40,7 @@ By default, the per-point covariances of a GLIM dump or a compiled map are copie
 | `--recompute-covariances` | Estimate the covariances again (GLIM dump or compiled map input only) | off |
 | `--k-neighbors <n>` | Neighbours for covariance estimation, 5 to 1000; for map directory input only with `--recompute-covariances` | 10 |
 
-- **Per submap:** neighbours are searched within each submap, not across submaps. GLIM submaps overlap and each covers the sensor range, so neighbours from other submaps would mix in the same surfaces seen again with a small misalignment. GLIM estimates its submap covariances per submap too.
+- **Per submap:** neighbours are searched within each submap, not across submaps. GLIM submaps overlap and each covers the sensor range, so a search across submaps would mix slightly offset copies of the same surface. The default k = 10 matches GLIM's per-scan default (`k_correspondences`); GLIM itself estimates covariances per scan and merges the transformed scan covariances into the submap, so recomputed covariances come from a different neighbourhood than the ones in the dump.
 - **Tile edges:** for a map compiled from a PCD or PLY file, the tiles do not overlap, so points near a tile edge then see only the neighbours in their own tile. To change k for such a map, compile it again from the point cloud.
 - **Errors:** `--recompute-covariances` with `.pcd` or `.ply` input, and `--k-neighbors` with map directory input but without `--recompute-covariances`, are rejected. A submap with fewer than k points fails the run, and nothing is written.
 - Points, poses and submap ids are unchanged, and `map_index.json` keeps `source: "glim_dump"`.
