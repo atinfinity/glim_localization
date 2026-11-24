@@ -49,6 +49,10 @@ TEST(ConfigTest, OdometryUsesLocalizationModule) {
   const json odometry = read_config(global.at("config_odometry").get<std::string>()).at("odometry_estimation");
   EXPECT_EQ(odometry.at("so_name").get<std::string>(), "libodometry_localization_cpu.so");
   EXPECT_DOUBLE_EQ(odometry.at("init_pose_damping_scale").get<double>(), 1e2);
+  // The yaw search of the given initial pose is opt-in
+  EXPECT_FALSE(odometry.at("init_yaw_search").get<bool>());
+  EXPECT_DOUBLE_EQ(odometry.at("init_yaw_search_range_deg").get<double>(), 180.0);
+  EXPECT_DOUBLE_EQ(odometry.at("init_yaw_search_step_deg").get<double>(), 15.0);
 }
 
 TEST(ConfigTest, GpuConfigSelectsGpuModule) {

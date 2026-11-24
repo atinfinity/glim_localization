@@ -51,6 +51,13 @@ add_executable(test_relocalization test_relocalization.cpp)
 target_link_libraries(test_relocalization PRIVATE glim_localization_synthetic GTest::gtest_main)
 gtest_discover_tests(test_relocalization PROPERTIES TIMEOUT 180)
 
+add_executable(test_init_yaw_search test_init_yaw_search.cpp)
+target_compile_definitions(test_init_yaw_search PRIVATE
+  GLIM_LOCALIZATION_CONFIG_DIR="${PROJECT_SOURCE_DIR}/config"
+)
+target_link_libraries(test_init_yaw_search PRIVATE glim_localization_synthetic GTest::gtest_main)
+gtest_discover_tests(test_init_yaw_search PROPERTIES TIMEOUT 300)
+
 add_executable(test_plugin test_plugin.cpp)
 target_compile_definitions(test_plugin PRIVATE
   GLIM_LOCALIZATION_CONFIG_DIR="${PROJECT_SOURCE_DIR}/config"
