@@ -1,8 +1,10 @@
+#include <algorithm>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <functional>
 #include <iterator>
+#include <limits>
 #include <string>
 #include <tuple>
 #include <utility>
@@ -164,6 +166,23 @@ TEST_F(MapCompilerTest, RecomputesCovariancesForDumpAndCompiledInput) {
   fs::remove_all(output_);
   ASSERT_EQ(compile(input_, output_, "--recompute-covariances"), 0) << last_log();
   EXPECT_NE(last_log().find("k_neighbors 10"), std::string::npos) << last_log();
+}
+
+TEST_F(MapCompilerTest, RecomputeCovariancesFailsForSubmapsSmallerThanK) {
+  SyntheticMapParams small = params_;
+  small.submap_radius = 3.0;
+  const fs::path dump = dir_ / "small_dump";
+  const SyntheticMap truth = write_synthetic_dump(dump.string(), small);
+  size_t smallest = std::numeric_limits<size_t>::max();
+  for (const auto& submap : truth.submaps) {
+    smallest = std::min(smallest, submap.num_points);
+  }
+  ASSERT_GT(smallest, 0u);
+  ASSERT_LT(smallest, 1000u);
+  const size_t k = std::max<size_t>(smallest + 1, 5);
+  EXPECT_EQ(compile(dump, output_, "--recompute-covariances --k-neighbors " + std::to_string(k)), 1) << last_log();
+  EXPECT_FALSE(fs::exists(output_));
+  EXPECT_NE(last_log().find("fewer than k_neighbors " + std::to_string(k)), std::string::npos) << last_log();
 }
 
 TEST_F(MapCompilerTest, RejectsBadRecomputeCovariancesOptions) {

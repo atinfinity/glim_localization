@@ -528,7 +528,8 @@ TEST_F(PcdMapTest, RecomputedCovariancesMatchThePcdPath) {
       ASSERT_EQ(submaps[0].points->points[i], local[i]);
       const Eigen::Matrix4d& cov = submaps[0].points->covs[i];
       const Eigen::Matrix3d in_world = R * cov.topLeftCorner<3, 3>() * R.transpose();
-      ASSERT_LT((in_world - tiles[0].points->covs[i].topLeftCorner<3, 3>()).cwiseAbs().maxCoeff(), 1e-8) << "k " << k << " point " << i;
+      // About 5e-9 in the worst case (k = 5, points some 540 m from the origin); FMA can add to it, so keep a margin.
+      ASSERT_LT((in_world - tiles[0].points->covs[i].topLeftCorner<3, 3>()).cwiseAbs().maxCoeff(), 1e-6) << "k " << k << " point " << i;
       ASSERT_EQ(cov.row(3).norm() + cov.col(3).norm(), 0.0) << "k " << k << " point " << i;
     }
   }
