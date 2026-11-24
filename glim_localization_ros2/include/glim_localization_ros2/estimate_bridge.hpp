@@ -12,7 +12,7 @@
 
 #include <glim/odometry/estimation_frame.hpp>
 #include <glim/util/config.hpp>
-#include <glim_localization/odometry/odometry_estimation_localization_cpu.hpp>
+#include <glim_localization/odometry/odometry_estimation_localization.hpp>
 #include <glim_localization_ros2/gyro_buffer.hpp>
 #include <glim_localization_ros2/localization_publisher.hpp>
 

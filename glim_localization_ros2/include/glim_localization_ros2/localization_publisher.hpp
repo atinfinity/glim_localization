@@ -24,7 +24,7 @@
 #include <tf2_ros/transform_broadcaster.h>
 #include <tf2_ros/transform_listener.h>
 
-#include <glim_localization/odometry/odometry_estimation_localization_cpu.hpp>
+#include <glim_localization/odometry/odometry_estimation_localization.hpp>
 
 namespace glim_localization_ros2 {
 

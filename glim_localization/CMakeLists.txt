@@ -34,6 +34,7 @@ add_library(glim_localization SHARED
   src/glim_localization/map/pcd_map.cpp
   src/glim_localization/odometry/map_factor_builder.cpp
   src/glim_localization/odometry/map_initial_state_estimation.cpp
+  src/glim_localization/odometry/odometry_estimation_localization.cpp
   src/glim_localization/odometry/odometry_estimation_localization_cpu.cpp
   src/glim_localization/odometry/quality_monitor.cpp
   src/glim_localization/odometry/weighted_factor.cpp

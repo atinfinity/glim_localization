@@ -11,6 +11,30 @@
 
 namespace glim_localization {
 
+std::vector<MapTile::ConstPtr> select_map_tiles(
+  const MapManager& map,
+  const gtsam_points::PointCloud::ConstPtr& frame,
+  const Eigen::Isometry3d& T_world_imu,
+  const MapFactorParams& params) {
+  std::vector<MapTile::ConstPtr> selected;
+  if (!frame || frame->size() == 0) {
+    return selected;
+  }
+
+  for (const auto& tile : map.query(T_world_imu, params.search_radius, params.max_submaps)) {
+    if (tile->voxelmaps.empty()) {
+      continue;
+    }
+    // The coarsest level keeps tiles alive under a large initial pose error.
+    const Eigen::Isometry3d T_origin_imu = tile->T_world_origin.inverse() * T_world_imu;
+    if (gtsam_points::overlap(tile->voxelmaps.back(), frame, T_origin_imu) < params.min_overlap) {
+      continue;
+    }
+    selected.push_back(tile);
+  }
+  return selected;
+}
+
 MapFactors create_map_factors(
   const MapManager& map,
   gtsam::Key key,
@@ -23,16 +47,7 @@ MapFactors create_map_factors(
     return result;
   }
 
-  for (const auto& tile : map.query(T_world_imu, params.search_radius, params.max_submaps)) {
-    if (tile->voxelmaps.empty()) {
-      continue;
-    }
-    // The coarsest level keeps tiles alive under a large initial pose error.
-    const Eigen::Isometry3d T_origin_imu = tile->T_world_origin.inverse() * T_world_imu;
-    if (gtsam_points::overlap(tile->voxelmaps.back(), frame, T_origin_imu) < params.min_overlap) {
-      continue;
-    }
-
+  for (const auto& tile : select_map_tiles(map, frame, T_world_imu, params)) {
     const gtsam::Pose3 T_world_origin(tile->T_world_origin.matrix());
     for (const auto& voxelmap : tile->voxelmaps) {
       auto factor = std::make_shared<gtsam_points::IntegratedVGICPFactor>(T_world_origin, key, voxelmap, frame);
