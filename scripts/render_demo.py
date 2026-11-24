@@ -45,8 +45,13 @@ STATE_COLORS = {
 }
 
 
+def finite(points):
+    """The rows of an (N, 3) array whose x, y and z are all finite."""
+    return points[np.isfinite(points).all(axis=1)]
+
+
 def read_pcd_xyz(path):
-    """x, y, z of a PCD file (DATA ascii or binary), as an (N, 3) float64 array."""
+    """Finite x, y, z of a PCD file (DATA ascii or binary), as an (N, 3) float64 array."""
     try:
         with open(path, "rb") as handle:
             header = {}
@@ -91,7 +96,7 @@ def read_pcd_xyz(path):
             return np.zeros((0, 3))
         if values.shape[1] != len(columns):
             raise InputError(f"PCD rows have {values.shape[1]} values, the header says {len(columns)}: {path}")
-        return values[:, [columns.index(axis) for axis in "xyz"]]
+        return finite(values[:, [columns.index(axis) for axis in "xyz"]])
 
     if encoding != "binary":
         raise InputError(f"PCD DATA {encoding} is not supported (ascii or binary): {path}")
@@ -108,14 +113,14 @@ def read_pcd_xyz(path):
     if len(body) < num_points * dtype.itemsize:
         raise InputError(f"truncated PCD data in {path}")
     data = np.frombuffer(body, dtype=dtype, count=num_points)
-    return np.stack([data[axis].astype(np.float64) for axis in "xyz"], axis=1)
+    return finite(np.stack([data[axis].astype(np.float64) for axis in "xyz"], axis=1))
 
 
 SCAN_HEADER = struct.Struct("<4sIqIIII")
 
 
 def read_scan(path):
-    """x, y, z of a replay points/*.bin file (DESIGN 6.5), as an (N, 3) float64 array."""
+    """Finite x, y, z of a replay points/*.bin file (DESIGN 6.5), as an (N, 3) float64 array."""
     try:
         with open(path, "rb") as handle:
             raw = handle.read()
@@ -129,7 +134,7 @@ def read_scan(path):
     if len(raw) < SCAN_HEADER.size + num_points * step:
         raise InputError(f"truncated scan data: {path}")
     points = np.frombuffer(raw, dtype="<f4", count=num_points * 5, offset=SCAN_HEADER.size).reshape(-1, 5)
-    return points[:, :3].astype(np.float64)
+    return finite(points[:, :3].astype(np.float64))
 
 
 def read_tum(path):
@@ -155,9 +160,17 @@ def read_frames(path):
             missing = [c for c in ("stamp_ns", "result", "state", "inlier_ratio") if c not in (reader.fieldnames or [])]
             if missing:
                 raise InputError(f"frames.csv lacks the columns {missing}: {path}")
-            return list(reader)
+            rows = list(reader)
     except (OSError, csv.Error) as error:
         raise InputError(f"cannot read frames.csv {path}: {error}") from error
+    for line, row in enumerate(rows, start=2):
+        if None in row.values():
+            raise InputError(f"short row on line {line} of {path}")
+        try:
+            int(row["stamp_ns"])
+        except ValueError as error:
+            raise InputError(f"stamp_ns is not an integer on line {line} of {path}: {row['stamp_ns']!r}") from error
+    return rows
 
 
 def pose_matrix(values):
@@ -297,14 +310,17 @@ def render(args):
     plt.close(figure)
 
     duration_ms = int(round(1000.0 / args.fps))
-    os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
-    if args.out.lower().endswith(".gif"):
-        # One adaptive palette for all frames keeps the colors stable and the file small
-        palette = images[len(images) // 2].quantize(colors=64, method=Image.Quantize.MEDIANCUT)
-        frames_p = [image.quantize(palette=palette, dither=Image.Dither.NONE) for image in images]
-        frames_p[0].save(args.out, save_all=True, append_images=frames_p[1:], duration=duration_ms, loop=0, optimize=True)
-    else:
-        images[0].save(args.out, save_all=True, append_images=images[1:], duration=duration_ms, loop=0, quality=80, method=4)
+    try:
+        os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
+        if args.out.lower().endswith(".gif"):
+            # One adaptive palette, from the middle frame, for all frames keeps the colors stable and the file small
+            palette = images[len(images) // 2].quantize(colors=64, method=Image.Quantize.MEDIANCUT)
+            frames_p = [image.quantize(palette=palette, dither=Image.Dither.NONE) for image in images]
+            frames_p[0].save(args.out, save_all=True, append_images=frames_p[1:], duration=duration_ms, loop=0, optimize=True)
+        else:
+            images[0].save(args.out, save_all=True, append_images=images[1:], duration=duration_ms, loop=0, quality=80, method=4)
+    except OSError as error:
+        raise InputError(f"cannot write {args.out}: {error}") from error
     size = os.path.getsize(args.out)
     print(f"wrote {args.out}: {len(images)} frames, {width_px}x{height_px} px, {size / 1e6:.2f} MB")
     return 0
@@ -320,8 +336,8 @@ def parse_args(argv):
     parser.add_argument("--no-gt", action="store_true", help="do not draw the ground truth")
     parser.add_argument("--t-lidar-imu", type=float, nargs=7, default=[0, 0, 0, 0, 0, 0, 1], metavar=("X", "Y", "Z", "QX", "QY", "QZ", "QW"),
                         help="T_lidar_imu of config_sensors.json (default identity)")
-    parser.add_argument("--z-min", type=float, help="draw only points at or above this map-frame height (for example, to hide the floor)")
-    parser.add_argument("--z-max", type=float, help="draw only points below this map-frame height (for example, to hide a ceiling)")
+    parser.add_argument("--z-min", type=float, help="draw only map and scan points at or above this map-frame height (for example, to hide the floor)")
+    parser.add_argument("--z-max", type=float, help="draw only map and scan points below this map-frame height (with --z-min, a horizontal slice)")
     parser.add_argument("--margin", type=float, default=8.0, help="view margin around the trajectory in meters (default 8)")
     parser.add_argument("--width", type=int, default=720, help="image width in pixels; the height follows the view (default 720)")
     parser.add_argument("--fps", type=float, default=10.0, help="animation frame rate (default 10)")
@@ -333,6 +349,8 @@ def parse_args(argv):
     args = parser.parse_args(argv)
     if args.stride < 1 or args.fps <= 0 or args.width < 160:
         parser.error("--stride must be >= 1, --fps > 0 and --width >= 160")
+    if args.z_min is not None and args.z_max is not None and args.z_min >= args.z_max:
+        parser.error("--z-min must be below --z-max")
     return args
 
 
@@ -340,7 +358,7 @@ def main(argv=None):
     args = parse_args(sys.argv[1:] if argv is None else argv)
     try:
         return render(args)
-    except InputError as error:
+    except (InputError, OSError) as error:
         sys.stderr.write(f"error: {error}\n")
         return 2
 

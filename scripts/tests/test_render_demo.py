@@ -108,3 +108,38 @@ def test_bad_inputs_exit_2(replay, tmp_path):
         handle.write(b"XXXX" + bytes(28))
     with pytest.raises(render_demo.InputError):
         render_demo.read_scan(tmp_path / "bad.bin")
+
+
+def test_z_slice_keeps_only_the_band(replay):
+    points = np.array([[0.0, 0.0, 0.5], [1.0, 0.0, 1.0], [2.0, 0.0, 2.9], [3.0, 0.0, 3.0]])
+    np.testing.assert_array_equal(render_demo.z_filter(points, 1.0, 3.0), points[1:3])
+    np.testing.assert_array_equal(render_demo.z_filter(points, None, 3.0), points[:3])
+    # The walls of the fixture are at z = 1, so a slice from 1 to 3 still draws them
+    assert render_demo.main(args(replay, replay / "slice.gif", "--z-min", "1.0", "--z-max", "3.0")) == 0
+    assert Image.open(replay / "slice.gif").n_frames == 3
+    # A slice without map points is an input error
+    assert render_demo.main(args(replay, replay / "empty.gif", "--z-min", "5", "--z-max", "6")) == 2
+    with pytest.raises(SystemExit):
+        render_demo.parse_args(args(replay, replay / "bad.gif", "--z-min", "3", "--z-max", "1"))
+
+
+@pytest.mark.parametrize("encoding", ["ascii", "binary"])
+def test_non_finite_points_are_dropped(tmp_path, encoding):
+    points = [(1.0, 2.0, 3.0), (math.nan, 0.0, 0.0), (0.0, math.inf, 0.0), (0.0, 0.0, -math.inf), (4.0, 5.0, 6.0)]
+    write_pcd(tmp_path / "m.pcd", points, encoding)
+    np.testing.assert_array_equal(render_demo.read_pcd_xyz(tmp_path / "m.pcd"), [points[0], points[4]])
+    write_scan(tmp_path / "s.bin", 0, points)
+    np.testing.assert_array_equal(render_demo.read_scan(tmp_path / "s.bin"), [points[0], points[4]])
+
+
+def test_bad_frames_and_unwritable_output_exit_2(replay):
+    frames = replay / "run" / "frames.csv"
+    good = frames.read_text()
+    lines = good.splitlines(keepends=True)
+    frames.write_text(lines[0] + "0.5" + lines[1][1:] + "".join(lines[2:]))  # a non-integer stamp
+    assert render_demo.main(args(replay, replay / "a.gif")) == 2
+    frames.write_text(lines[0] + "0,estimated,0\n")  # a short row
+    assert render_demo.main(args(replay, replay / "b.gif")) == 2
+    frames.write_text(good)
+    (replay / "not_a_dir").write_text("")
+    assert render_demo.main(args(replay, replay / "not_a_dir" / "c.gif")) == 2
