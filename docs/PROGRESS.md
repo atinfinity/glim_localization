@@ -12,7 +12,7 @@ For each phase, record what was done, problems and workarounds, and open items.
 
 ### Environment
 
-- Verified in Docker (linux/arm64, 8 CPUs, about 7.7 GB memory). Phases 1 and 2 were also verified on GitHub Actions (amd64); later phases were verified on arm64 only unless stated.
+- Verified in Docker (linux/arm64, 8 CPUs, about 7.7 GB memory). Phases 1 and 2 were also verified on GitHub Actions (amd64); later phases were verified on arm64 only unless stated. Since #28 (2026-11-25), GitHub Actions runs the full checks on both amd64 and arm64.
 - Container: `ros:jazzy-ros-base` (Ubuntu 24.04), g++ 13.3.0, Boost 1.83. No GUI.
 
 ### Target platform
@@ -662,3 +662,25 @@ A pose from outside (a 2D Pose Estimate click, `~/initialize`, the configured `i
   - Docs: the flat-ground assumption, and that no noise filter is applied.
   - Re-verified in Docker on the development Mac: core ctest 247/247, Python tests 190.
 - **Open**: covariance recomputation for GLIM dumps moved to [#31](https://github.com/atinfinity/glim_localization/issues/31).
+
+## arm64 in GitHub Actions (2026-11-25, [#28](https://github.com/atinfinity/glim_localization/issues/28))
+
+arm64 was covered only by local CI (`scripts/ci_local.sh` on the Apple silicon development Mac), which the project no longer runs. GitHub Actions now runs the full checks on both architectures.
+
+- **Jobs**: `build-and-test-arm64` on `ubuntu-24.04-arm` (free for public repositories) runs the steps of `build-and-test` through a YAML anchor, so the required check `build-and-test` keeps its job id and name. Same draft `if`, docs-only detection, concurrency and paths-ignore. Timeouts: 30 min on amd64 (unchanged), 45 min for the arm64 checks.
+- **Per architecture**, from the job environment and `runner.arch`:
+  - GHCR tag: `glim_localization:<hash>` for amd64 (unchanged), `<hash>-arm64` for arm64. Both are single-platform tags, so a pull never gets the other architecture.
+  - buildx gha cache scope: `image-amd64` and `image-arm64` (amd64 used the default scope before).
+  - ccache key: `ccache-<X64|ARM64>-<image hash>-<sources hash>`; the restore keys stay within the architecture.
+  - The 10 GB Actions cache now holds two buildx layer caches and two ccaches (each at most 500 MB).
+- **Publishing**: `publish-image-arm64` (on `ubuntu-24.04-arm`, native build) mirrors `publish-image`: only on a push to `main` of a non-fork repository, only when the image was missing, `packages: write` only in that job. Each publish job depends only on its own architecture's checks, so one architecture failing does not hold back the other's image.
+- **Measured on PR #29** (4-CPU GitHub-hosted runners; the PR runs restore no ccache, because the keys are new and only pushes to `main` save one):
+
+| Run | amd64 `build-and-test` | arm64 `build-and-test-arm64` |
+| --- | --- | --- |
+| [First](https://github.com/atinfinity/glim_localization/actions/runs/45503594633): arm64 image missing, no layer cache | 8 min 56 s (image pulled, checks 8 min 20 s) | 13 min 50 s (image build 6 min 8 s, checks 7 min 24 s) |
+| [Second](https://github.com/atinfinity/glim_localization/actions/runs/45508203818): arm64 layer cache warm | 8 min 39 s (image pulled, checks 7 min 52 s) | 8 min 59 s (image build from cache 52 s, checks 7 min 49 s) |
+
+  - Both architectures: core ctest 224/224, colcon test 12/12, Python tests and replay e2e passed. No portability fix was needed.
+  - For comparison, amd64 runs on `main` with a warm ccache took about 6 min before this change.
+- **After merge**: the first amd64 run restores no ccache and the next amd64 image build has no layer cache, because the key and scope names changed (the GHCR image is still pulled). The first push to `main` publishes the arm64 image and saves the arm64 ccache. `build-and-test-arm64` is to be added to the required checks of the ruleset.
