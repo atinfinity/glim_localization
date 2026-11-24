@@ -9,7 +9,7 @@ How to build the Docker image, build the packages and run the tests, including t
 - A LiDAR with an IMU. LiDAR-only input is not supported.
 
 > [!NOTE]
-> **Headless.** The image has no GUI: no GLIM viewer, no Iridescence, no OpenCV and no RViz. The build and tests check that the GLIM libraries and ours do not link GUI libraries. Visualize from another machine on the same ROS 2 network if needed.
+> **Headless.** The image has no GUI: no GLIM viewer, no Iridescence, no OpenCV and no RViz. The build and tests check that the GLIM libraries and ours do not link GUI libraries. Visualize from another machine on the same ROS 2 network if needed; see [Networking](getting_started.md#networking) for what that takes.
 
 ## Build and test
 

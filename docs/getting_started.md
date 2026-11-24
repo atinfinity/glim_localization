@@ -11,7 +11,7 @@ This guide takes you from a fresh clone to localization on your own map: build t
 - A GPU is optional. The default image is CPU only. The CUDA image needs a Linux amd64 host with an NVIDIA GPU, a driver that supports CUDA 13.1 or later, and the NVIDIA Container Toolkit (see [CUDA variant](build.md#cuda-variant)).
 - For real data: a LiDAR with an IMU. LiDAR-only input is not supported.
 
-Everything builds and runs inside an Ubuntu 24.04 + ROS 2 Jazzy image. You do not need ROS, GLIM or GTSAM on the host, and builds outside this image are not supported. The image is headless (no GLIM viewer, no RViz); visualize from another machine on the same ROS 2 network if needed.
+Everything builds and runs inside an Ubuntu 24.04 + ROS 2 Jazzy image. You do not need ROS, GLIM or GTSAM on the host, and builds outside this image are not supported. The image is headless (no GLIM viewer, no RViz); visualize from another machine on the same ROS 2 network if needed (see [Networking](#networking) for what that takes).
 
 ## 2. Clone and build the image
 
@@ -54,7 +54,7 @@ scripts/docker_run.sh scripts/test_replay_e2e.sh
 
 The script generates a 12 s synthetic map and dataset, localizes from an offset initial pose on the GLIM dump and on a PCD map, and checks accuracy (0.1 m, 1 deg after 3 s), determinism and exit codes. It ends with `PASS: replay e2e`. In a CPU build it also prints `SKIPPED: GPU replay`, which is expected.
 
-The results are in `out/phase4_e2e/` on the host:
+The results are in `out/phase4_e2e/` on the host. The main outputs:
 
 | Path | Content |
 | --- | --- |
@@ -63,7 +63,7 @@ The results are in `out/phase4_e2e/` on the host:
 | `run1/` | Replay on the GLIM dump: `traj_localization.txt` (TUM), `frames.csv`, `summary.json`, `replay_args.json` |
 | `run1/eval.txt`, `run1/eval.json` | The evaluation: ATE and RPE (translation and rotation) and processing time |
 | `pcd_map/`, `run_pcd/` | The PCD compiled by `map_compiler`, and the replay and evaluation on it |
-| `*.log` | The replay output of each run |
+| `run1.log`, `run_pcd.log`, ... | The replay output of each run (`pcd_map.log` is the `map_compiler` output) |
 
 To see the trajectory error as a plot, run the evaluation again with `--plot` inside the container; it writes `eval.png` next to `eval.txt`:
 
@@ -103,6 +103,8 @@ First copy the replay config and set `T_lidar_imu` in its `config_sensors.json` 
 cp -r glim_localization/config /ws/out/my_config
 # edit /ws/out/my_config/config_sensors.json: "T_lidar_imu": [x, y, z, qx, qy, qz, qw]
 ```
+
+The container runs as root, so on a Linux host the files it writes under `out/` are owned by root: edit them inside the container, or use `sudo` on the host.
 
 Then convert, localize and evaluate inside the container:
 
@@ -148,30 +150,48 @@ Start the node with the launch file. It configures and activates the node on sta
 ros2 launch glim_localization_ros2 localization.launch.py map_path:=/ws/out/map config_path:=/ws/out/ros_config/r2
 ```
 
-Leave out `config_path` to use the shipped `config/r2`. To feed a recorded bag instead of a live sensor, add `use_sim_time:=true` and play the bag with its clock from another shell: `ros2 bag play <bag_dir> --clock`.
+Leave out `config_path` to use the shipped `config/r2`. To feed a recorded bag instead of a live sensor, also add `use_sim_time:=true` and follow [Play a recorded bag](#play-a-recorded-bag) below.
 
-> [!NOTE]
-> The compose service uses Docker's default network. Whether the container discovers sensors or RViz on other machines depends on your Docker and DDS network setup.
+`scripts/docker_run.sh` starts a new container each time, and the container sources only ROS 2 and GLIM, not this repository's packages. In every additional shell, run `source /ws/build/colcon/install/setup.bash` before the commands below.
+
+### Networking
+
+Containers started by `scripts/docker_run.sh` share the project network that Compose creates (for example `glim_localization_default`, a bridge network, not host networking), so ROS 2 nodes in two such shells see each other. DDS discovery with other machines, such as a live sensor driver or RViz on another host, usually needs host networking (for example a compose override with `network_mode: host` on Linux) or a DDS setup with unicast peers or a discovery server.
 
 ### Set the initial pose
 
 The node needs an initial pose of the base frame in the map frame; input frames that arrive before it are dropped. Either:
 
-- call the `~/initialize` service, which replies whether the pose was accepted:
+- call the `~/initialize` service, which replies whether the pose was accepted. A zero stamp (as below) applies the pose at the next frame:
 
   ```bash
+  source /ws/build/colcon/install/setup.bash
   ros2 service call /glim_localization/initialize glim_localization_msgs/srv/Initialize \
     "{pose: {header: {frame_id: map}, pose: {pose: {position: {x: 0.0, y: 0.0, z: 0.0}, orientation: {w: 1.0}}}}}"
   ```
 
-- or publish `/initialpose` (`geometry_msgs/PoseWithCovarianceStamped`), for example with the 2D Pose Estimate tool in RViz. `rviz:=true` starts `rviz2` with `rviz/localization.rviz` where `rviz2` is installed; the image has no RViz, so run RViz on another machine on the same ROS 2 network.
+- or publish `/initialpose` (`geometry_msgs/PoseWithCovarianceStamped`), for example with the 2D Pose Estimate tool in RViz. `rviz:=true` starts `rviz2` with `rviz/localization.rviz` where `rviz2` is installed; the image has no RViz, so run RViz on another machine on the same ROS 2 network (see [Networking](#networking)).
 
 The pose is applied exactly, with no yaw search. Right after the node becomes active, the first messages can be missed, so prefer `~/initialize`, or resend `/initialpose`.
+
+### Play a recorded bag
+
+Put the bag under `out/` on the host so that the container sees it under `/ws/out`. Because frames before the initial pose are dropped and a zero-stamp `~/initialize` applies at the next frame, use this order:
+
+1. Launch the node with `use_sim_time:=true` (above).
+2. Call `~/initialize` with the pose at the start of the bag.
+3. In another `scripts/docker_run.sh` shell, play the bag with its clock:
+
+   ```bash
+   source /ws/build/colcon/install/setup.bash
+   ros2 bag play /ws/out/<bag_dir> --clock
+   ```
 
 ### Check the topics and TF
 
 ```bash
-ros2 lifecycle get /glim_localization           # active
+source /ws/build/colcon/install/setup.bash
+ros2 lifecycle get /glim_localization           # active [3]
 ros2 topic echo /glim_localization/status       # state: 0 INITIALIZING, 1 TRACKING, 2 DEGRADED, 3 LOST
 ros2 topic hz /glim_localization/pose           # base pose in the map frame, at the LiDAR rate
 ros2 run tf2_ros tf2_echo map base_link         # map->odom->base_link (tf_mode internal_odom)

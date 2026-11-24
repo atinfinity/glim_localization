@@ -2,7 +2,7 @@
 
 LiDAR-IMU localization on a prebuilt 3D map, built on top of [GLIM](https://github.com/koide3/glim) and [gtsam_points](https://github.com/koide3/gtsam_points). Instead of forking GLIM, it uses GLIM as a library: GLIM itself is not modified, and a localization module replaces GLIM's odometry module, adding scan-to-map VGICP factors against a fixed, prebuilt map to GLIM's tightly coupled LiDAR-IMU fixed-lag smoother. The core library is ROS-independent and drives an offline replay tool as well as two ROS 2 integrations: a GLIM extension module (R1, for evaluation) and a dedicated lifecycle node (R2, for deployment).
 
-> **Status: under development, CPU only.** The core, the offline tools and both ROS 2 integrations work on synthetic data and pass CI. Real-data evaluation is limited (see [Limitations](#limitations)). The interfaces may still change. Details: [Status and limitations](docs/status.md), [PROGRESS](docs/PROGRESS.md), [open issues](https://github.com/atinfinity/glim_localization/issues).
+> **Status: under development. CPU by default; the GPU module (CUDA image) is tested on synthetic data only.** The core, the offline tools and both ROS 2 integrations work on synthetic data and pass CI. Real-data evaluation is limited (see [Limitations](#limitations)). The interfaces may still change. Details: [Status and limitations](docs/status.md), [PROGRESS](docs/PROGRESS.md), [open issues](https://github.com/atinfinity/glim_localization/issues).
 
 ## Features
 
@@ -38,7 +38,7 @@ scripts/docker_run.sh scripts/ci.sh              # dependency check, build, all 
 scripts/docker_run.sh scripts/test_replay_e2e.sh # synthetic replay and evaluation, results in out/phase4_e2e/
 ```
 
-Then, inside the container (`scripts/docker_run.sh` opens a shell), build a map from your own data and localize on it with ROS 2:
+Then, with your own PCD map in `out/` and inside the container (`scripts/docker_run.sh` opens a shell), compile the map and start the ROS 2 node. The guide covers the initial pose and the sensor config:
 
 ```bash
 /ws/build/core/tools/map_compiler /ws/out/map.pcd /ws/out/map --grid-size 50 --voxel-size 0.1
