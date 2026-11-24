@@ -470,3 +470,27 @@ A private Ouster OS1-128 recording (1153 frames, about 115 s, 10 Hz LiDAR) was c
 - **Tests**: the launch tests now assert the `~/map` point count (9245 within 1%; see below). New `test_launch_r1_live` runs `glim_rosnode` (no `bag:=`) with `map_path` empty and the map in the config. The `rviz:=true` fallback stays a manual check: a launch test would start rviz2 where it is installed, and the warning goes to the launch log, not to a process output that launch_testing can assert.
 - **Verification**: `scripts/ci.sh` in Docker passes: core ctest 218/218, colcon test 12/12 (`test_launch_r1_live` 1.1 s), Python tests 175.
 - **`~/map` count across architectures**: GitHub Actions (amd64) got 9246 points where the local arm64 build gets 9245, so the four launch tests that asserted the exact count failed. Cause: the fixture floor (z = 0) and side walls (y = ±5 m) lie exactly on 0.5 m voxel planes with 1 cm noise. With about 40 points per metre of noise density at the plane and float coordinates near 15 m (ulp about 1e-6 m), a few of the tens of thousands of floor and wall points fall within rounding distance of a boundary. GCC contracts `a*b+c` into FMA on aarch64 by default but not on baseline x86-64, so `T_world_origin * p` differs by an ulp and `floor(p / voxel)` moves one point to the neighbouring voxel. Forcing identical rounding (`-ffp-contract=off` plus the same Eigen vectorization on both) would only hide the sensitivity of real maps, so the tests now accept 9245 within 1%. That is far below the change from another voxel size (0.4 m gives about 1.5 times the voxels on these surfaces) or from the raw map. Only arm64 can be checked locally; the amd64 result comes from the Actions run.
+
+## CUDA image and GPU build mode (2026-11-25, part of #2)
+
+First step of #2: a CUDA build environment. There is no GPU odometry module yet.
+
+- **Image** `docker/Dockerfile.cuda` (tag `glim_localization:dev-cuda`, compose service `dev-cuda`, `scripts/docker_run.sh --cuda`):
+  - `ros:jazzy-ros-base` plus NVIDIA's CUDA 13.1 apt toolkit (`cuda-nvcc`, `cuda-cudart-dev`, `cuda-cccl`).
+  - `libgtsam-points-cuda13.1-dev=1.2.2` from the koide3 PPA.
+  - GLIM and glim_ros2 built with `BUILD_WITH_CUDA=ON` and `CMAKE_CUDA_ARCHITECTURES` from the build argument `CUDA_ARCHITECTURES` (default 75).
+  - Pins and key fingerprints are in docs/DEPENDENCIES.md; the design is in DESIGN §5.6.
+  - The CPU image, its inputs hash and the CPU path of every script are unchanged.
+- **Build mode**: `GLIM_LOC_BUILD_WITH_CUDA=ON` (set by the CUDA image) makes `build_core.sh` and `build_colcon.sh` pass `BUILD_WITH_CUDA=ON`. `check_deps.sh` checks the CUDA package, `GTSAM_POINTS_USE_CUDA`, nvcc 13.1 and GLIM's GPU odometry module (built and loadable).
+- **GPU test**: `test_gpu_smoke` lists the devices and builds a `GaussianVoxelMapGPU` from a synthetic cloud, comparing it with `GaussianVoxelMapCPU`. Without a visible GPU it skips; `GLIM_LOC_REQUIRE_GPU=1`, which `ci.sh` sets when `nvidia-smi` lists a GPU, makes the skip a failure.
+- **GitHub Actions** stays CPU-only. A new job lints `docker/Dockerfile.cuda` with `docker build --check`. `scripts/tests/test_dockerfile_cuda.py` keeps the shared pins and lines of the two Dockerfiles in sync.
+- **GLIM patch (CUDA image only)**: `third_party/patches/glim_cuda/0001-gtsam-points-1.2.2-has-index.patch`.
+  - The first CUDA image build failed in GLIM's `odometry_estimation_gpu.cpp`. GLIM `1a197c9` calls `IndexedSlidingWindow::has_index`, which gtsam_points added after v1.2.2 (upstream commit `8f50081`, 2026-08-02). The CPU build never compiles that file.
+  - The patch replaces the one call with the same test through the public API: an index is held when `size() - inner_size() <= index < size()`, which is how upstream defines `has_index`.
+  - It lives in its own directory so the CPU image inputs stay unchanged. Drop it when the gtsam_points pin moves to a release that has `has_index`.
+- **Verification on a maintainer's GPU machine** (NVIDIA GeForce RTX 2080 Ti, sm_75, 11 GiB; driver 595.99.02; Docker 28.3.3, Compose 2.39.1; image built with the default `CUDA_ARCHITECTURES=75`, 2.55 GB):
+  - `scripts/docker_run.sh --cuda scripts/ci.sh` passes in 276 s: dependency check, core ctest 220/220 (including `GpuSmoke.ListsDevices` 0.23 s and `GpuSmoke.BuildsGaussianVoxelMapGPU` 0.84 s, run with `GLIM_LOC_REQUIRE_GPU=1`), colcon test 12/12, Python tests 182, replay e2e.
+  - The same image without `--gpus`: both GPU tests are reported as skipped and ctest passes. With `GLIM_LOC_REQUIRE_GPU=1` both fail.
+  - Two image builds failed early on transient DNS errors resolving github.com on that machine; a retry passed. The build time is not recorded because later builds reused cached layers.
+- **CPU path**: `scripts/ci_local.sh --force` on the development Mac passes.
+- **Remaining for #2**: the GPU localization odometry module (`odometry_localization_gpu`), `GaussianVoxelMapGPU` tiles in MapManager, GPU memory management (LRU and prefetch), GPU replay evaluation and the CPU vs GPU comparison.

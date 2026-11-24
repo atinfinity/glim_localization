@@ -117,6 +117,36 @@ Not verified:
 - The tags `4.3a1` and `v1.2.2` were assumed not to have moved since the packages were built. Git
   does not record tag history.
 
+## CUDA image (`docker/Dockerfile.cuda`)
+
+The optional CUDA image (amd64 only; README, "CUDA variant") uses the same GTSAM, GLIM and glim_ros2
+pins as the CPU image (a Python test checks that the shared arguments are equal) and differs in:
+
+| Dependency | Pinned as | Source | Notes |
+|---|---|---|---|
+| gtsam_points | deb `libgtsam-points-cuda13.1-dev=1.2.2` (instead of `libgtsam-points-dev`) | koide3 PPA, `ubuntu2404` | Same upstream tag `v1.2.2` built with CUDA 13.1 by the same `koide3/ppa` workflows. Links `libcudart.so.13`, SASS for sm_75/80/90/100/110/120 and PTX for sm_120, `GTSAM_POINTS_CUDA_VERSION 13.1.80`. Installs the same paths as `libgtsam-points-dev` and declares no `Conflicts`, so the two must never be installed together (`check_deps.sh` fails if both are). It declares no CUDA runtime dependency; the image provides cudart. |
+| CUDA toolkit | debs `cuda-nvcc-13-1=13.1.115-1`, `cuda-cudart-dev-13-1=13.1.80-1`, `cuda-cccl-13-1=13.1.115-1` | NVIDIA apt repository `https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64` | Their unversioned dependencies (for example `cuda-toolkit-config-common`) come at whatever version the repository has at build time. `check_deps.sh` checks that `nvcc` reports 13.1. |
+| GLIM | same commit, `BUILD_WITH_CUDA=ON`, plus `third_party/patches/glim_cuda/` | | GLIM `1a197c9` calls `IndexedSlidingWindow::has_index`, which gtsam_points added after v1.2.2 (commit `8f50081`, 2026-08-02). The CUDA-only patch replaces the one call with the same range test (docs/PROGRESS.md). |
+
+PPA index entry (`ubuntu2404/Packages`, checked 2026-11-25):
+
+| File | Size | SHA256 |
+|---|---|---|
+| `libgtsam-points-cuda13.1-dev_1.2.2_amd64.deb` | 4412600 | `985b80ab1b0d27298d9133c275a6d6b5c81138fe82de0e44f06b6f2728ea6889` |
+
+NVIDIA repository signing key: `3bf863cc.pub` from the repository URL above, fetched over HTTPS at
+image build time. RSA 4096, created 2022-04-14, user ID "cudatools <cudatools@nvidia.com>", fingerprint
+`EB69 3B30 35CD 5710 E231  E123 A4B4 6996 3BF8 63CC`. The Dockerfile pins it (`CUDA_REPO_KEY_FPR`) and
+fails the build unless the file holds exactly this primary key, as for the PPA key.
+
+Not verified for the CUDA package: the header comparison above was done for `libgtsam-points-dev`
+only. The CUDA build comes from the same recipe and tag; its `config.hpp` reports version 1.2.2 with
+CUDA on.
+
+The CUDA toolkit is distributed under the NVIDIA CUDA Toolkit End User License Agreement. This
+repository does not redistribute it or the image; anyone who publishes a built CUDA image must comply
+with that license.
+
 ## Licenses and redistribution
 
 - GTSAM: BSD-3-Clause text in `LICENSE.BSD` ("simplified BSD" in its `LICENSE`). The installed headers
