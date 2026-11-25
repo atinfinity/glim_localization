@@ -697,6 +697,12 @@ arm64 was covered only by local CI (`scripts/ci_local.sh` on the Apple silicon d
 - **Verification** (Docker on the development Mac): Python tests 199 pass. Frames of the regenerated GIF were checked by eye: no drawn obstacle overlaps the trajectory, and the scan lies on the walls, pillars and cross walls.
 - **Open**: the official GLIM sample sequence (license check and credit first) and the yaw search demo ([#3](https://github.com/atinfinity/glim_localization/issues/3), after PR [#24](https://github.com/atinfinity/glim_localization/pull/24)) stay in [#25](https://github.com/atinfinity/glim_localization/issues/25). Large maps: the map is read whole into memory before the height band and subsampling; a memory-mapped binary read and subsampling before the float64 conversion are a follow-up.
 
+## Test: no search time budget under a loaded CI machine (2026-11-25)
+
+`InitYawSearchTest.ResetWithLargeYawErrorConvergesAndRelocalizeDoesNotSearch` and `PoseOffTheMapIsRejectedUntilANewPose` failed on amd64 in a PR run that did not touch the search: with a parallel `ctest -j$(nproc)`, the 30 s budget ran out after 14 and 20 of 24 candidates, so the search was rejected and the state stayed LOST. The best candidate was the correct one (inlier ratio 0.996), so only the budget was at fault.
+
+The tests that are not about the budget now set it to 1e6 s (the clamp in `candidate_search.cpp`), and the ctest `TIMEOUT` of each test bounds the run instead. The same applies to `test_relocalization`, `test_localization_odometry_gpu` and the `test_replay_tool` JSON config (`init_yaw_search_time_budget` 1000000.0). The tests that check the budget itself (0 s, NaN, negative) are unchanged. Raising the number again would only move the threshold for the next slow runner.
+
 ## map_compiler: recompute covariances for GLIM dump input (2026-11-25, [#31](https://github.com/atinfinity/glim_localization/issues/31))
 
 - **What**: `map_compiler --recompute-covariances [--k-neighbors n]` re-estimates the per-point covariances of a GLIM dump or a compiled map with the estimator of the PCD path (`gtsam_points::estimate_covariances`, k nearest neighbours). The core gets `recompute_covariances` in `map/pcd_map.hpp`. Off by default, so the output without the flag does not change.

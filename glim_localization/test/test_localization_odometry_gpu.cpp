@@ -320,7 +320,7 @@ TEST_F(LocalizationOdometryGPUTest, YawSearchCorrectsALargeYawError) {
   params.init_yaw_search.enabled = true;
   params.init_yaw_search.range = M_PI;
   params.init_yaw_search.step = 15.0 * M_PI / 180.0;
-  params.init_yaw_search.time_budget = 30.0;  // Not the subject here; a loaded CI machine must not cut the search short
+  params.init_yaw_search.time_budget = 1e6;  // Not the subject here; a loaded CI machine must not cut the search short
   OdometryEstimationLocalizationGPU odometry(params, *map_);
 
   const auto result = run(odometry);
