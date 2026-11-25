@@ -1,0 +1,26 @@
+# ros_gz_bridge parameter_bridge config for sim/scripts/record.sh. Deep queues instead of the default depth
+# of 10, so that no message is dropped while a point cloud is in flight (see record.sh).
+- ros_topic_name: /sim_eval/lidar/points
+  gz_topic_name: /sim_eval/lidar/points
+  ros_type_name: sensor_msgs/msg/PointCloud2
+  gz_type_name: gz.msgs.PointCloudPacked
+  direction: GZ_TO_ROS
+  subscriber_queue: 100
+  publisher_queue: 100
+  lazy: false
+- ros_topic_name: /sim_eval/imu
+  gz_topic_name: /sim_eval/imu
+  ros_type_name: sensor_msgs/msg/Imu
+  gz_type_name: gz.msgs.IMU
+  direction: GZ_TO_ROS
+  subscriber_queue: 2000
+  publisher_queue: 2000
+  lazy: false
+- ros_topic_name: /sim_eval/imu_pose
+  gz_topic_name: /sim_eval/imu_pose
+  ros_type_name: geometry_msgs/msg/PoseStamped
+  gz_type_name: gz.msgs.Pose
+  direction: GZ_TO_ROS
+  subscriber_queue: 2000
+  publisher_queue: 2000
+  lazy: false

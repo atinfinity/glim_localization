@@ -1,0 +1,48 @@
+# Manual Gazebo evaluation (docs/sim_eval.md). Not used by CI.
+#   sim: Gazebo Harmonic + ros_gz + sdf2map (docker/sim/Dockerfile), records the bag and samples the map.
+#   loc: the development image, builds the core and runs map_compiler, the replay and evaluate.py.
+# The project name can be overridden with COMPOSE_PROJECT_NAME (scripts/sim_eval.sh passes it through).
+name: glim_localization_sim
+
+services:
+  sim:
+    image: ${GLIM_LOC_SIM_IMAGE:-glim_localization:sim}
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        JOBS: ${JOBS:-4}
+    working_dir: /ws/src/glim_localization
+    environment:
+      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-42}
+      - ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST
+      # Passed through when set on the host (sim/scripts/record.sh)
+      - SIM_DURATION
+      - SIM_SEED
+      - SIM_TIMEOUT
+    volumes:
+      - ../..:/ws/src/glim_localization
+      - sim_build:/ws/build_sim
+      - ../../out:/ws/out
+
+  loc:
+    image: ${GLIM_LOC_IMAGE:-glim_localization:dev}
+    build:
+      context: ../..
+      dockerfile: docker/Dockerfile
+      args:
+        JOBS: ${JOBS:-4}
+    working_dir: /ws/src/glim_localization
+    environment:
+      # Passed through when set on the host (sim/scripts/localize.sh)
+      - SIM_EVAL_MAX_TRANS
+      - SIM_EVAL_MAX_ROT_DEG
+    volumes:
+      - ../..:/ws/src/glim_localization
+      # Its own build volume, not the one of docker/compose.yaml: the first run builds the core here.
+      - build:/ws/build
+      - ../../out:/ws/out
+
+volumes:
+  build:
+  sim_build:
