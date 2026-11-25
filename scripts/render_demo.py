@@ -29,6 +29,8 @@ import matplotlib
 matplotlib.use("Agg")
 
 import matplotlib.pyplot as plt  # noqa: E402
+from matplotlib import font_manager  # noqa: E402
+from matplotlib.lines import Line2D  # noqa: E402
 from PIL import Image  # noqa: E402
 from scipy.spatial.transform import Rotation  # noqa: E402
 
@@ -36,6 +38,20 @@ from scipy.spatial.transform import Rotation  # noqa: E402
 class InputError(Exception):
     pass
 
+
+ESTIMATE_COLOR = "#1565c0"
+SCAN_COLOR = "#e53935"
+GT_COLOR = "#757575"
+# Okabe-Ito orange: apart from the blue estimate also with color-vision deficiency (green would not be
+# apart from the red scan). The dot has a thin dark edge, which the edgeless scan dots do not.
+POSE_COLOR = "#e69f00"
+POSE_EDGE_COLOR = "#222222"
+
+MAP_COLOR = "#8a8a8a"
+FRAME_COLOR = "#bbbbbb"
+LEGEND_EDGE_COLOR = "#cccccc"
+TEXT_COLOR = "#000000"
+FALLBACK_FONT = "DejaVu Sans"  # shipped with matplotlib
 
 STATE_COLORS = {
     "TRACKING": "#2e7d32",
@@ -228,6 +244,65 @@ def collect_frames(args):
     return frames
 
 
+def select_font(family):
+    """family if matplotlib finds it, otherwise DejaVu Sans with a warning on stderr."""
+    try:
+        font_manager.findfont(font_manager.FontProperties(family=family), fallback_to_default=False)
+        return family
+    except ValueError:
+        sys.stderr.write(f"warning: font {family!r} not found, using {FALLBACK_FONT}\n")
+        return FALLBACK_FONT
+
+
+def fixed_colors():
+    """The colors that gif_palette puts first, in this order."""
+    return [TEXT_COLOR, "#ffffff", MAP_COLOR, FRAME_COLOR, LEGEND_EDGE_COLOR, ESTIMATE_COLOR, SCAN_COLOR, GT_COLOR, POSE_COLOR,
+            POSE_EDGE_COLOR, *STATE_COLORS.values()]
+
+
+def gif_palette(images, colors):
+    """One palette for all frames: the drawing colors exactly, plus adaptive colors from sample frames.
+
+    The fixed entries keep black, white, the text and state colors and the plot colors exact in every
+    frame, whether they appear in the sampled frames or not; the adaptive ones, from the first, middle
+    and last frames stacked, cover the antialiased edges. Frames are mapped without dithering, so text
+    edges are not speckled.
+    """
+    samples = [images[0], images[len(images) // 2], images[-1]]
+    image = Image.new("RGB", (samples[0].width, sum(sample.height for sample in samples)))
+    for k, sample in enumerate(samples):
+        image.paste(sample.convert("RGB"), (0, k * samples[0].height))
+    entries = [tuple(int(c[k:k + 2], 16) for k in (1, 3, 5)) for c in fixed_colors()]
+    adaptive = image.quantize(colors=max(colors - len(entries), 2), method=Image.Quantize.MEDIANCUT)
+    values = adaptive.getpalette()[: 3 * len(adaptive.getcolors())]
+    for k in range(0, len(values) - 2, 3):
+        entry = tuple(values[k:k + 3])
+        if entry not in entries and len(entries) < 256:
+            entries.append(entry)
+    flat = [v for entry in entries for v in entry]
+    flat += flat[-3:] * (256 - len(entries))
+    palette = Image.new("P", (1, 1))
+    palette.putpalette(flat)
+    return palette
+
+
+def to_palette(image, palette):
+    """image mapped to the nearest palette entry, without dithering.
+
+    Done here rather than by Image.quantize(palette=...), whose lookup works on reduced-precision
+    colors and can map an exact drawing color (for example white) to a near neighbor.
+    """
+    entries = np.array(palette.getpalette()[:768], dtype=np.int32).reshape(-1, 3)
+    rgb = np.asarray(image.convert("RGB"), dtype=np.uint32)
+    # One integer per pixel, so np.unique sorts a flat array instead of rows (same colors, same order).
+    keys, inverse = np.unique(((rgb[..., 0] << 16) | (rgb[..., 1] << 8) | rgb[..., 2]).reshape(-1), return_inverse=True)
+    colors = np.stack([keys >> 16, (keys >> 8) & 0xFF, keys & 0xFF], axis=1).astype(np.int32)
+    nearest = np.argmin(((colors[:, None, :] - entries[None, :, :]) ** 2).sum(axis=2), axis=1).astype(np.uint8)
+    mapped = Image.fromarray(nearest[inverse.reshape(-1)].reshape(rgb.shape[:2]), mode="P")
+    mapped.putpalette(palette.getpalette()[:768])
+    return mapped
+
+
 def render(args):
     if os.path.splitext(args.out)[1].lower() not in (".gif", ".webp"):
         raise InputError(f"the output must end in .gif or .webp: {args.out}")
@@ -254,14 +329,16 @@ def render(args):
     in_view = np.all((map_points[:, :2] >= low) & (map_points[:, :2] <= high), axis=1)
     map_xy = subsample(map_points[in_view, :2], args.max_map_points, rng)
 
-    # The height follows the aspect of the view, below a fixed header band for the text
-    header_px, pad_px = 56, 8
+    # Layout in logical pixels (at --scale 1); the height follows the aspect of the view, below a
+    # fixed header band for the text. Font sizes are in points: 1 pt = 100 / 72 logical px.
+    matplotlib.rcParams["font.family"] = select_font(args.font)
+    header_px, pad_px = 64, 8
     width_px = args.width
     plot_w = width_px - 2 * pad_px
     plot_h = int(np.clip(plot_w * (high[1] - low[1]) / (high[0] - low[0]), 120, 2 * width_px))
     height_px = header_px + plot_h + pad_px
     height_px += height_px % 2
-    figure = plt.figure(figsize=(width_px / 100, height_px / 100), dpi=100)
+    figure = plt.figure(figsize=(width_px / 100, height_px / 100), dpi=100 * args.scale)
     axes = figure.add_axes([pad_px / width_px, pad_px / height_px, plot_w / width_px, plot_h / height_px])
     axes.set_aspect("equal")
     axes.set_xlim(low[0], high[0])
@@ -269,21 +346,36 @@ def render(args):
     axes.set_xticks([])
     axes.set_yticks([])
     for spine in axes.spines.values():
-        spine.set_color("#bbbbbb")
-    axes.scatter(map_xy[:, 0], map_xy[:, 1], s=0.6, c="#8a8a8a", linewidths=0, rasterized=True)
+        spine.set_color(FRAME_COLOR)
+    axes.scatter(map_xy[:, 0], map_xy[:, 1], s=1.0, c=MAP_COLOR, linewidths=0, antialiased=False, rasterized=True)
+    gt_line = None
     if gt_xy is not None:
-        axes.plot(gt_xy[:, 0], gt_xy[:, 1], color="#424242", linewidth=1.0, linestyle=(0, (3, 2)), label="ground truth")
-    (est_line,) = axes.plot([], [], color="#1565c0", linewidth=1.8, label="estimate")
-    scan_artist = axes.scatter([], [], s=1.0, c="#e53935", linewidths=0, label="scan")
-    (pose_marker,) = axes.plot([], [], marker="o", markersize=6, color="#1565c0", markeredgecolor="white")
-    heading = axes.annotate("", xy=(0, 0), xytext=(0, 0), arrowprops={"arrowstyle": "-|>", "color": "#1565c0", "linewidth": 1.5})
-    axes.legend(loc="lower right", fontsize=7, markerscale=4, framealpha=0.8)
-    def header_y(px):
-        return 1.0 - px / height_px
+        (gt_line,) = axes.plot(gt_xy[:, 0], gt_xy[:, 1], color=GT_COLOR, linewidth=1.0, linestyle=(0, (3, 2)), label="ground truth")
+    (est_line,) = axes.plot([], [], color=ESTIMATE_COLOR, linewidth=1.8, label="estimate")
+    scan_artist = axes.scatter([], [], s=2.0, c=SCAN_COLOR, linewidths=0, antialiased=False)
+    (pose_marker,) = axes.plot([], [], marker="o", markersize=7, color=POSE_COLOR, markeredgecolor=POSE_EDGE_COLOR,
+                                 markeredgewidth=0.8, linestyle="none", zorder=5, label="pose")
+    heading = axes.annotate(
+        "", xy=(0, 0), xytext=(0, 0), arrowprops={"arrowstyle": "-|>", "color": POSE_COLOR, "linewidth": 1.8}, zorder=5)
+    # Proxy handles: the scan dots are tiny on the plot but need a visible legend marker
+    handles = [pose_marker, est_line] + ([gt_line] if gt_line is not None else []) + [
+        Line2D([], [], marker="o", markersize=4, color=SCAN_COLOR, linestyle="none", label="scan")]
+    legend = axes.legend(handles=handles, loc="lower right", fontsize=8.6, framealpha=1.0, fancybox=False)
+    legend.get_frame().set_facecolor("white")
+    legend.get_frame().set_edgecolor(LEGEND_EDGE_COLOR)
 
-    figure.text(pad_px / width_px, header_y(16), args.title, fontsize=11, weight="bold", va="center")
-    state_text = figure.text(pad_px / width_px, header_y(40), "", fontsize=10, weight="bold", va="center")
-    info_text = figure.text(1.0 - pad_px / width_px, header_y(40), "", fontsize=9, va="center", ha="right", family="monospace")
+    def text(x_px, y_px, value="", ha="left", **kwargs):
+        x = x_px / width_px if x_px >= 0 else 1.0 + x_px / width_px
+        return figure.text(x, 1.0 - y_px / height_px, value, ha=ha, va="center", color=TEXT_COLOR, **kwargs)
+
+    # Labels and values are separate texts at fixed positions; the values are right-aligned, and
+    # Noto Sans and DejaVu Sans digits have one width, so the numbers do not move between frames.
+    text(pad_px, 18, args.title, fontsize=11.5, weight="bold")
+    state_text = text(pad_px, 46, fontsize=10, weight="bold")
+    text(-(pad_px + 205), 46, "t", ha="right", fontsize=9.4)
+    time_text = text(-(pad_px + 150), 46, ha="right", fontsize=9.4)
+    text(-(pad_px + 40), 46, "inlier ratio", ha="right", fontsize=9.4)
+    inlier_text = text(-pad_px, 46, ha="right", fontsize=9.4)
     arrow_length = 0.04 * float(np.max(high - low))
 
     images = []
@@ -302,8 +394,8 @@ def render(args):
         heading.set_position(tuple(position))
         state_text.set_text(state)
         state_text.set_color(STATE_COLORS.get(state, "#424242"))
-        inlier_text = f"{inlier:.2f}" if np.isfinite(inlier) else "-"
-        info_text.set_text(f"t {stamp - t0:5.1f} s   inlier ratio {inlier_text}")
+        time_text.set_text(f"{stamp - t0:.1f} s")
+        inlier_text.set_text(f"{inlier:.2f}" if np.isfinite(inlier) else "-")
         figure.canvas.draw()
         rgba = np.asarray(figure.canvas.buffer_rgba())
         images.append(Image.fromarray(rgba[:, :, :3].copy()))
@@ -313,16 +405,15 @@ def render(args):
     try:
         os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
         if args.out.lower().endswith(".gif"):
-            # One adaptive palette, from the middle frame, for all frames keeps the colors stable and the file small
-            palette = images[len(images) // 2].quantize(colors=64, method=Image.Quantize.MEDIANCUT)
-            frames_p = [image.quantize(palette=palette, dither=Image.Dither.NONE) for image in images]
+            palette = gif_palette(images, args.colors)
+            frames_p = [to_palette(image, palette) for image in images]
             frames_p[0].save(args.out, save_all=True, append_images=frames_p[1:], duration=duration_ms, loop=0, optimize=True)
         else:
             images[0].save(args.out, save_all=True, append_images=images[1:], duration=duration_ms, loop=0, quality=80, method=4)
     except OSError as error:
         raise InputError(f"cannot write {args.out}: {error}") from error
     size = os.path.getsize(args.out)
-    print(f"wrote {args.out}: {len(images)} frames, {width_px}x{height_px} px, {size / 1e6:.2f} MB")
+    print(f"wrote {args.out}: {len(images)} frames, {images[0].width}x{images[0].height} px, {size / 1e6:.2f} MB")
     return 0
 
 
@@ -339,16 +430,19 @@ def parse_args(argv):
     parser.add_argument("--z-min", type=float, help="draw only map and scan points at or above this map-frame height (for example, to hide the floor)")
     parser.add_argument("--z-max", type=float, help="draw only map and scan points below this map-frame height (with --z-min, a horizontal slice)")
     parser.add_argument("--margin", type=float, default=8.0, help="view margin around the trajectory in meters (default 8)")
-    parser.add_argument("--width", type=int, default=720, help="image width in pixels; the height follows the view (default 720)")
+    parser.add_argument("--width", type=int, default=720, help="layout width in pixels; the height follows the view (default 720)")
+    parser.add_argument("--scale", type=float, default=2.0, help="output pixels per layout pixel, for HiDPI screens (default 2: 1440 px wide)")
+    parser.add_argument("--colors", type=int, default=256, help="GIF palette size, including the fixed drawing colors (default 256, the maximum)")
     parser.add_argument("--fps", type=float, default=10.0, help="animation frame rate (default 10)")
     parser.add_argument("--stride", type=int, default=1, help="draw every n-th estimated frame (default 1)")
     parser.add_argument("--max-frames", type=int, default=0, help="stop after this many animation frames (default 0: all)")
     parser.add_argument("--max-map-points", type=int, default=60000, help="random subset of the map points drawn (default 60000, 0: all)")
     parser.add_argument("--max-scan-points", type=int, default=4000, help="random subset of each scan drawn (default 4000, 0: all)")
+    parser.add_argument("--font", default="Noto Sans", help="font family for all text (default Noto Sans, in the image; DejaVu Sans if missing)")
     parser.add_argument("--title", default="glim_localization: replay on a prebuilt map", help="title line")
     args = parser.parse_args(argv)
-    if args.stride < 1 or args.fps <= 0 or args.width < 160:
-        parser.error("--stride must be >= 1, --fps > 0 and --width >= 160")
+    if args.stride < 1 or args.fps <= 0 or args.width < 160 or args.scale <= 0 or not 24 <= args.colors <= 256:
+        parser.error("--stride must be >= 1, --fps > 0, --width >= 160, --scale > 0 and --colors in [24, 256]")
     if args.z_min is not None and args.z_max is not None and args.z_min >= args.z_max:
         parser.error("--z-min must be below --z-max")
     return args

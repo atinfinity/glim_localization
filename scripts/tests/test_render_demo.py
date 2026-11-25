@@ -5,7 +5,7 @@ import sys
 
 import numpy as np
 import pytest
-from PIL import Image
+from PIL import Image, ImageSequence
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import render_demo  # noqa: E402
@@ -63,7 +63,7 @@ def replay(tmp_path):
 
 
 def args(base, out, *extra):
-    return ["--data", str(base / "data"), "--run", str(base / "run"), "--map", str(base / "map.pcd"), "--out", str(out), "--width", "200", *extra]
+    return ["--data", str(base / "data"), "--run", str(base / "run"), "--map", str(base / "map.pcd"), "--out", str(out), "--width", "200", "--scale", "1", "--font", "DejaVu Sans", *extra]
 
 
 def test_gif_has_one_frame_per_estimate(replay):
@@ -143,3 +143,56 @@ def test_bad_frames_and_unwritable_output_exit_2(replay):
     frames.write_text(good)
     (replay / "not_a_dir").write_text("")
     assert render_demo.main(args(replay, replay / "not_a_dir" / "c.gif")) == 2
+
+
+def test_missing_font_falls_back_with_a_warning(replay, capsys):
+    out = replay / "font.gif"
+    assert render_demo.main(args(replay, out, "--font", "No Such Font Family 25", "--scale", "1")) == 0
+    assert "warning: font 'No Such Font Family 25' not found, using DejaVu Sans" in capsys.readouterr().err
+    assert Image.open(out).size[0] == 200
+
+
+def pose_pixels(path):
+    """Pixels of the pose color (dot and heading arrow) in the first frame."""
+    rgb = np.asarray(Image.open(path).convert("RGB"))
+    pose = tuple(int(render_demo.POSE_COLOR[k:k + 2], 16) for k in (1, 3, 5))
+    return int(np.all(rgb == pose, axis=2).sum())
+
+
+def test_scale_and_palette_keep_drawing_colors(replay, monkeypatch):
+    palettes = []
+    gif_palette = render_demo.gif_palette
+
+    def capture(images, colors):
+        palette = gif_palette(images, colors)
+        palettes.append(palette.getpalette())
+        return palette
+
+    monkeypatch.setattr(render_demo, "gif_palette", capture)
+    out = replay / "scaled.gif"
+    assert render_demo.main(args(replay, out, "--scale", "2")) == 0
+    image = Image.open(out)
+    assert image.size[0] == 400
+    # Every pixel of every frame has a color of the palette built for it (no new color from saving).
+    entries = {tuple(palettes[-1][k:k + 3]) for k in range(0, len(palettes[-1]), 3)}
+    for frame in ImageSequence.Iterator(image):
+        drawn = {color for _, color in frame.convert("RGB").getcolors(1 << 20)}
+        assert drawn <= entries, drawn - entries
+    assert pose_pixels(out) > 0
+    # --scale scales the drawing, not only the canvas: the pose is about twice as wide at 2x (its pixel
+    # count, about 4 times; exact-color pixels only, so antialiased edges make the 1x count a bit low).
+    single = replay / "single.gif"
+    assert render_demo.main(args(replay, single)) == 0
+    assert 1.6 < math.sqrt(pose_pixels(out) / pose_pixels(single)) < 3.0
+
+
+def test_palette_starts_with_the_exact_drawing_colors():
+    # Gray frames, so the drawing colors come from the fixed entries, not from the samples.
+    images = [Image.new("RGB", (8, 8), "#808080") for _ in range(3)]
+    palette = render_demo.gif_palette(images, 256).getpalette()
+    fixed = render_demo.fixed_colors()
+    assert {"#000000", "#ffffff", render_demo.POSE_COLOR, render_demo.POSE_EDGE_COLOR, render_demo.SCAN_COLOR, render_demo.ESTIMATE_COLOR} <= set(fixed)
+    assert set(render_demo.STATE_COLORS.values()) <= set(fixed)
+    expected = [int(color[k:k + 2], 16) for color in fixed for k in (1, 3, 5)]
+    assert palette[: len(expected)] == expected
+    assert len(palette) == 768
