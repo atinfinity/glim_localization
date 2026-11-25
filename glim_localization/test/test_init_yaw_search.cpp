@@ -91,7 +91,9 @@ protected:
     p.init_yaw_search.enabled = search;
     p.init_yaw_search.range = M_PI;
     p.init_yaw_search.step = 15.0 * kDeg;
-    p.init_yaw_search.time_budget = 30.0;  // Not the subject here; a loaded CI machine must not cut the search short
+    // Not the subject here: a loaded CI machine must not cut the search short. 30 s was not enough under a parallel
+    // ctest run on amd64 (14 of 24 candidates scored), so leave the bound to the ctest TIMEOUT instead
+    p.init_yaw_search.time_budget = 1e6;
     return p;
   }
 

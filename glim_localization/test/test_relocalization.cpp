@@ -179,7 +179,7 @@ protected:
   static CandidateSearchParams search_params() {
     CandidateSearchParams params;
     params.scorer.map_factors.num_threads = 2;
-    params.time_budget = 30.0;  // Not the subject here; a loaded CI machine must not cut the search short
+    params.time_budget = 1e6;  // Not the subject here; a loaded CI machine must not cut the search short (ctest TIMEOUT bounds it)
     return params;
   }
 
@@ -480,7 +480,7 @@ Eigen::Isometry3d* SymmetricSceneTest::truth_ = nullptr;
 TEST_F(SymmetricSceneTest, HalfTurnAmbiguityIsRejected) {
   CandidateSearchParams params;
   params.scorer.map_factors.num_threads = 2;
-  params.time_budget = 30.0;
+  params.time_budget = 1e6;  // A loaded CI machine must not cut the search short (ctest TIMEOUT bounds it)
   CandidateQuery query;
   query.hint = with_yaw_error(*truth_, 20.0 * kDeg);
   const auto result = search_candidates(**map_, *frame_, YawCandidateGenerator(M_PI, 15.0 * kDeg).generate(query), params);
