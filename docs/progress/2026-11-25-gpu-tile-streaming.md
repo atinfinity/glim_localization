@@ -27,12 +27,13 @@
     - The worker has its own non-blocking `CUDAStream`.
     - A tile whose prefetch is still queued is uploaded in the foreground instead, and counts as a miss.
     - A tile whose prefetch is running is waited for (`prefetch_waits`).
-    - A failed background upload is rethrown on the odometry thread at the next acquire, so the module still fails closed.
+    - A failed background upload is dropped and logged, not thrown: the tile was only predicted. A frame that needs it uploads it in the foreground, and only that failure throws, so the module still fails closed for the tiles it uses (changed in the review, see below).
+    - The worker thread selects the device that was current when the cache was constructed.
   - **Prefetch never evicts the current frame's tiles or tiles still being uploaded.** It stops at the first tile that does not fit, so a small budget prefetches less rather than thrashing.
   - **Which tiles are prefetched.** The path from the current position to `p + v * lookahead` is sampled every half search radius, and `MapManager::query` runs at each sample. This gives the tiles the map factors will ask for. They are sorted by distance to the path, then to the current position (rounded to mm), then by id, and cut at `map_gpu_prefetch_max_tiles`. Selection by query, rather than a box around the path, keeps prefetch to tiles that will actually be used.
   - **Both limits apply.** `map_gpu_max_tiles` stays, and a tile is evicted when either limit is exceeded.
 - **Verification**:
-  - **CPU** (Docker on the development Mac): `scripts/ci.sh` passes. The CPU build and the CPU part of the e2e are unchanged. The new unit tests are `TileResidency*`, `TilePrefetchTest*` (8-tile synthetic map) and `TileStreamer*` (13 tests with a fake device, including threading, failure, cancel and destruction).
+  - **CPU** (Docker on the development Mac): `scripts/ci.sh` passes. The CPU build and the CPU part of the e2e are unchanged. The new unit tests are `TileResidency*`, `TilePrefetchTest*` (8-tile synthetic map) and `TileStreamer*` (17 tests with a fake device, including threading, failure, cancel and destruction).
   - **GPU** (RTX 2080 Ti, CUDA 13.1 image): the core and colcon builds pass, and 327 of 327 core tests pass. Among them:
     - `TileSizeEstimateIsCloseToTheUpload`;
     - `TileCacheStaysWithinTheByteBudget`;
@@ -66,6 +67,13 @@
     - **10 m tiles** (about 1 MB each): prefetch lowered the transition frames' p95 from 3.65 to 3.26 ms and their max from 3.70 to 3.27 ms. Without prefetch the transition numbers match main.
     - Pose differences to the CPU run were at most 1.1e-5 m and 4.1e-4 deg in every run.
   - **What the synthetic data cannot show**: the synthetic map is small and sparse, so a miss costs well under 1 ms here. The benefit on real maps (tiles of tens of MB) is not measured yet.
+- **Review follow-up** ([PR #47](https://github.com/atinfinity/glim_localization/pull/47)):
+  - `select_prefetch_tiles` capped the sample count after converting it to `int`, which is undefined for a huge velocity (on x86 nothing was prefetched; on arm64 it took 1000 queries per frame). The count is now capped in `double` first, and the test checks that a 1e12 and a 1e300 m/s velocity still return the current tiles.
+  - A failed prefetch used to be rethrown from `poll`, `prefetch` and `acquire`, so an out-of-memory upload of a merely predicted tile escaped the odometry thread and aborted the node. It is now dropped, counted in `prefetch_failures` and logged; `acquire` retries a tile it needs in the foreground and throws only if that fails.
+  - Queued prefetches are never evicted, so when they filled the budget `acquire` could not make room for the frame's tiles and went over budget. `acquire` now first cancels the queued prefetches the frame does not need (`prefetch_cancels`).
+  - The worker thread did not set the CUDA device, so on a multi-GPU host it uploaded to device 0. `GpuTileCache` reads the device in its constructor and the worker calls `cudaSetDevice` before each upload.
+  - The shutdown log line adds `prefetch_failures` and `prefetch_cancels`.
+  - New CPU tests: a failed prefetch seen by `prefetch()` and by `acquire()` (of another tile, and of the same tile while it runs) is dropped and reported, then uploaded in the foreground; a frame tile that fails in the foreground still throws; queued prefetches filling the budget are cancelled for the frame's tiles without going over budget; the same tile id from another map while its prefetch runs.
 - **Open** ([#23](https://github.com/atinfinity/glim_localization/issues/23)):
   - Real-data GPU evaluation: latency at tile transitions, and the estimate against real tile sizes.
   - Streaming tiles from disk into host memory: the whole map still stays resident in host memory.
