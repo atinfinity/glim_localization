@@ -12,7 +12,7 @@ For each phase, record what was done, problems and workarounds, and open items.
 
 ### Environment
 
-- Verified in Docker (linux/arm64, 8 CPUs, about 7.7 GB memory). Phases 1 and 2 were also verified on GitHub Actions (amd64); later phases were verified on arm64 only unless stated.
+- Verified in Docker (linux/arm64, 8 CPUs, about 7.7 GB memory). Phases 1 and 2 were also verified on GitHub Actions (amd64); later phases were verified on arm64 only unless stated. Since #28 (2026-11-25), GitHub Actions runs the full checks on both amd64 and arm64.
 - Container: `ros:jazzy-ros-base` (Ubuntu 24.04), g++ 13.3.0, Boost 1.83. No GUI.
 
 ### Target platform
@@ -662,6 +662,40 @@ A pose from outside (a 2D Pose Estimate click, `~/initialize`, the configured `i
   - Docs: the flat-ground assumption, and that no noise filter is applied.
   - Re-verified in Docker on the development Mac: core ctest 247/247, Python tests 190.
 - **Open**: covariance recomputation for GLIM dumps moved to [#31](https://github.com/atinfinity/glim_localization/issues/31).
+
+## arm64 in GitHub Actions (2026-11-25, [#28](https://github.com/atinfinity/glim_localization/issues/28))
+
+arm64 was covered only by local CI (`scripts/ci_local.sh` on the Apple silicon development Mac), which the project no longer runs. GitHub Actions now runs the full checks on both architectures.
+
+- **Jobs**: `build-and-test-arm64` on `ubuntu-24.04-arm` (free for public repositories) runs the steps of `build-and-test` through a YAML anchor, so the required check `build-and-test` keeps its job id and name. Same draft `if`, docs-only detection, concurrency and paths-ignore. Timeouts: 30 min on amd64 (unchanged), 45 min for the arm64 checks.
+- **Per architecture**, from the job environment and `runner.arch`:
+  - GHCR tag: `glim_localization:<hash>` for amd64 (unchanged), `<hash>-arm64` for arm64. Both are single-platform tags, so a pull never gets the other architecture.
+  - buildx gha cache scope: `image-amd64` and `image-arm64` (amd64 used the default scope before).
+  - ccache key: `ccache-<X64|ARM64>-<image hash>-<sources hash>`; the restore keys stay within the architecture.
+  - The 10 GB Actions cache now holds two buildx layer caches and two ccaches (each at most 500 MB).
+- **Publishing**: `publish-image-arm64` (on `ubuntu-24.04-arm`, native build) mirrors `publish-image`: only on a push to `main` of a non-fork repository, only when the image was missing, `packages: write` only in that job. Each publish job depends only on its own architecture's checks, so one architecture failing does not hold back the other's image.
+- **Measured on PR #29** (4-CPU GitHub-hosted runners; the PR runs restore no ccache, because the keys are new and only pushes to `main` save one):
+
+| Run | amd64 `build-and-test` | arm64 `build-and-test-arm64` |
+| --- | --- | --- |
+| [First](https://github.com/atinfinity/glim_localization/actions/runs/45503594633): arm64 image missing, no layer cache | 8 min 56 s (image pulled, checks 8 min 20 s) | 13 min 50 s (image build 6 min 8 s, checks 7 min 24 s) |
+| [Second](https://github.com/atinfinity/glim_localization/actions/runs/45508203818): arm64 layer cache warm | 8 min 39 s (image pulled, checks 7 min 52 s) | 8 min 59 s (image build from cache 52 s, checks 7 min 49 s) |
+
+  - Both architectures: core ctest 224/224, colcon test 12/12, Python tests and replay e2e passed. No portability fix was needed.
+  - For comparison, amd64 runs on `main` with a warm ccache took about 6 min before this change.
+- **After merge**: the first amd64 run restores no ccache and the next amd64 image build has no layer cache, because the key and scope names changed (the GHCR image is still pulled). The first push to `main` publishes the arm64 image and saves the arm64 ccache. `build-and-test-arm64` is to be added to the required checks of the ruleset.
+
+## README demo animation (2026-11-25, [#25](https://github.com/atinfinity/glim_localization/issues/25))
+
+- **Renderer** (`scripts/render_demo.py`): a top-down view per estimated frame with the map points, the current scan moved to the map frame by `T_world_imu * inv(T_lidar_imu)`, the estimated trajectory so far, the ground truth (optional), and the state and inlier ratio from `frames.csv`. Rendered offscreen with matplotlib (Agg) and written as GIF or WebP with Pillow. numpy, scipy, matplotlib and Pillow all come from evo's pinned dependencies in `scripts/requirements.txt`, so no dependency was added.
+  - Reads the map as a PCD (ascii or binary) and the scans from `points/*.bin`. A GLIM dump or a compiled map is not read: the synthetic data has the same scene as `map.pcd`.
+  - The GIF uses one 64-color palette from the middle frame for all frames, without dithering, to keep it small and the colors stable. State colors that do not appear in the middle frame (for example INITIALIZING blue in a run that is TRACKING there) are quantized to the nearest palette color.
+  - Non-finite map and scan points are dropped after reading. Input and output errors (including a non-integer `stamp_ns` or a short row in frames.csv, and an unwritable `--out`) exit 2.
+  - A height band (`--z-min`, `--z-max`) selects what is drawn. The README image is a slice from 1 m to 3 m: in the synthetic scene the low boxes (0.9 m tall) stand in the middle of the corridor and the trajectory (sensor at z = 1.0) passes 0.1 m over them, so with only the floor removed the path seemed to drive through them. The scene and the trajectory are unchanged because many tests depend on them.
+- **Media**: `docs/media/replay_synthetic.gif` from the synthetic end-to-end run (`run1` of `test_replay_e2e.sh`: 12 s, offset initial pose): 121 frames, 720 x 300 px, 10 fps, about 0.38 MB. Embedded near the top of the README; regeneration is in [Demo animation](replay.md#demo-animation).
+- **Test**: `scripts/tests/test_render_demo.py` on a tiny synthetic replay (4 frames, one dropped): the GIF has one frame per estimate, WebP and `--stride`, ascii and binary PCD agree, non-finite points are dropped, the `--z-min`/`--z-max` slice, the scan transform with a non-identity `T_lidar_imu`, and bad inputs (frames.csv, output path) exit 2.
+- **Verification** (Docker on the development Mac): Python tests 199 pass. Frames of the regenerated GIF were checked by eye: no drawn obstacle overlaps the trajectory, and the scan lies on the walls, pillars and cross walls.
+- **Open**: the official GLIM sample sequence (license check and credit first) and the yaw search demo ([#3](https://github.com/atinfinity/glim_localization/issues/3), after PR [#24](https://github.com/atinfinity/glim_localization/pull/24)) stay in [#25](https://github.com/atinfinity/glim_localization/issues/25). Large maps: the map is read whole into memory before the height band and subsampling; a memory-mapped binary read and subsampling before the float64 conversion are a follow-up.
 
 ## map_compiler: recompute covariances for GLIM dump input (2026-11-25, [#31](https://github.com/atinfinity/glim_localization/issues/31))
 

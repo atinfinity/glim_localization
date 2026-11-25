@@ -21,8 +21,10 @@ Build in Docker with Ubuntu 24.04 + ROS 2 Jazzy (headless, no GUI).
 ```bash
 docker compose -f docker/compose.yaml build
 scripts/docker_run.sh scripts/ci.sh  # build, tests, dependency checks
-scripts/ci_local.sh [--force]        # host side. Reuses a pass for the same tree and image; skips docs-only changes (GitHub Actions runs ci.sh directly)
+scripts/ci_local.sh [--force]        # optional, host side. Reuses a pass for the same tree and image; skips docs-only changes
 ```
+
+CI is GitHub Actions: `build-and-test` (amd64) and `build-and-test-arm64` run `scripts/ci.sh` on every non-draft PR and on a push to main that changes code (docs-only pushes are ignored). Running `scripts/ci_local.sh` before a PR is optional, not required.
 
 Offline replay (inside the container; design in section 6.5 of `docs/DESIGN.md`):
 
