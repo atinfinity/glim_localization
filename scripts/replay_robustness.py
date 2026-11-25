@@ -364,7 +364,9 @@ def fmt(value, digits=3):
     return "-" if value is None else f"{value:.{digits}f}"
 
 
-OUTCOME_MARKS = {"pass": "P", "inaccurate": "i", "lost": "L", "rejected": "R", "timeout": "T", "error": "E"}
+OUTCOME_MARKS = {
+    "pass": "P", "inaccurate": "i", "lost": "L", "rejected": "R", "low": "D", "timeout": "T", "error": "E"
+}  # Keyed by the outcome up to the first "_"
 
 
 def pose_table(records):
@@ -378,7 +380,7 @@ def pose_table(records):
         cell = {(r["translation_m"], r["yaw_deg"]): r for r in rows}
         lines += [
             f"Initial pose, yaw search {'on' if search else 'off'} (P pass; i inaccurate: exit 0 but outside the limits; "
-            "L lost; R rejected by the yaw search; T timeout; E error; xN other replay exit code N)",
+            "L lost; R rejected by the yaw search; D low tracking ratio; T timeout; E error; xN other replay exit code N)",
             "",
         ]
         lines.append("| translation \\ yaw | " + " | ".join(f"{y:g}" for y in yaws) + " |")
