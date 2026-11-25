@@ -23,15 +23,38 @@ The animation in the README (`docs/media/replay_synthetic.gif`) is rendered offs
 ```bash
 scripts/docker_run.sh bash -c 'env -u PYTHONPATH $GLIM_LOC_PYTHON scripts/render_demo.py \
   --data /ws/out/phase4_e2e/input/data --run /ws/out/phase4_e2e/run1 --map /ws/out/phase4_e2e/input/map.pcd \
-  --z-min 1.0 --z-max 3.0 --out docs/media/replay_synthetic.gif'
+  --out docs/media/replay_synthetic.gif'
 ```
 
+> [!NOTE]
+> The default view is `--view oblique`, a fixed 3D camera above and beside the run; the README uses it. `--view top` draws the earlier top-down 2D view, and `--view chase` a camera that follows the pose.
+
 - `render_demo.py` draws, per estimated frame, the map points, the current scan moved to the map frame by the estimate, the current pose (an orange dot with a thin dark edge, and a heading arrow), the estimated trajectory so far, the ground truth (`<data>/traj_gt.txt` when it exists; `--gt`, `--no-gt`), and the state and inlier ratio from `frames.csv`. Frames that are not `estimated` are skipped.
-- The map is a PCD file (ascii or binary); non-finite points are dropped. `--z-min` and `--z-max` draw only the map and scan points in a map-frame height band. The README image is a horizontal slice from 1 m (the sensor height) to 3 m: it hides the floor, and the low boxes in the middle of the corridor, which the trajectory passes over and would otherwise seem to drive through. Pass `--t-lidar-imu` with the value of `config_sensors.json` when it is not the identity.
-- The output is a GIF or WebP, chosen by the extension. The layout is `--width` px wide (default 720) and is rendered at `--scale` times that (default 2, so 1440 px); the README shows it at `width="720"`, so it stays sharp on high-density screens and in a column wider than 720 px. A GIF uses one palette of `--colors` entries (default 256) that holds black, white, the text, state and plot colors exactly, plus adaptive colors from the first, middle and last frames; frames are mapped to it without dithering. Other options: `--fps`, `--stride`, `--max-frames`, `--margin`, `--title`.
+- 3D views (`oblique`, `chase`): the map is cropped to the trajectory plus `--margin` (default 6 m) and the scan is drawn in red. The floor (map points up to 0.15 m above the floor level, which is the 0.5th percentile of the cropped map heights rounded to 0.1 m) is drawn as smaller light gray points, so the scan keeps its contrast on it. The points above are colored by height in 16 levels of viridis without its yellow end. The key in the header starts at the floor cut, and the floor is in the legend. The pose also has a dark up axis (its tilt) and a stem to the surface below, and thin blue lines drop from the estimate to the surface below it every 0.6 m of path (the surface is the most common height of the map points within 0.35 m in x y, so a wall or pillar next to the path is not taken for it): they show the height of the path above the floor, and that it passes over the low boxes in the corridor. Points are projected by a pinhole camera in numpy and drawn far to near; points behind the camera are dropped. `--azimuth` (default -110 deg), `--elevation` (default 42 deg) and `--distance` (default 0.9 times the box diagonal, at least 0.5) place the oblique camera, which keeps the whole trajectory in view even where it leaves the map, and `--aspect` (default 0.5) sets the plot height to width.
+- Top view (`--view top`): the map in gray from above. `--z-min` and `--z-max` draw only the map and scan points in a map-frame height band, for example `--z-min 1.0 --z-max 3.0` to hide the floor and the low boxes, which the path passes over and would otherwise seem to drive through. The band also applies to the 3D views.
+- The map is a PCD file (ascii or binary); non-finite points are dropped. Pass `--t-lidar-imu` with the value of `config_sensors.json` when it is not the identity.
+- The output is a GIF or WebP, chosen by the extension. The layout is `--width` px wide (default 720) and is rendered at `--scale` times that (default 2, so 1440 px); the README shows it at `width="720"`, so it stays sharp on high-density screens and in a column wider than 720 px. A GIF uses one palette of `--colors` entries (default 256) that holds black, white, the text, state, plot and height colors exactly, plus adaptive colors from the first, middle and last frames; frames are mapped to it without dithering. Other options: `--fps`, `--stride`, `--max-frames`, `--max-map-points`, `--max-scan-points` (default 4000 for top, 1000 for the 3D views), `--title`.
 - Text uses `--font` (default `Noto Sans`). The image installs it (`fonts-noto-core`) and builds the matplotlib font cache after it, so the README GIF uses Noto Sans when rendered in the image. Where the font is missing, the script warns on stderr and uses DejaVu Sans, which ships with matplotlib.
 - The published image therefore includes `fonts-noto-core` under the SIL Open Font License 1.1; the license text is in `/usr/share/doc/fonts-noto-core/copyright` in the image. No font file is in this repository.
-- Keep the committed file under about 3 MB, and commit only the image: never a bag, dataset or map.
+- Keep each committed file at about 2 MB or less, and commit only the image: never a bag, dataset or map.
+
+### Yaw search clip
+
+`docs/media/replay_yaw_search.gif` shows the initial yaw search ([#3](https://github.com/atinfinity/glim_localization/issues/3)) on the same data: the replay starts from a pose with the yaw about 60 deg off, the search finds the right yaw on the first scan, and tracking starts. `--init-search` adds two held images before the run: the first scan placed by the given pose ("INITIAL GUESS"), then by the pose the search picked ("YAW SEARCH", with the yaw correction and the number of candidates). It reads `replay_args.json` and the `init_search` record of `summary.json`, so the run needs `init_yaw_search: true` in a copied config; without an accepted search the script exits 2.
+
+```bash
+scripts/docker_run.sh bash -c '
+  rm -rf /ws/out/config_yaw /ws/out/run_yaw &&
+  cp -r glim_localization/config /ws/out/config_yaw &&
+  sed -i "s/\"init_yaw_search\": false/\"init_yaw_search\": true/" /ws/out/config_yaw/config_odometry_localization_cpu.json &&
+  /ws/build/core/tools/glim_localization_replay --data /ws/out/phase4_e2e/input/data --config /ws/out/config_yaw \
+    --map /ws/out/phase4_e2e/input/map --out /ws/out/run_yaw --init-pose 5.3 -0.2 1.1 0 0 0.5225 0.8526 &&
+  env -u PYTHONPATH $GLIM_LOC_PYTHON scripts/render_demo.py \
+    --data /ws/out/phase4_e2e/input/data --run /ws/out/run_yaw --map /ws/out/phase4_e2e/input/map.pcd \
+    --init-search --max-frames 60 --out docs/media/replay_yaw_search.gif'
+```
+
+<img src="media/replay_yaw_search.gif" width="720" alt="Yaw search on the synthetic replay data: the first scan placed by an initial pose with the yaw about 60 deg off, then by the pose the search picked, then tracking">
 
 ## Real bag
 
