@@ -26,6 +26,15 @@ struct OdometryEstimationLocalizationGPUParams : public OdometryEstimationLocali
 
   /// Map tiles kept on the GPU (least recently used are dropped). Must be at least map_max_submaps.
   int map_gpu_max_tiles;
+  /// GPU memory for map tiles [MiB] (least recently used are dropped). The tiles of one frame are kept even if they
+  /// exceed it. In [1, 1048576].
+  double map_gpu_memory_budget_mb;
+  /// Upload the tiles near the predicted path on a background thread before they are needed
+  bool map_gpu_prefetch;
+  /// How far ahead of the current pose to prefetch, at the current velocity [s]. In [0, 10].
+  double map_gpu_prefetch_lookahead;
+  /// At most this many tiles to prefetch per frame. In [1, map_gpu_max_tiles].
+  int map_gpu_prefetch_max_tiles;
 
   // Keyframes (use_keyframes), as upstream
   double voxel_resolution;

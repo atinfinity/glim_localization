@@ -8,6 +8,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <string>
 #include <vector>
@@ -22,6 +23,7 @@
 #include <gtsam/nonlinear/NonlinearFactorGraph.h>
 #include <gtsam/nonlinear/Values.h>
 
+#include <gtsam_points/cuda/cuda_stream.hpp>
 #include <gtsam_points/cuda/nonlinear_factor_set_gpu.hpp>
 #include <gtsam_points/factors/integrated_vgicp_factor.hpp>
 #include <gtsam_points/factors/integrated_vgicp_factor_gpu.hpp>
@@ -430,6 +432,114 @@ TEST_F(LocalizationOdometryGPUTest, TileCacheEvictsLeastRecentlyUsed) {
   cache.clear();
   EXPECT_EQ(cache.size(), 0u);
   EXPECT_THROW(GpuTileCache(0, nullptr), std::invalid_argument);
+}
+
+TEST_F(LocalizationOdometryGPUTest, TileSizeEstimateIsCloseToTheUpload) {
+  SKIP_WITHOUT_GPU();
+  // The budget plans with the estimate before an upload; the real size replaces it after.
+  GpuTileCache cache(1, nullptr);
+  for (const auto& tile : (*map_)->tiles()) {
+    const auto gpu_tile = cache.get(tile);
+    const double estimate = static_cast<double>(estimate_tile_device_bytes(*tile));
+    const double real = static_cast<double>(gpu_tile->memory_usage_gpu);
+    EXPECT_GT(estimate, 0.5 * real) << "tile " << tile->id;
+    EXPECT_LT(estimate, 2.0 * real) << "tile " << tile->id;
+  }
+}
+
+TEST_F(LocalizationOdometryGPUTest, TileCacheStaysWithinTheByteBudget) {
+  SKIP_WITHOUT_GPU();
+  const auto tiles = (*map_)->tiles();
+  ASSERT_GE(tiles.size(), 4u);
+  size_t largest = 0;
+  for (const auto& tile : tiles) {
+    largest = std::max(largest, estimate_tile_device_bytes(*tile));
+  }
+
+  // Room for about two tiles
+  GpuTileCacheParams params;
+  params.budget.max_bytes = largest * 5 / 2;
+  params.budget.max_tiles = 32;
+  params.prefetch = true;
+  GpuTileCache cache(params, nullptr);
+  for (const auto& tile : tiles) {
+    cache.acquire({tile});
+    EXPECT_LE(cache.memory_usage_gpu(), params.budget.max_bytes) << "tile " << tile->id;
+  }
+  EXPECT_GE(cache.num_evictions(), tiles.size() - 3);
+  EXPECT_LE(cache.size(), 3u);
+  EXPECT_EQ(cache.stats().over_budget, 0u);
+  EXPECT_LE(cache.stats().peak_bytes, params.budget.max_bytes);
+}
+
+TEST_F(LocalizationOdometryGPUTest, TileCachePrefetchesInTheBackground) {
+  SKIP_WITHOUT_GPU();
+  const auto tiles = (*map_)->tiles();
+  ASSERT_GE(tiles.size(), 3u);
+  GpuTileCacheParams params;
+  params.prefetch = true;
+  gtsam_points::CUDAStream stream;
+  GpuTileCache cache(params, stream);
+
+  cache.acquire({tiles[0]});
+  EXPECT_EQ(cache.prefetch({tiles[0], tiles[1], tiles[2]}), 2u);
+  cache.wait_idle();
+  EXPECT_TRUE(cache.contains(tiles[1]->id));
+  EXPECT_TRUE(cache.contains(tiles[2]->id));
+  EXPECT_EQ(cache.stats().prefetch_uploads, 2u);
+
+  // Prefetched tiles are hits, with the same data as a foreground upload.
+  const auto prefetched = cache.acquire({tiles[1], tiles[2]});
+  EXPECT_EQ(cache.stats().misses, 1u);
+  GpuTileCache reference(1, nullptr);
+  const auto uploaded = reference.get(tiles[1]);
+  EXPECT_EQ(prefetched[0]->memory_usage_gpu, uploaded->memory_usage_gpu);
+  ASSERT_EQ(prefetched[0]->voxelmaps.size(), uploaded->voxelmaps.size());
+  EXPECT_EQ(prefetched[0]->points->size(), uploaded->points->size());
+
+  // Without prefetch, nothing is queued.
+  GpuTileCacheParams no_prefetch;
+  no_prefetch.prefetch = false;
+  GpuTileCache plain(no_prefetch, nullptr);
+  EXPECT_EQ(plain.prefetch({tiles[1]}), 0u);
+}
+
+TEST_F(LocalizationOdometryGPUTest, ConvergesWithASmallMemoryBudget) {
+  SKIP_WITHOUT_GPU();
+  // A budget below the tiles one frame uses: only the frame's own tiles stay, nothing is prefetched, and tracking
+  // does not change.
+  auto params = params_at(synthetic_T_world_imu(0.0) * initial_error());
+  params.use_keyframes = false;
+  params.map_gpu_memory_budget_mb = 1.0;
+  OdometryEstimationLocalizationGPU odometry(params, *map_);
+  run(odometry);
+  const auto& stats = odometry.tile_cache().stats();
+  std::cout << "gpu, 1 MiB budget: uploads=" << stats.uploads << " prefetched=" << stats.prefetch_uploads << " misses=" << stats.misses
+            << " evictions=" << stats.evictions << " over_budget=" << stats.over_budget << std::endl;
+  EXPECT_EQ(odometry.status().state, LocalizationState::TRACKING) << to_string(odometry.status().state);
+  EXPECT_GT(stats.over_budget, 0u);
+  EXPECT_EQ(stats.prefetch_uploads, 0u);
+}
+
+TEST_F(LocalizationOdometryGPUTest, RejectsInvalidTileStreamingParameters) {
+  // Rejected before anything touches the GPU
+  auto params = params_at(Eigen::Isometry3d::Identity());
+  params.map_gpu_memory_budget_mb = 0.5;
+  EXPECT_THROW(OdometryEstimationLocalizationGPU(params, *map_), std::invalid_argument);
+  params.map_gpu_memory_budget_mb = std::numeric_limits<double>::quiet_NaN();
+  EXPECT_THROW(OdometryEstimationLocalizationGPU(params, *map_), std::invalid_argument);
+
+  params = params_at(Eigen::Isometry3d::Identity());
+  params.map_gpu_prefetch_lookahead = -1.0;
+  EXPECT_THROW(OdometryEstimationLocalizationGPU(params, *map_), std::invalid_argument);
+  params.map_gpu_prefetch_lookahead = 11.0;
+  EXPECT_THROW(OdometryEstimationLocalizationGPU(params, *map_), std::invalid_argument);
+
+  params = params_at(Eigen::Isometry3d::Identity());
+  params.map_gpu_prefetch_max_tiles = 0;
+  EXPECT_THROW(OdometryEstimationLocalizationGPU(params, *map_), std::invalid_argument);
+  params.map_gpu_prefetch_max_tiles = params.map_gpu_max_tiles + 1;
+  EXPECT_THROW(OdometryEstimationLocalizationGPU(params, *map_), std::invalid_argument);
 }
 
 TEST_F(LocalizationOdometryGPUTest, WeightedFactorScalesTheFactor) {

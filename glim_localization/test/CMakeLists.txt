@@ -79,6 +79,19 @@ add_executable(test_map_manager test_map_manager.cpp)
 target_link_libraries(test_map_manager PRIVATE glim_localization_synthetic GTest::gtest_main)
 gtest_discover_tests(test_map_manager)
 
+add_executable(test_tile_residency test_tile_residency.cpp)
+target_link_libraries(test_tile_residency PRIVATE glim_localization GTest::gtest_main)
+gtest_discover_tests(test_tile_residency)
+
+add_executable(test_tile_prefetch test_tile_prefetch.cpp)
+target_link_libraries(test_tile_prefetch PRIVATE glim_localization_synthetic GTest::gtest_main)
+gtest_discover_tests(test_tile_prefetch)
+
+find_package(Threads REQUIRED)
+add_executable(test_tile_streamer test_tile_streamer.cpp)
+target_link_libraries(test_tile_streamer PRIVATE glim_localization Threads::Threads GTest::gtest_main)
+gtest_discover_tests(test_tile_streamer PROPERTIES TIMEOUT 60)
+
 add_executable(test_pcd_map test_pcd_map.cpp)
 target_link_libraries(test_pcd_map PRIVATE glim_localization_synthetic nlohmann_json::nlohmann_json GTest::gtest_main)
 gtest_discover_tests(test_pcd_map)

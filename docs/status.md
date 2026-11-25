@@ -15,13 +15,13 @@ Measurements and the history behind these items are in [PROGRESS.md](PROGRESS.md
 | 5 | Launch files, YAML parameter files, RViz config, `~/map` | Done |
 | 6 | `map_compiler` PCD and PLY input, 2D occupancy grid export, covariance recomputation for GLIM dumps | Done |
 | 6 | README and user docs | Done |
-| 6 | GPU (CUDA) odometry module, selected by the odometry config (CUDA image) | Done; tile prefetch open ([#23](https://github.com/atinfinity/glim_localization/issues/23)) |
+| 6 | GPU (CUDA) odometry module, selected by the odometry config (CUDA image) | Done; tiles streamed within a byte budget with prefetch; real-data GPU timing open ([#23](https://github.com/atinfinity/glim_localization/issues/23)) |
 
 ## Open work
 
 Not done yet (open issues):
 
-- GPU follow-ups ([#23](https://github.com/atinfinity/glim_localization/issues/23)): tile prefetch and a GPU memory budget, real-data timing on the GPU. The GPU module itself is in place ([CUDA variant](build.md#cuda-variant)).
+- GPU follow-ups ([#23](https://github.com/atinfinity/glim_localization/issues/23)): real-data timing on the GPU and streaming tiles from disk. Tile prefetch and a GPU memory budget are done (synthetic data, [progress entry](progress/2026-11-25-gpu-tile-streaming.md)). The GPU module itself is in place ([CUDA variant](build.md#cuda-variant)).
 - Relocalizer ([#3](https://github.com/atinfinity/glim_localization/issues/3)): global relocalization (no pose given), and a better use of the yaw search (accumulated scans, roll and pitch from gravity, height from the map). The yaw search around a given pose is in place ([Initial pose yaw search](ros2.md#initial-pose-yaw-search)).
 - `map_compiler`: PCD follow-ups such as `binary_compressed` input ([#12](https://github.com/atinfinity/glim_localization/issues/12)).
 - Evaluation on real data against an independent reference ([#5](https://github.com/atinfinity/glim_localization/issues/5)) and in simulation ([#9](https://github.com/atinfinity/glim_localization/issues/9)).
@@ -30,7 +30,7 @@ Not done yet (open issues):
 
 ## Limitations
 
-- **GPU module tested on synthetic data only.** The GPU module (CUDA image) is verified on one Turing GPU with synthetic data ([PROGRESS](PROGRESS.md)); it uploads map tiles on first use, without prefetch ([#23](https://github.com/atinfinity/glim_localization/issues/23)). With the CPU module, on one 10 Hz OS1-128 sequence (Docker, arm64) the mean was about 93 ms per frame for a 100 ms period, with p99 spikes over 1 s, and the ratio of processing time to data length varied between runs (1.06 and 0.64); real-time capability is not established.
+- **GPU module tested on synthetic data only.** The GPU module (CUDA image) is verified on one Turing GPU with synthetic data ([PROGRESS](PROGRESS.md)); it streams map tiles within a byte budget and prefetches them along the predicted path ([progress entry](progress/2026-11-25-gpu-tile-streaming.md), [#23](https://github.com/atinfinity/glim_localization/issues/23)). With the CPU module, on one 10 Hz OS1-128 sequence (Docker, arm64) the mean was about 93 ms per frame for a 100 ms period, with p99 spikes over 1 s, and the ratio of processing time to data length varied between runs (1.06 and 0.64); real-time capability is not established.
 - **Not yet verified:** accuracy on real data against an independent reference (the only real-data run, one OS1-128 sequence, compares with GLIM's own trajectory: ATE translation RMSE about 0.023 to 0.025 m, a consistency figure, not accuracy); real robots and real-time sensor input; most measurements so far ran in the Docker image on arm64 (CI runs the tests on both amd64 and arm64, but measured timings are mostly from arm64); a multithreaded component container; PCD maps from a real mapping pipeline (for example sdf2map, [#9](https://github.com/atinfinity/glim_localization/issues/9)); integration with Nav2 or an external EKF.
 - `~/aligned_points` ([#18](https://github.com/atinfinity/glim_localization/issues/18)) and an IMU-rate odometry are not published.
 - The [initial pose yaw search](ros2.md#initial-pose-yaw-search) is off by default and needs a position close to the true one; it is verified on synthetic data only, and its timing on real scans is not measured. No global relocalization ([#3](https://github.com/atinfinity/glim_localization/issues/3)).

@@ -60,7 +60,7 @@ In the CPU version, `use_keyframes` means relative pose factors from the local m
 
 - Relocalizer ([#3](https://github.com/atinfinity/glim_localization/issues/3)): multiple yaw hypotheses around a given pose implemented (`init_yaw_search`, opt-in; DESIGN §5.3). Global relocalization (FPFH + RANSAC/GNC), roll and pitch from gravity, height from the map and accumulated scans: planned.
 - PCD input for map_compiler: done. PLY input and 2D OccupancyGrid output: done ([#4](https://github.com/atinfinity/glim_localization/issues/4)).
-- Write the GPU version (`OdometryEstimationLocalizationGPU`); build it in a CUDA environment: done (CUDA image, `config/gpu`). Tile prefetch and a GPU memory budget: planned ([#23](https://github.com/atinfinity/glim_localization/issues/23)).
+- Write the GPU version (`OdometryEstimationLocalizationGPU`); build it in a CUDA environment: done (CUDA image, `config/gpu`). Tile prefetch and a GPU memory budget: done on synthetic data; real-data GPU timing open ([#23](https://github.com/atinfinity/glim_localization/issues/23)).
 - README (build steps, usage, limitations): done.
 
 ## Out of scope for the default container

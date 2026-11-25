@@ -183,6 +183,63 @@ assert dp < 1e-3, f"cpu and gpu trajectories differ by {dp} m"
 assert dr < 0.05, f"cpu and gpu trajectories differ by {dr} deg"
 PY
   echo "gpu replay ok"
+
+  # Tile streaming: the corridor in 4 m tiles, so the tiles of the map factors change along the trajectory. The GPU
+  # module with prefetch, and with a byte budget that holds about two frames' tiles (evicting the rest), must agree
+  # with the CPU module on the same map as closely as above.
+  "${build_dir}/tools/map_compiler" "${out}/input/map.pcd" "${out}/small_tiles" --grid-size 4 > "${out}/small_tiles.log" 2>&1
+  small_tiles_config() {  # <dest> <key=value>...: a copy of the config with these odometry keys replaced or added
+    local dest="$1"; shift
+    rm -rf "${dest}"
+    cp -r "${repo_root}/glim_localization/config" "${dest}"
+    py - "${dest}" "$@" <<'PY'
+import re
+import sys
+dest, *pairs = sys.argv[1:]
+for name in ("config_odometry_localization_cpu.json", "config_odometry_localization_gpu.json"):
+    text = open(f"{dest}/{name}").read()
+    for key, value in (pair.split("=", 1) for pair in pairs):
+        if key.startswith("map_gpu_") and "_cpu" in name:
+            continue
+        text, n = re.subn(rf'("{key}"\s*:\s*)[^,\n]+', lambda m: m.group(1) + value, text)
+        assert n == 1, f"{key} not in {name}"
+    open(f"{dest}/{name}", "w").write(text)
+PY
+  }
+  small_common=(map_search_radius=12.0 map_max_submaps=12 map_gpu_max_tiles=48 map_gpu_prefetch_max_tiles=24)
+  small_tiles_config "${out}/config_small_tiles" "${small_common[@]}"
+  small_tiles_config "${out}/config_small_budget" "${small_common[@]}" "map_gpu_memory_budget_mb=${GLIM_LOC_E2E_SMALL_BUDGET_MB:-24}"
+  for run in cpu:config_small_tiles gpu:config_small_tiles/gpu gpu_budget:config_small_budget/gpu; do
+    # shellcheck disable=SC2086
+    "${replay}" --data "${out}/input/data" --config "${out}/${run#*:}" --map "${out}/small_tiles" \
+      --out "${out}/run_tiles_${run%%:*}" --init-pose ${init_pose} > "${out}/run_tiles_${run%%:*}.log" 2>&1
+  done
+  py - "${out}" <<'PY'
+import re
+import sys
+import numpy as np
+out = sys.argv[1]
+cpu = np.loadtxt(f"{out}/run_tiles_cpu/traj_localization.txt", ndmin=2)
+for name in ("gpu", "gpu_budget"):
+    log = open(f"{out}/run_tiles_{name}.log").read()
+    m = re.search(r"GPU map tiles: (.*)", log)
+    assert m, f"no tile counters in run_tiles_{name}.log"
+    stats = dict(kv.split("=") for kv in m.group(1).split())
+    b = np.loadtxt(f"{out}/run_tiles_{name}/traj_localization.txt", ndmin=2)
+    assert cpu.shape == b.shape and len(b) > 0, f"cpu {cpu.shape} vs {name} {b.shape} poses"
+    dp = np.linalg.norm(cpu[:, 1:4] - b[:, 1:4], axis=1).max()
+    qa, qb = cpu[:, 4:8], b[:, 4:8]
+    dot = np.clip(np.abs(np.sum(qa * qb, axis=1)) / (np.linalg.norm(qa, axis=1) * np.linalg.norm(qb, axis=1)), 0.0, 1.0)
+    dr = np.degrees(2.0 * np.arccos(dot)).max()
+    print(f"small tiles, {name}: max diff to cpu {dp:.3e} m, {dr:.3e} deg; {m.group(1)}")
+    assert dp < 1e-3, f"{name}: cpu and gpu differ by {dp} m"
+    assert dr < 0.05, f"{name}: cpu and gpu differ by {dr} deg"
+    assert int(stats["prefetched"]) > 0, f"{name}: nothing was prefetched"
+    if name == "gpu_budget":
+        assert int(stats["evictions"]) > 0, "the small budget evicted nothing"
+        assert float(stats["peak_mb"]) <= float(stats["budget_mb"]) + 1e-6 or int(stats["over_budget"]) > 0, "over the budget"
+PY
+  echo "gpu tile streaming ok"
 else
   echo "SKIPPED: GPU replay (not a CUDA build with a visible GPU)"
 fi
