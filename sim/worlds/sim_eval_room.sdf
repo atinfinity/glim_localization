@@ -1,0 +1,171 @@
+<?xml version="1.0"?>
+<!--
+  Indoor world for the Gazebo evaluation (docs/sim_eval.md), from primitives only.
+
+  Free space: an L-shaped room, x 0..30 m and y 0..20 m without the corner x 20..30, y 12..20. The
+  perimeter walls and the corner block are 2.5 m thick, thicker than the coarsest map voxel (2 m in
+  config_odometry_localization_cpu.json), so the inner and outer faces that sdf2map samples never share
+  a voxel. A 3 m deep island, pillars, a rotated box and a low box make the layout asymmetric and keep
+  translation along every axis observable. The ground is a finite plane (sdf2map samples a plane only
+  over its <size>). No ceiling.
+
+  The sensor rig (sim/models/sim_eval_rig) starts at (3, 3, 1) facing +x and follows a 60 s scripted
+  profile (ScriptedMotion): a slalom east, a left turn, north, a left turn, a slalom west, a left turn,
+  south, a stop and a full turn in place. The world frame is the map frame.
+-->
+<sdf version="1.9">
+  <world name="sim_eval_room">
+    <physics name="1ms" type="ignored">
+      <max_step_size>0.001</max_step_size>
+      <!-- 0: run as fast as possible. Simulation time does not depend on wall time. -->
+      <real_time_factor>0</real_time_factor>
+    </physics>
+    <gravity>0 0 -9.80665</gravity>
+    <scene>
+      <shadows>false</shadows>
+    </scene>
+
+    <plugin filename="gz-sim-physics-system" name="gz::sim::systems::Physics"/>
+    <plugin filename="gz-sim-sensors-system" name="gz::sim::systems::Sensors">
+      <render_engine>ogre2</render_engine>
+    </plugin>
+    <plugin filename="gz-sim-imu-system" name="gz::sim::systems::Imu"/>
+
+    <model name="ground">
+      <static>true</static>
+      <pose>15 10 0 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><plane><normal>0 0 1</normal><size>40 30</size></plane></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><plane><normal>0 0 1</normal><size>40 30</size></plane></geometry>
+        </visual>
+      </link>
+    </model>
+
+    <!-- Perimeter walls, 3 m high, 2.5 m thick. -->
+    <model name="wall_south">
+      <static>true</static>
+      <pose>15 -1.25 1.5 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>35 2.5 3</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>35 2.5 3</size></box></geometry></visual>
+      </link>
+    </model>
+    <model name="wall_north">
+      <static>true</static>
+      <pose>15 21.25 1.5 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>35 2.5 3</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>35 2.5 3</size></box></geometry></visual>
+      </link>
+    </model>
+    <model name="wall_west">
+      <static>true</static>
+      <pose>-1.25 10 1.5 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>2.5 20 3</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>2.5 20 3</size></box></geometry></visual>
+      </link>
+    </model>
+    <model name="wall_east">
+      <static>true</static>
+      <pose>31.25 10 1.5 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>2.5 20 3</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>2.5 20 3</size></box></geometry></visual>
+      </link>
+    </model>
+
+    <!-- Corner block: makes the room L-shaped. -->
+    <model name="corner_block">
+      <static>true</static>
+      <pose>25 16 1.5 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>10 8 3</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>10 8 3</size></box></geometry></visual>
+      </link>
+    </model>
+
+    <!-- Island, 1.5 m high: the LiDAR (at 1.2 m) sees its top edge and the walls behind it. -->
+    <model name="island">
+      <static>true</static>
+      <pose>11 8.5 0.75 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>6 3 1.5</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>6 3 1.5</size></box></geometry></visual>
+      </link>
+    </model>
+
+    <model name="pillar_a">
+      <static>true</static>
+      <pose>24 6 1.5 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><cylinder><radius>0.4</radius><length>3</length></cylinder></geometry></collision>
+        <visual name="visual"><geometry><cylinder><radius>0.4</radius><length>3</length></cylinder></geometry></visual>
+      </link>
+    </model>
+    <model name="pillar_b">
+      <static>true</static>
+      <pose>15.5 12.5 1.5 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><cylinder><radius>0.4</radius><length>3</length></cylinder></geometry></collision>
+        <visual name="visual"><geometry><cylinder><radius>0.4</radius><length>3</length></cylinder></geometry></visual>
+      </link>
+    </model>
+    <model name="pillar_c">
+      <static>true</static>
+      <pose>1.5 17.5 1.5 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>0.8 0.8 3</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>0.8 0.8 3</size></box></geometry></visual>
+      </link>
+    </model>
+
+    <model name="rotated_box">
+      <static>true</static>
+      <pose>26 2.5 1.0 0 0 0.5236</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.2 2.4 2.0</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>1.2 2.4 2.0</size></box></geometry></visual>
+      </link>
+    </model>
+    <model name="low_box">
+      <static>true</static>
+      <pose>9 18.8 0.3 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1 1 0.6</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>1 1 0.6</size></box></geometry></visual>
+      </link>
+    </model>
+
+    <!-- Sensor rig and the scripted trajectory (60 s). w bump amplitude 0.6283185 over 5 s turns 90 deg;
+         1.5707963 over 8 s turns 360 deg. -->
+    <include>
+      <uri>model://sim_eval_rig</uri>
+      <name>rig</name>
+      <pose>3 3 1 0 0 0</pose>
+      <plugin filename="ScriptedMotion" name="sim_eval::ScriptedMotion">
+        <joint_x>joint_x</joint_x>
+        <joint_y>joint_y</joint_y>
+        <joint_yaw>joint_yaw</joint_yaw>
+        <pose_link>imu_link</pose_link>
+        <pose_topic>/sim_eval/imu_pose</pose_topic>
+        <pose_rate>100</pose_rate>
+        <segment duration="2" v0="0" v1="0"/>
+        <segment duration="2" v0="0" v1="1"/>
+        <segment duration="10" v0="1" v1="1" w="sine" w_amp="0.3" w_cycles="2"/>
+        <segment duration="5" v0="1" v1="1" w="bump" w_amp="0.6283185"/>
+        <segment duration="6" v0="1" v1="1"/>
+        <segment duration="5" v0="1" v1="1" w="bump" w_amp="0.6283185"/>
+        <segment duration="7" v0="1" v1="1" w="sine" w_amp="0.3" w_cycles="1"/>
+        <segment duration="5" v0="1" v1="1" w="bump" w_amp="0.6283185"/>
+        <segment duration="4" v0="1" v1="1"/>
+        <segment duration="2" v0="1" v1="0"/>
+        <segment duration="8" v0="0" v1="0" w="bump" w_amp="1.5707963"/>
+        <segment duration="4" v0="0" v1="0"/>
+      </plugin>
+    </include>
+  </world>
+</sdf>
