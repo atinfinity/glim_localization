@@ -5,9 +5,11 @@
 #include <limits>
 #include <map>
 #include <memory>
+#include <random>
 #include <set>
 #include <sstream>
 #include <string>
+#include <vector>
 
 #include <Eigen/Eigenvalues>
 #include <gtest/gtest.h>
@@ -17,6 +19,7 @@
 #include <unistd.h>
 
 #include <gtsam_points/features/covariance_estimation.hpp>
+#include <gtsam_points/types/point_cloud_cpu.hpp>
 
 #include <glim_localization/map/map_io.hpp>
 #include <glim_localization/map/pcd_map.hpp>
@@ -456,4 +459,104 @@ TEST_F(PcdMapTest, RoundTripsThroughCompiledMap) {
   std::ifstream index_file(dir_ / "map" / "map_index.json");
   const auto index = nlohmann::json::parse(index_file);
   EXPECT_EQ(index.at("source").get<std::string>(), "pcd");
+}
+
+namespace {
+
+/// A curved surface on a jittered 0.25 m grid. The jitter breaks the distance ties of a regular grid, so the k nearest
+/// neighbours do not depend on rounding in the frame they are searched in.
+PcdPoints make_curved_surface(const Eigen::Vector3d& offset) {
+  std::mt19937 rng(31);
+  std::uniform_real_distribution<double> jitter(-0.08, 0.08);
+  PcdPoints surface;
+  for (int i = -16; i <= 16; i++) {
+    for (int j = -16; j <= 16; j++) {
+      const double x = 0.25 * i + jitter(rng);
+      const double y = 0.25 * j + jitter(rng);
+      surface.emplace_back(offset.x() + x, offset.y() + y, offset.z() + 0.5 * std::sin(x) + 0.3 * std::cos(1.3 * y), 1.0);
+    }
+  }
+  return surface;
+}
+
+LoadedSubmap make_submap_with_identity_covs(int id, const PcdPoints& points) {
+  auto cloud = std::make_shared<gtsam_points::PointCloudCPU>(points);
+  cloud->add_covs(std::vector<Eigen::Matrix4d>(points.size(), Eigen::Matrix4d::Identity()));
+  LoadedSubmap submap;
+  submap.id = id;
+  submap.points = cloud;
+  return submap;
+}
+
+}  // namespace
+
+TEST_F(PcdMapTest, RecomputedCovariancesMatchThePcdPath) {
+  const PcdPoints world = make_curved_surface(Eigen::Vector3d(500.0, -200.0, 30.0));
+  for (const int k : {kMinPcdKNeighbors, 10, 25}) {
+    // The PCD path with one tile: identity rotation, so its covariances are in the world frame.
+    PcdMapParams params;
+    params.grid_size = 1000.0;
+    params.k_neighbors = k;
+    LoadedSubmaps tiles;
+    ASSERT_TRUE(build_pcd_submaps(world, params, tiles));
+    ASSERT_EQ(tiles.size(), 1u);
+    ASSERT_EQ(tiles[0].points->size(), world.size());
+
+    // The same points as a GLIM submap with a rotated origin and stale (identity) covariances.
+    Eigen::Isometry3d T_world_origin = Eigen::Isometry3d::Identity();
+    T_world_origin.linear() = Eigen::AngleAxisd(0.7, Eigen::Vector3d(0.3, -0.5, 1.0).normalized()).toRotationMatrix();
+    T_world_origin.translation() = Eigen::Vector3d(498.0, -203.0, 31.0);
+    PcdPoints local(world.size());
+    for (size_t i = 0; i < world.size(); i++) {
+      local[i] << T_world_origin.inverse() * world[i].head<3>(), 1.0;
+    }
+    LoadedSubmaps submaps;
+    submaps.push_back(make_submap_with_identity_covs(3, local));
+    submaps[0].T_world_origin = T_world_origin;
+    const auto original = submaps[0].points;
+
+    ASSERT_TRUE(recompute_covariances(submaps, k, 2));
+    ASSERT_EQ(submaps.size(), 1u);
+    EXPECT_EQ(submaps[0].id, 3);
+    EXPECT_EQ(submaps[0].T_world_origin.matrix(), T_world_origin.matrix());
+    ASSERT_NE(submaps[0].points, original);  // Copied, not changed in place
+    EXPECT_EQ(original->covs[0], Eigen::Matrix4d::Identity());
+    ASSERT_EQ(submaps[0].points->size(), world.size());
+    ASSERT_TRUE(submaps[0].points->has_covs());
+    const Eigen::Matrix3d R = T_world_origin.linear();
+    for (size_t i = 0; i < world.size(); i++) {
+      ASSERT_EQ(submaps[0].points->points[i], local[i]);
+      const Eigen::Matrix4d& cov = submaps[0].points->covs[i];
+      const Eigen::Matrix3d in_world = R * cov.topLeftCorner<3, 3>() * R.transpose();
+      // About 5e-9 in the worst case (k = 5, points some 540 m from the origin); FMA can add to it, so keep a margin.
+      ASSERT_LT((in_world - tiles[0].points->covs[i].topLeftCorner<3, 3>()).cwiseAbs().maxCoeff(), 1e-6) << "k " << k << " point " << i;
+      ASSERT_EQ(cov.row(3).norm() + cov.col(3).norm(), 0.0) << "k " << k << " point " << i;
+    }
+  }
+}
+
+TEST_F(PcdMapTest, RecomputeCovariancesRejectsBadParametersAndSmallSubmaps) {
+  const PcdPoints surface = make_curved_surface(Eigen::Vector3d::Zero());
+  LoadedSubmaps submaps;
+  submaps.push_back(make_submap_with_identity_covs(0, surface));
+  submaps.push_back(make_submap_with_identity_covs(5, PcdPoints(surface.begin(), surface.begin() + 9)));
+  const auto first = submaps[0].points;
+  const auto second = submaps[1].points;
+  const auto expect_unchanged = [&](const std::string& what) {
+    ASSERT_EQ(submaps.size(), 2u) << what;
+    EXPECT_EQ(submaps[0].points, first) << what;
+    EXPECT_EQ(submaps[1].points, second) << what;
+    EXPECT_EQ(first->covs[0], Eigen::Matrix4d::Identity()) << what;
+  };
+
+  EXPECT_FALSE(recompute_covariances(submaps, kMinPcdKNeighbors - 1, 1));
+  expect_unchanged("k below the minimum");
+  EXPECT_FALSE(recompute_covariances(submaps, 10, 0));
+  expect_unchanged("no threads");
+  // The second submap has 9 points, fewer than k = 10: nothing changes, not even the first submap.
+  EXPECT_FALSE(recompute_covariances(submaps, 10, 1));
+  expect_unchanged("small submap");
+  EXPECT_TRUE(recompute_covariances(submaps, 9, 1));
+  EXPECT_NE(submaps[0].points, first);
+  EXPECT_NE(submaps[1].points, second);
 }

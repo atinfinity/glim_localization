@@ -43,4 +43,13 @@ std::string check_pcd_map_params(const PcdMapParams& params);
 /// On failure, `submaps` is unchanged.
 bool build_pcd_submaps(const PcdPoints& points, const PcdMapParams& params, LoadedSubmaps& submaps);
 
+/// Replace the covariances of every submap with ones estimated from its points the way build_pcd_submaps does
+/// (`gtsam_points::estimate_covariances` with k nearest neighbours). Neighbours are searched within each submap,
+/// in its origin frame; the result equals the world-frame estimate rotated into that frame.
+/// The clouds are copied, so clouds shared elsewhere are not changed. Points and the other attributes (normals,
+/// intensities, times) are kept as they are; normals are not re-estimated, and nothing in this package reads them.
+/// Fails if `k_neighbors` < kMinPcdKNeighbors, `num_threads` < 1, or a submap has fewer than `k_neighbors` points.
+/// On failure, `submaps` is unchanged.
+bool recompute_covariances(LoadedSubmaps& submaps, int k_neighbors, int num_threads);
+
 }  // namespace glim_localization
