@@ -34,6 +34,8 @@ add_library(glim_localization SHARED
   src/glim_localization/map/occupancy_grid.cpp
   src/glim_localization/map/pcd_map.cpp
   src/glim_localization/map/ply_reader.cpp
+  src/glim_localization/map/tile_prefetch.cpp
+  src/glim_localization/map/tile_residency.cpp
   src/glim_localization/odometry/map_factor_builder.cpp
   src/glim_localization/odometry/localization_backend.cpp
   src/glim_localization/odometry/map_initial_state_estimation.cpp
