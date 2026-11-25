@@ -42,9 +42,10 @@ class InputError(Exception):
 ESTIMATE_COLOR = "#1565c0"
 SCAN_COLOR = "#e53935"
 GT_COLOR = "#757575"
-# Near-black: apart from the blue estimate, the red scan, the gray map and ground truth, and the state
-# colors, and kept by the GIF palette (the title text is the same tone)
-POSE_COLOR = "#222222"
+# Okabe-Ito orange: apart from the blue estimate also with color-vision deficiency (green would not be
+# apart from the red scan). The dot has a thin dark edge, which the edgeless scan dots do not.
+POSE_COLOR = "#e69f00"
+POSE_EDGE_COLOR = "#222222"
 
 MAP_COLOR = "#8a8a8a"
 FRAME_COLOR = "#bbbbbb"
@@ -256,7 +257,7 @@ def select_font(family):
 def fixed_colors():
     """The colors that gif_palette puts first, in this order."""
     return [TEXT_COLOR, "#ffffff", MAP_COLOR, FRAME_COLOR, LEGEND_EDGE_COLOR, ESTIMATE_COLOR, SCAN_COLOR, GT_COLOR, POSE_COLOR,
-            *STATE_COLORS.values()]
+            POSE_EDGE_COLOR, *STATE_COLORS.values()]
 
 
 def gif_palette(images, colors):
@@ -352,7 +353,8 @@ def render(args):
         (gt_line,) = axes.plot(gt_xy[:, 0], gt_xy[:, 1], color=GT_COLOR, linewidth=1.0, linestyle=(0, (3, 2)), label="ground truth")
     (est_line,) = axes.plot([], [], color=ESTIMATE_COLOR, linewidth=1.8, label="estimate")
     scan_artist = axes.scatter([], [], s=2.0, c=SCAN_COLOR, linewidths=0, antialiased=False)
-    (pose_marker,) = axes.plot([], [], marker="o", markersize=7, color=POSE_COLOR, markeredgecolor="white", linestyle="none", zorder=5, label="pose")
+    (pose_marker,) = axes.plot([], [], marker="o", markersize=7, color=POSE_COLOR, markeredgecolor=POSE_EDGE_COLOR,
+                                 markeredgewidth=0.8, linestyle="none", zorder=5, label="pose")
     heading = axes.annotate(
         "", xy=(0, 0), xytext=(0, 0), arrowprops={"arrowstyle": "-|>", "color": POSE_COLOR, "linewidth": 1.8}, zorder=5)
     # Proxy handles: the scan dots are tiny on the plot but need a visible legend marker

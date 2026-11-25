@@ -191,7 +191,7 @@ def test_palette_starts_with_the_exact_drawing_colors():
     images = [Image.new("RGB", (8, 8), "#808080") for _ in range(3)]
     palette = render_demo.gif_palette(images, 256).getpalette()
     fixed = render_demo.fixed_colors()
-    assert {"#000000", "#ffffff", render_demo.POSE_COLOR, render_demo.SCAN_COLOR, render_demo.ESTIMATE_COLOR} <= set(fixed)
+    assert {"#000000", "#ffffff", render_demo.POSE_COLOR, render_demo.POSE_EDGE_COLOR, render_demo.SCAN_COLOR, render_demo.ESTIMATE_COLOR} <= set(fixed)
     assert set(render_demo.STATE_COLORS.values()) <= set(fixed)
     expected = [int(color[k:k + 2], 16) for color in fixed for k in (1, 3, 5)]
     assert palette[: len(expected)] == expected
