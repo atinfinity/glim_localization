@@ -30,6 +30,8 @@ struct TileStreamerStats {
   size_t prefetch_waits = 0;    ///< acquire() waited for a prefetch that was already running
   size_t evictions = 0;         ///< Resident tiles dropped to stay within the budget
   size_t over_budget = 0;       ///< acquire() calls whose own tiles did not fit in the budget
+  size_t prefetch_failures = 0;  ///< Background uploads that failed and were dropped
+  size_t prefetch_cancels = 0;   ///< Queued prefetches cancelled to make room for the tiles acquire() needs
   size_t peak_bytes = 0;        ///< Most bytes held at once (resident and in flight)
 };
 
@@ -44,8 +46,13 @@ struct TileStreamerStats {
 ///   thread if it fits in the budget after evicting least recently used tiles that are neither kept by acquire() nor
 ///   earlier in the list; the first one that does not fit ends the call. It never blocks on an upload.
 ///
+/// A prefetch is speculative, so a failed background upload is not an error: the tile is dropped, counted in
+/// stats().prefetch_failures and reported to the optional failure callback (on the caller thread). If a frame needs
+/// that tile, acquire() uploads it in the foreground, and only a failure there throws. When queued prefetches fill
+/// the budget, acquire() cancels the queued ones its frame does not need to make room for the frame's tiles.
+///
 /// An evicted payload is only dropped from the streamer: whoever still holds it (factors in the smoother) keeps it
-/// alive. A failed background upload is rethrown by the next acquire(), prefetch() or poll() on the caller thread.
+/// alive.
 /// Tiles are keyed by id; a different tile object with a known id (another map) replaces the old one.
 /// All methods must be called from one thread; only `upload` also runs on the background thread.
 template <typename Payload>
@@ -62,12 +69,15 @@ public:
   using UploadFn = std::function<Upload(const MapTile::ConstPtr&, Context)>;
   /// Device bytes a tile will take, before it is uploaded. Caller thread only.
   using EstimateFn = std::function<size_t(const MapTile&)>;
+  /// Called on the caller thread with the id and the error of a background upload that failed (optional)
+  using FailureFn = std::function<void(int, std::exception_ptr)>;
 
   /// @throw std::invalid_argument for an invalid budget or a missing function
-  TileStreamer(const TileBudget& budget, UploadFn upload, EstimateFn estimate)
+  TileStreamer(const TileBudget& budget, UploadFn upload, EstimateFn estimate, FailureFn on_prefetch_failure = nullptr)
   : residency_(budget),
     upload_(std::move(upload)),
-    estimate_(std::move(estimate)) {
+    estimate_(std::move(estimate)),
+    on_prefetch_failure_(std::move(on_prefetch_failure)) {
     if (!upload_ || !estimate_) {
       throw std::invalid_argument("the tile streamer needs an upload and an estimate function");
     }
@@ -89,6 +99,7 @@ public:
   TileStreamer& operator=(const TileStreamer&) = delete;
 
   /// The device copies of `tiles`, in the same order. Blocks only for tiles that are not resident.
+  /// @throw whatever `upload` threw for a tile uploaded here (in the foreground)
   std::vector<PayloadPtr> acquire(const std::vector<MapTile::ConstPtr>& tiles) {
     poll();
     std::unordered_set<int> keep;
@@ -144,15 +155,16 @@ public:
     return queued;
   }
 
-  /// Make finished background uploads resident (most recently used), then trim to the budget.
-  /// @throw whatever a failed background upload threw; the tile is forgotten first
+  /// Make finished background uploads resident (most recently used) and drop failed ones, then trim to the budget.
   void poll() {
-    for (auto it = slots_.begin(); it != slots_.end(); ++it) {
-      auto& slot = it->second;
-      if (!slot.pending.valid() || slot.pending.wait_for(std::chrono::seconds(0)) != std::future_status::ready) {
-        continue;
+    std::vector<int> ready;
+    for (const auto& [id, slot] : slots_) {
+      if (slot.pending.valid() && slot.pending.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+        ready.push_back(id);
       }
-      finish_pending(it->first, slot);
+    }
+    for (const int id : ready) {
+      finish_pending(id, slots_.at(id));
     }
     evict(residency_.plan_trim(pinned_));
   }
@@ -212,16 +224,25 @@ private:
       if (!cancel_queued(tile->id)) {
         stats_.prefetch_waits++;
         found->second.pending.wait();
-        finish_pending(tile->id, found->second);
-        return found->second.payload;
+        if (finish_pending(tile->id, found->second)) {
+          return found->second.payload;
+        }
+        // The prefetch failed and was dropped: the frame needs the tile, so upload it here
+      } else {
+        // Not started yet: upload it here instead of waiting behind the rest of the queue
+        residency_.erase(tile->id);
+        slots_.erase(found);
       }
-      // Not started yet: upload it here instead of waiting behind the rest of the queue
-      residency_.erase(tile->id);
-      slots_.erase(found);
     }
 
     stats_.misses++;
-    if (const auto victims = residency_.plan_eviction(estimate_(*tile), keep)) {
+    const size_t estimate = estimate_(*tile);
+    auto victims = residency_.plan_eviction(estimate, keep);
+    if (!victims && cancel_queued_except(keep)) {
+      // Queued prefetches held the room (they are never evicted): retry without the ones this frame does not need
+      victims = residency_.plan_eviction(estimate, keep);
+    }
+    if (victims) {
       evict(*victims);
     }
     Upload upload = upload_(tile, Context::Foreground);
@@ -235,15 +256,21 @@ private:
     return upload.payload;
   }
 
-  /// A background upload is ready: make it resident, or forget it and rethrow its failure.
-  void finish_pending(int id, Slot& slot) {
+  /// A background upload is ready: make it resident, or drop it if it failed (it was only speculative).
+  /// @return true if the tile is resident; false if it failed and was forgotten (`slot` is then gone)
+  bool finish_pending(int id, Slot& slot) {
     Upload upload;
     try {
       upload = slot.pending.get();
     } catch (...) {
+      const std::exception_ptr error = std::current_exception();
       residency_.erase(id);
       slots_.erase(id);
-      throw;
+      stats_.prefetch_failures++;
+      if (on_prefetch_failure_) {
+        on_prefetch_failure_(id, error);
+      }
+      return false;
     }
     slot.pending = std::shared_future<Upload>();
     slot.payload = upload.payload;
@@ -251,6 +278,7 @@ private:
     stats_.uploads++;
     stats_.prefetch_uploads++;
     note_peak();
+    return true;
   }
 
   void drop_slot(typename std::unordered_map<int, Slot>::iterator it) {
@@ -291,6 +319,28 @@ private:
     }
     queue_.erase(found);
     return true;
+  }
+
+  /// Cancel the queued jobs of tiles not in `keep` and forget those tiles. @return true if any was cancelled
+  bool cancel_queued_except(const std::unordered_set<int>& keep) {
+    std::vector<int> cancelled;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      for (auto it = queue_.begin(); it != queue_.end();) {
+        if (keep.count((*it)->tile->id)) {
+          ++it;
+          continue;
+        }
+        cancelled.push_back((*it)->tile->id);
+        it = queue_.erase(it);  // Its promise is dropped unfulfilled; its slot is erased below, so nobody waits
+      }
+    }
+    for (const int id : cancelled) {
+      residency_.erase(id);
+      slots_.erase(id);
+      stats_.prefetch_cancels++;
+    }
+    return !cancelled.empty();
   }
 
   /// Cancel every queued job, wait for the running one, and forget all in-flight tiles.
@@ -334,6 +384,7 @@ private:
   TileResidency residency_;
   UploadFn upload_;
   EstimateFn estimate_;
+  FailureFn on_prefetch_failure_;
   std::unordered_map<int, Slot> slots_;
   std::unordered_set<int> pinned_;  ///< Tiles of the last acquire()
   TileStreamerStats stats_;
