@@ -1,15 +1,24 @@
-// GyroBuffer pairs a frame with the gyro sample of its stamp, and refuses a sample that is too far away.
+// Copyright (c) 2026 atinfinity
+//
+// Use of this source code is governed by an MIT-style
+// license that can be found in the LICENSE file or at
+// https://opensource.org/licenses/MIT.
+
+// GyroBuffer pairs a frame with the gyro sample of its stamp, and refuses a sample that is too far
+// away.
 #include <gtest/gtest.h>
 
 #include <cmath>
 
-#include <glim_localization_ros2/gyro_buffer.hpp>
+#include "glim_localization_ros2/gyro_buffer.hpp"
 
 using glim_localization_ros2::GyroBuffer;
 
-namespace {
+namespace
+{
 // 200 Hz samples from t0 for n samples; the gyro x value is the sample index.
-GyroBuffer filled(double t0, int n) {
+GyroBuffer filled(double t0, int n)
+{
   GyroBuffer buffer;
   for (int i = 0; i < n; i++) {
     buffer.add(t0 + i * 0.005, Eigen::Vector3d(i, 0.0, 0.0));
@@ -37,12 +46,14 @@ TEST(GyroBuffer, EmptyOrNonFiniteStampGivesNothing) {
   EXPECT_FALSE(buffer.nearest(std::nan(""), g));
 }
 
-// The window is counted back from the newest sample. A frame that the odometry handles late finds only samples far from
-// its stamp, and must not get one of them.
+// The window is counted back from the newest sample. A frame that the odometry handles late finds
+// only samples far from its stamp, and must not get one of them.
 TEST(GyroBuffer, RejectsAFrameFarFromEverySample) {
-  const GyroBuffer buffer = filled(10.0, 400);  // 10.000 to 11.995; the window keeps 10.995 and later
+  // 10.000 to 11.995; the window keeps 10.995 and later
+  const GyroBuffer buffer = filled(10.0, 400);
   Eigen::Vector3d g;
-  EXPECT_FALSE(buffer.nearest(10.2, g));  // lags by about 0.8 s: the nearest kept sample is 0.8 s away
+  // lags by about 0.8 s: the nearest kept sample is 0.8 s away
+  EXPECT_FALSE(buffer.nearest(10.2, g));
   EXPECT_FALSE(buffer.nearest(12.5, g));  // ahead of the newest sample
   ASSERT_TRUE(buffer.nearest(11.9, g));
   EXPECT_DOUBLE_EQ(g.x(), 380.0);

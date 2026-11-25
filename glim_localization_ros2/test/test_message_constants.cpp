@@ -1,11 +1,18 @@
-// The core does not include the ROS messages, so its enum values are copies of the message constants.
-// Pin them here, where both are visible.
+// Copyright (c) 2026 atinfinity
+//
+// Use of this source code is governed by an MIT-style
+// license that can be found in the LICENSE file or at
+// https://opensource.org/licenses/MIT.
+
+// The core does not include the ROS messages, so its enum values are copies of the message
+// constants. Pin them here, where both are visible.
 #include <gtest/gtest.h>
 
-#include <glim_localization/odometry/odometry_estimation_localization.hpp>
-#include <glim_localization_msgs/msg/localization_status.hpp>
+#include "glim_localization/odometry/odometry_estimation_localization.hpp"
+#include "glim_localization_msgs/msg/localization_status.hpp"
 
-namespace {
+namespace
+{
 using glim_localization::InitSearchReason;
 using glim_localization::InitSearchResult;
 using glim_localization::LocalizationState;

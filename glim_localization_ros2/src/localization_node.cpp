@@ -1,21 +1,29 @@
 // Derived from koide3/glim_ros2 src/glim_ros/glim_ros.cpp at commit 4d4ec524ccf1b02aa09b0af2af767ecc54343798 (MIT License, Copyright (c) 2024 koide3)
 // Derived from koide3/glim_ros2 src/glim_ros/ros_qos.cpp at commit 4d4ec524ccf1b02aa09b0af2af767ecc54343798 (MIT License, Copyright (c) 2024 koide3)
 //
+// Copyright (c) 2026 atinfinity
+//
+// Use of this source code is governed by an MIT-style
+// license that can be found in the LICENSE file or at
+// https://opensource.org/licenses/MIT.
+//
 // R2: glim_localization_node, an rclcpp_lifecycle node (also a component).
 //
-//   configure   reads the GLIM JSON config (config_path), loads the map (map_path) and publishes it on ~/map (latched);
-//               a bad map fails the transition
-//   activate    creates the odometry, the publisher and the subscriptions; estimation starts with the first data
+//   configure   reads the GLIM JSON config (config_path), loads the map (map_path) and publishes
+//               it on ~/map (latched); a bad map fails the transition
+//   activate    creates the odometry, the publisher and the subscriptions; estimation starts with
+//               the first data
 //   deactivate  drops the subscriptions and stops the odometry thread (pending input is discarded)
 //   cleanup     releases the map and the config
 //
-// The input handling (IMU and point cloud conversion, TimeKeeper, the QoS settings in config_ros.json) follows GlimROS.
-// Unlike GlimROS, the node holds the odometry module itself (no dlopen), so ~/initialize, ~/relocalize and /initialpose
-// call its reset() directly. Results go through EstimateBridge and LocalizationPublisher, as in R1.
+// The input handling (IMU and point cloud conversion, TimeKeeper, the QoS settings in
+// config_ros.json) follows GlimROS. Unlike GlimROS, the node holds the odometry module itself (no
+// dlopen), so ~/initialize, ~/relocalize and /initialpose call its reset() directly. Results go
+// through EstimateBridge and LocalizationPublisher, as in R1.
 //
-// With autostart:=true the node configures and activates itself once it is spinning (for launch files, also when it is
-// loaded as a component, where launch_ros cannot drive the lifecycle). A failed transition is logged and leaves the node
-// where it stopped; drive it by hand from there.
+// With autostart:=true the node configures and activates itself once it is spinning (for launch
+// files, also when it is loaded as a component, where launch_ros cannot drive the lifecycle). A
+// failed transition is logged and leaves the node where it stopped; drive it by hand from there.
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -27,37 +35,39 @@
 #include <string>
 #include <vector>
 
-#include <Eigen/Geometry>
+#include "Eigen/Geometry"
 
-#include <ament_index_cpp/get_package_share_directory.hpp>
-#include <geometry_msgs/msg/pose_with_covariance_stamped.hpp>
-#include <rclcpp/rclcpp.hpp>
-#include <rclcpp_components/register_node_macro.hpp>
-#include <lifecycle_msgs/msg/state.hpp>
-#include <rclcpp_lifecycle/lifecycle_node.hpp>
-#include <sensor_msgs/msg/imu.hpp>
-#include <sensor_msgs/msg/point_cloud2.hpp>
-#include <std_srvs/srv/trigger.hpp>
+#include "ament_index_cpp/get_package_share_directory.hpp"
+#include "geometry_msgs/msg/pose_with_covariance_stamped.hpp"
+#include "rclcpp/rclcpp.hpp"
+#include "rclcpp_components/register_node_macro.hpp"
+#include "lifecycle_msgs/msg/state.hpp"
+#include "rclcpp_lifecycle/lifecycle_node.hpp"
+#include "sensor_msgs/msg/imu.hpp"
+#include "sensor_msgs/msg/point_cloud2.hpp"
+#include "std_srvs/srv/trigger.hpp"
 
 #define GLIM_ROS2  // selects the ROS 2 message types in ros_cloud_converter.hpp
-#include <glim/odometry/async_odometry_estimation.hpp>
-#include <glim/preprocess/cloud_preprocessor.hpp>
-#include <glim/util/config.hpp>
-#include <glim/util/ros_cloud_converter.hpp>
-#include <glim/util/time_keeper.hpp>
+#include "glim/odometry/async_odometry_estimation.hpp"
+#include "glim/preprocess/cloud_preprocessor.hpp"
+#include "glim/util/config.hpp"
+#include "glim/util/ros_cloud_converter.hpp"
+#include "glim/util/time_keeper.hpp"
 
-#include <glim_localization/map/map_manager.hpp>
-#include <glim_localization/odometry/localization_backend.hpp>
-#include <glim_localization/odometry/odometry_estimation_localization.hpp>
-#include <glim_localization_msgs/srv/initialize.hpp>
-#include <glim_localization_ros2/estimate_bridge.hpp>
-#include <glim_localization_ros2/init_pose_delay.hpp>
-#include <glim_localization_ros2/localization_publisher.hpp>
-#include <glim_localization_ros2/map_publisher.hpp>
+#include "glim_localization/map/map_manager.hpp"
+#include "glim_localization/odometry/localization_backend.hpp"
+#include "glim_localization/odometry/odometry_estimation_localization.hpp"
+#include "glim_localization_msgs/srv/initialize.hpp"
+#include "glim_localization_ros2/estimate_bridge.hpp"
+#include "glim_localization_ros2/init_pose_delay.hpp"
+#include "glim_localization_ros2/localization_publisher.hpp"
+#include "glim_localization_ros2/map_publisher.hpp"
 
-namespace glim_localization_ros2 {
+namespace glim_localization_ros2
+{
 
-namespace {
+namespace
+{
 
 using CallbackReturn = rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn;
 using PoseMsg = geometry_msgs::msg::PoseWithCovarianceStamped;
@@ -67,7 +77,8 @@ using InitializeSrv = glim_localization_msgs::srv::Initialize;
 using TriggerSrv = std_srvs::srv::Trigger;
 using OdometryParams = glim_localization::OdometryEstimationLocalizationParams;
 
-bool init_qos_profile(const std::string& name, rmw_qos_profile_t& profile) {
+bool init_qos_profile(const std::string & name, rmw_qos_profile_t & profile)
+{
   if (name == "default") {
     profile = rmw_qos_profile_default;
   } else if (name == "system_default") {
@@ -87,16 +98,21 @@ bool init_qos_profile(const std::string& name, rmw_qos_profile_t& profile) {
   return true;
 }
 
-/// The QoS of glim_ros.<param_name> in config_ros.json ({profile, depth, durability, reliability, history}), as GlimROS
-/// reads it: the profile defaults to sensor_data, and default_qos is used when nothing is configured.
-rclcpp::QoS read_qos(const glim::Config& config, const std::string& param_name, const rclcpp::Logger& logger, const std::optional<rclcpp::QoS>& default_qos = {}) {
+/// The QoS of glim_ros.<param_name> in config_ros.json ({profile, depth, durability, reliability,
+/// history}), as GlimROS reads it: the profile defaults to sensor_data, and default_qos is used
+/// when nothing is configured.
+rclcpp::QoS read_qos(
+  const glim::Config & config, const std::string & param_name,
+  const rclcpp::Logger & logger, const std::optional<rclcpp::QoS> & default_qos = {})
+{
   const std::vector<std::string> path = {"glim_ros", param_name};
   bool configured = false;
   rmw_qos_profile_t profile;
   const auto profile_name = config.param_nested<std::string>(path, "profile");
   configured |= profile_name.has_value();
   if (!init_qos_profile(profile_name.value_or("sensor_data"), profile)) {
-    RCLCPP_WARN(logger, "unknown QoS profile '%s' for %s, falling back to 'default'", profile_name->c_str(), param_name.c_str());
+    RCLCPP_WARN(logger, "unknown QoS profile '%s' for %s, falling back to 'default'",
+          profile_name->c_str(), param_name.c_str());
   }
   if (const auto depth = config.param_nested<int>(path, "depth")) {
     profile.depth = *depth;
@@ -105,7 +121,8 @@ rclcpp::QoS read_qos(const glim::Config& config, const std::string& param_name, 
   if (const auto str = config.param_nested<std::string>(path, "durability")) {
     const auto value = rmw_qos_durability_policy_from_str(str->c_str());
     if (value == RMW_QOS_POLICY_DURABILITY_UNKNOWN) {
-      RCLCPP_WARN(logger, "ignoring unknown durability policy '%s' for %s", str->c_str(), param_name.c_str());
+      RCLCPP_WARN(logger, "ignoring unknown durability policy '%s' for %s", str->c_str(),
+            param_name.c_str());
     } else {
       profile.durability = value;
       configured = true;
@@ -114,7 +131,8 @@ rclcpp::QoS read_qos(const glim::Config& config, const std::string& param_name, 
   if (const auto str = config.param_nested<std::string>(path, "reliability")) {
     const auto value = rmw_qos_reliability_policy_from_str(str->c_str());
     if (value == RMW_QOS_POLICY_RELIABILITY_UNKNOWN) {
-      RCLCPP_WARN(logger, "ignoring unknown reliability policy '%s' for %s", str->c_str(), param_name.c_str());
+      RCLCPP_WARN(logger, "ignoring unknown reliability policy '%s' for %s", str->c_str(),
+            param_name.c_str());
     } else {
       profile.reliability = value;
       configured = true;
@@ -123,7 +141,8 @@ rclcpp::QoS read_qos(const glim::Config& config, const std::string& param_name, 
   if (const auto str = config.param_nested<std::string>(path, "history")) {
     const auto value = rmw_qos_history_policy_from_str(str->c_str());
     if (value == RMW_QOS_POLICY_HISTORY_UNKNOWN) {
-      RCLCPP_WARN(logger, "ignoring unknown history policy '%s' for %s", str->c_str(), param_name.c_str());
+      RCLCPP_WARN(logger, "ignoring unknown history policy '%s' for %s", str->c_str(),
+            param_name.c_str());
     } else {
       profile.history = value;
       configured = true;
@@ -136,7 +155,8 @@ rclcpp::QoS read_qos(const glim::Config& config, const std::string& param_name, 
 }
 
 /// Input settings from the glim_ros section of config_ros.json (the same keys as GlimROS)
-struct InputSettings {
+struct InputSettings
+{
   std::string imu_topic;
   std::string points_topic;
   double imu_time_offset = 0.0;
@@ -151,30 +171,36 @@ struct InputSettings {
 
 class LocalizationNode : public rclcpp_lifecycle::LifecycleNode {
 public:
-  explicit LocalizationNode(const rclcpp::NodeOptions& options) : rclcpp_lifecycle::LifecycleNode("glim_localization", options), bridge_(std::make_shared<EstimateBridge>()) {
+  explicit LocalizationNode(const rclcpp::NodeOptions & options)
+  : rclcpp_lifecycle::LifecycleNode("glim_localization", options),
+    bridge_(std::make_shared<EstimateBridge>())
+  {
     declare_parameter<std::string>("config_path", "config/r2");
     declare_parameter<std::string>("map_path", "");
     declare_parameter<double>("max_init_pose_delay", 0.2);
     if (declare_parameter<bool>("autostart", false)) {
       // One shot, from the executor: the transitions must not run inside the constructor
-      autostart_timer_ = create_wall_timer(std::chrono::milliseconds(0), [this] { autostart(); });
+      autostart_timer_ = create_wall_timer(std::chrono::milliseconds(0), [this] {autostart();});
     }
-    // The core reports through static slots: connect once, before any odometry of this node starts (see EstimateBridge)
+    // The core reports through static slots: connect once, before any odometry of this node starts
+    // (see EstimateBridge)
     EstimateBridge::connect(bridge_);
   }
 
-  ~LocalizationNode() override {
+  ~LocalizationNode() override
+  {
     stop();
     release();
   }
 
-  CallbackReturn on_configure(const rclcpp_lifecycle::State&) override {
+  CallbackReturn on_configure(const rclcpp_lifecycle::State &) override
+  {
     try {
       if (!configure()) {
         release();
         return CallbackReturn::FAILURE;
       }
-    } catch (const std::exception& e) {
+    } catch (const std::exception & e) {
       RCLCPP_ERROR(get_logger(), "configure failed: %s", e.what());
       release();
       return CallbackReturn::FAILURE;
@@ -182,58 +208,73 @@ public:
     return CallbackReturn::SUCCESS;
   }
 
-  CallbackReturn on_activate(const rclcpp_lifecycle::State&) override {
+  CallbackReturn on_activate(const rclcpp_lifecycle::State &) override
+  {
     try {
       activate();
-    } catch (const std::exception& e) {
+    } catch (const std::exception & e) {
       RCLCPP_ERROR(get_logger(), "activate failed: %s", e.what());
       stop();
       return CallbackReturn::FAILURE;
     }
-    RCLCPP_INFO(get_logger(), "active: waiting for %s and %s", input_.imu_topic.c_str(), input_.points_topic.c_str());
+    RCLCPP_INFO(get_logger(), "active: waiting for %s and %s", input_.imu_topic.c_str(),
+        input_.points_topic.c_str());
     return CallbackReturn::SUCCESS;
   }
 
-  CallbackReturn on_deactivate(const rclcpp_lifecycle::State&) override {
+  CallbackReturn on_deactivate(const rclcpp_lifecycle::State &) override
+  {
     stop();
     RCLCPP_INFO(get_logger(), "inactive");
     return CallbackReturn::SUCCESS;
   }
 
-  CallbackReturn on_cleanup(const rclcpp_lifecycle::State&) override {
+  CallbackReturn on_cleanup(const rclcpp_lifecycle::State &) override
+  {
     release();
     RCLCPP_INFO(get_logger(), "unconfigured");
     return CallbackReturn::SUCCESS;
   }
 
-  CallbackReturn on_shutdown(const rclcpp_lifecycle::State&) override {
+  CallbackReturn on_shutdown(const rclcpp_lifecycle::State &) override
+  {
     stop();
     release();
     return CallbackReturn::SUCCESS;
   }
 
 private:
-  void autostart() {
+  void autostart()
+  {
     autostart_timer_->cancel();
     // Someone may have changed the state before the timer fired: then leave the node to them
-    const auto& start = get_current_state();
+    const auto & start = get_current_state();
     if (start.id() != lifecycle_msgs::msg::State::PRIMARY_STATE_UNCONFIGURED) {
-      RCLCPP_INFO(get_logger(), "autostart: skipped, the node is already %s", start.label().c_str());
+      RCLCPP_INFO(get_logger(), "autostart: skipped, the node is already %s",
+          start.label().c_str());
       return;
     }
-    if (rclcpp_lifecycle::LifecycleNode::configure().id() != lifecycle_msgs::msg::State::PRIMARY_STATE_INACTIVE) {
-      RCLCPP_ERROR(get_logger(), "autostart: configure failed; the node is %s", get_current_state().label().c_str());
+    if (rclcpp_lifecycle::LifecycleNode::configure().id() !=
+      lifecycle_msgs::msg::State::PRIMARY_STATE_INACTIVE)
+    {
+      RCLCPP_ERROR(get_logger(), "autostart: configure failed; the node is %s",
+          get_current_state().label().c_str());
       return;
     }
-    if (rclcpp_lifecycle::LifecycleNode::activate().id() != lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE) {
-      RCLCPP_ERROR(get_logger(), "autostart: activate failed; the node is %s", get_current_state().label().c_str());
+    if (rclcpp_lifecycle::LifecycleNode::activate().id() !=
+      lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE)
+    {
+      RCLCPP_ERROR(get_logger(), "autostart: activate failed; the node is %s",
+          get_current_state().label().c_str());
     }
   }
 
-  bool configure() {
+  bool configure()
+  {
     std::string config_path = get_parameter("config_path").as_string();
     if (config_path.empty() || config_path[0] != '/') {
-      config_path = ament_index_cpp::get_package_share_directory("glim_localization_ros2") + "/" + config_path;
+      config_path = ament_index_cpp::get_package_share_directory("glim_localization_ros2") + "/" +
+        config_path;
     }
     if (!std::filesystem::is_regular_file(config_path + "/config.json")) {
       RCLCPP_ERROR(get_logger(), "config_path '%s' has no config.json", config_path.c_str());
@@ -245,7 +286,8 @@ private:
       return false;
     }
 
-    // GLIM reads its settings from the process-wide GlobalConfig; replace it so that a new configure sees new files
+    // GLIM reads its settings from the process-wide GlobalConfig; replace it so that a new
+    // configure sees new files
     glim::GlobalConfig::instance(config_path, true);
     RCLCPP_INFO(get_logger(), "config_path: %s", config_path.c_str());
     const glim::Config config_ros(glim::GlobalConfig::get_config_path("config_ros"));
@@ -258,10 +300,12 @@ private:
     input_.points_time_offset = config_ros.param<double>("glim_ros", "points_time_offset", 0.0);
     input_.acc_scale = config_ros.param<double>("glim_ros", "acc_scale", 0.0);
     input_.ang_scale = config_ros.param<double>("glim_ros", "ang_scale", 1.0);
-    input_.intensity_field = config_sensors.param<std::string>("sensors", "intensity_field", "intensity");
+    input_.intensity_field = config_sensors.param<std::string>("sensors", "intensity_field",
+        "intensity");
     input_.ring_field = config_sensors.param<std::string>("sensors", "ring_field", "");
     if (input_.imu_topic.empty() || input_.points_topic.empty()) {
-      RCLCPP_ERROR(get_logger(), "glim_ros.imu_topic and glim_ros.points_topic must be set in config_ros.json");
+      RCLCPP_ERROR(get_logger(),
+          "glim_ros.imu_topic and glim_ros.points_topic must be set in config_ros.json");
       return false;
     }
 
@@ -276,8 +320,9 @@ private:
     try {
       const auto backend = glim_localization::localization_backend_from_config();
       odometry_params_ = glim_localization::make_localization_params(backend);
-      RCLCPP_INFO(get_logger(), "odometry backend: %s", glim_localization::to_string(backend).c_str());
-    } catch (const std::exception& e) {
+      RCLCPP_INFO(get_logger(), "odometry backend: %s",
+          glim_localization::to_string(backend).c_str());
+    } catch (const std::exception & e) {
       RCLCPP_ERROR(get_logger(), "%s", e.what());
       return false;
     }
@@ -286,7 +331,8 @@ private:
       odometry_params_->map_path = map_path;
     }
     if (odometry_params_->map_path.empty()) {
-      RCLCPP_ERROR(get_logger(), "no map: set the map_path parameter or odometry_estimation.map_path");
+      RCLCPP_ERROR(get_logger(),
+          "no map: set the map_path parameter or odometry_estimation.map_path");
       return false;
     }
     glim_localization::MapManagerParams map_params;
@@ -297,32 +343,44 @@ private:
       return false;
     }
     map_ = map;
-    RCLCPP_INFO(get_logger(), "loaded the map '%s' (%zu tiles)", odometry_params_->map_path.c_str(), map_->size());
+    RCLCPP_INFO(get_logger(), "loaded the map '%s' (%zu tiles)", odometry_params_->map_path.c_str(),
+        map_->size());
     if (map_publisher_params.enabled) {
       const auto tiles = map_->tiles();
       const size_t num_map_points = count_map_points(tiles);
       if (map_publisher_params.voxel_size <= 0.0 && num_map_points > kLargeMapCloudPoints) {
         RCLCPP_WARN(
-          get_logger(), "map_cloud_voxel is 0 and the map has %zu points: ~/map is large and slow to build and send; set map_cloud_voxel",
+          get_logger(),
+          "map_cloud_voxel is 0 and the map has %zu points: "
+          "~/map is large and slow to build and send; set map_cloud_voxel",
           num_map_points);
       }
-      map_publisher_ = std::make_unique<MapPublisher>(get_node_topics_interface(), get_clock(), publisher_params_.map_frame, map_publisher_params.voxel_size);
+      map_publisher_ = std::make_unique<MapPublisher>(get_node_topics_interface(), get_clock(),
+          publisher_params_.map_frame, map_publisher_params.voxel_size);
       try {
         const size_t num_points = map_publisher_->publish(tiles);
-        RCLCPP_INFO(get_logger(), "published ~/map: %zu points (voxel %.3f m)", num_points, map_publisher_params.voxel_size);
-      } catch (const std::length_error& e) {
+        RCLCPP_INFO(get_logger(), "published ~/map: %zu points (voxel %.3f m)", num_points,
+            map_publisher_params.voxel_size);
+      } catch (const std::length_error & e) {
         RCLCPP_WARN(get_logger(), "~/map is not published: %s", e.what());
       }
     }
 
     initialize_srv_ = create_service<InitializeSrv>(
-      "~/initialize", [this](const std::shared_ptr<InitializeSrv::Request> req, std::shared_ptr<InitializeSrv::Response> res) { on_initialize(*req, *res); });
+      "~/initialize",
+      [this](const std::shared_ptr<InitializeSrv::Request> req,
+      std::shared_ptr<InitializeSrv::Response> res) {on_initialize(*req, *res);});
     relocalize_srv_ = create_service<TriggerSrv>(
-      "~/relocalize", [this](const std::shared_ptr<TriggerSrv::Request>, std::shared_ptr<TriggerSrv::Response> res) { on_relocalize(*res); });
+      "~/relocalize",
+      [this](const std::shared_ptr<TriggerSrv::Request>,
+      std::shared_ptr<TriggerSrv::Response> res) {
+        on_relocalize(*res);
+      });
     return true;
   }
 
-  void activate() {
+  void activate()
+  {
     // TimeKeeper and the acceleration unit keep state of the stream: start them afresh
     time_keeper_ = std::make_unique<glim::TimeKeeper>();
     preprocessor_ = std::make_unique<glim::CloudPreprocessor>();
@@ -335,57 +393,73 @@ private:
     bridge_->attach(
       std::make_unique<LocalizationPublisher>(
         LocalizationPublisher::NodeInterfaces(
-          get_node_base_interface(), get_node_clock_interface(), get_node_logging_interface(), get_node_parameters_interface(), get_node_topics_interface()),
+          get_node_base_interface(), get_node_clock_interface(), get_node_logging_interface(),
+        get_node_parameters_interface(), get_node_topics_interface()),
         publisher_params_),
       publisher_params_);
-    async_odometry_ = std::make_unique<glim::AsyncOdometryEstimation>(odometry_, odometry_->requires_imu());
+    async_odometry_ = std::make_unique<glim::AsyncOdometryEstimation>(odometry_,
+        odometry_->requires_imu());
 
-    imu_sub_ = subscribe<ImuMsg>(input_.imu_topic, *imu_qos_, [this](const ImuMsg::ConstSharedPtr msg) { on_imu(*msg); });
-    points_sub_ = subscribe<PointsMsg>(input_.points_topic, *points_qos_, [this](const PointsMsg::ConstSharedPtr msg) { on_points(*msg); });
-    initial_pose_sub_ = subscribe<PoseMsg>("/initialpose", rclcpp::QoS(10), [this](const PoseMsg::ConstSharedPtr msg) { on_initial_pose(*msg); });
-    // AsyncOdometryEstimation also queues its results for get_results(); the node publishes from the callbacks, so drop them
+    imu_sub_ = subscribe<ImuMsg>(input_.imu_topic, *imu_qos_,
+        [this](const ImuMsg::ConstSharedPtr msg) {on_imu(*msg);});
+    points_sub_ = subscribe<PointsMsg>(input_.points_topic, *points_qos_,
+        [this](const PointsMsg::ConstSharedPtr msg) {on_points(*msg);});
+    initial_pose_sub_ = subscribe<PoseMsg>("/initialpose", rclcpp::QoS(10),
+        [this](const PoseMsg::ConstSharedPtr msg) {on_initial_pose(*msg);});
+    // AsyncOdometryEstimation also queues its results for get_results(); the node publishes from
+    // the callbacks, so drop them
     drain_timer_ = create_wall_timer(std::chrono::milliseconds(100), [this] {
-      std::vector<glim::EstimationFrame::ConstPtr> results, marginalized;
-      if (async_odometry_) {
-        async_odometry_->get_results(results, marginalized);
-      }
+          std::vector<glim::EstimationFrame::ConstPtr> results, marginalized;
+          if (async_odometry_) {
+            async_odometry_->get_results(results, marginalized);
+          }
     });
   }
 
-  /// A subscription that logs each change of its matched publishers. A message sent before its publisher is matched is
-  /// lost (volatile), so "matched publishers on <topic>: N" tells whether a sender is connected yet; the launch tests
-  /// wait for it before playing a bag. Without matched events in the RMW, a plain subscription.
-  template <typename MsgT, typename CallbackT>
-  typename rclcpp::Subscription<MsgT>::SharedPtr subscribe(const std::string& topic, const rclcpp::QoS& qos, CallbackT&& callback) {
+  /// A subscription that logs each change of its matched publishers. A message sent before its
+  /// publisher is matched is lost (volatile), so "matched publishers on <topic>: N" tells whether a
+  /// sender is connected yet; the launch tests wait for it before playing a bag. Without matched
+  /// events in the RMW, a plain subscription.
+  template<typename MsgT, typename CallbackT>
+  typename rclcpp::Subscription<MsgT>::SharedPtr subscribe(
+    const std::string & topic,
+    const rclcpp::QoS & qos, CallbackT && callback)
+  {
     rclcpp::SubscriptionOptions options;
-    options.event_callbacks.matched_callback = [logger = get_logger(), topic](const rclcpp::MatchedInfo& info) {
-      RCLCPP_INFO(logger, "matched publishers on %s: %zu", topic.c_str(), info.current_count);
-    };
+    options.event_callbacks.matched_callback = [logger = get_logger(),
+        topic](const rclcpp::MatchedInfo & info) {
+        RCLCPP_INFO(logger, "matched publishers on %s: %zu", topic.c_str(), info.current_count);
+      };
     try {
       return create_subscription<MsgT>(topic, qos, callback, options);
-    } catch (const rclcpp::UnsupportedEventTypeException&) {
-      RCLCPP_INFO(get_logger(), "matched events not supported on %s by this RMW; matched publishers are not logged", topic.c_str());
+    } catch (const rclcpp::UnsupportedEventTypeException &) {
+      RCLCPP_INFO(get_logger(),
+          "matched events not supported on %s by this RMW; matched publishers are not logged",
+          topic.c_str());
       return create_subscription<MsgT>(topic, qos, std::forward<CallbackT>(callback));
     }
   }
 
   /// Stop estimation. Idempotent.
-  void stop() {
+  void stop()
+  {
     drain_timer_.reset();
     initial_pose_sub_.reset();
     points_sub_.reset();
     imu_sub_.reset();
-    async_odometry_.reset();  // stops and joins the odometry thread, so no callback comes after this
+    // stops and joins the odometry thread, so no callback comes after this
+    async_odometry_.reset();
     odometry_.reset();
     if (bridge_->attached()) {
-      // One line per active period, so that a test log tells which path lost frames. After the join, so the frames
-      // still queued in the odometry thread are counted too
+      // One line per active period, so that a test log tells which path lost frames. After the
+      // join, so the frames still queued in the odometry thread are counted too
       const auto drops = bridge_->drop_counts();
       RCLCPP_INFO(
         get_logger(),
-        "stopping: received %zu IMU samples and %zu point clouds (first cloud stamp %.3f); dropped frames: %zu without gyro, %zu unpaired, "
-        "%zu stale; %zu TF lookup failures",
-        num_imu_.load(), num_points_.load(), first_points_stamp_.load(), drops.frames_without_gyro, drops.unpaired_frames, drops.stale_frames,
+        "stopping: received %zu IMU samples and %zu point clouds (first cloud stamp %.3f); "
+        "dropped frames: %zu without gyro, %zu unpaired, %zu stale; %zu TF lookup failures",
+        num_imu_.load(), num_points_.load(), first_points_stamp_.load(), drops.frames_without_gyro,
+          drops.unpaired_frames, drops.stale_frames,
         drops.tf_lookup_failures);
     }
     bridge_->detach();
@@ -394,7 +468,8 @@ private:
   }
 
   /// Release what configure made. Idempotent.
-  void release() {
+  void release()
+  {
     initialize_srv_.reset();
     relocalize_srv_.reset();
     map_publisher_.reset();
@@ -404,12 +479,14 @@ private:
     points_qos_.reset();
   }
 
-  void on_imu(const ImuMsg& msg) {
+  void on_imu(const ImuMsg & msg)
+  {
     if (!async_odometry_) {
       return;
     }
     ++num_imu_;
-    const Eigen::Vector3d acc(msg.linear_acceleration.x, msg.linear_acceleration.y, msg.linear_acceleration.z);
+    const Eigen::Vector3d acc(msg.linear_acceleration.x, msg.linear_acceleration.y,
+      msg.linear_acceleration.z);
     if (std::abs(acc_scale_) < 1e-6) {
       const double norm = acc.norm();
       if (norm > 7.0 && norm < 12.0) {
@@ -420,11 +497,14 @@ private:
         acc_scale_ = 1.0;
         RCLCPP_WARN(get_logger(), "unexpected acceleration norm %f: assuming [m/s^2]", norm);
       }
-      RCLCPP_INFO(get_logger(), "acc_scale=%f (from the first IMU sample, stamp %.3f)", acc_scale_, msg.header.stamp.sec + msg.header.stamp.nanosec / 1e9);
+      RCLCPP_INFO(get_logger(), "acc_scale=%f (from the first IMU sample, stamp %.3f)", acc_scale_,
+          msg.header.stamp.sec + msg.header.stamp.nanosec / 1e9);
     }
 
-    const double stamp = msg.header.stamp.sec + msg.header.stamp.nanosec / 1e9 + input_.imu_time_offset;
-    const Eigen::Vector3d angular_vel = input_.ang_scale * Eigen::Vector3d(msg.angular_velocity.x, msg.angular_velocity.y, msg.angular_velocity.z);
+    const double stamp = msg.header.stamp.sec + msg.header.stamp.nanosec / 1e9 +
+      input_.imu_time_offset;
+    const Eigen::Vector3d angular_vel = input_.ang_scale * Eigen::Vector3d(msg.angular_velocity.x,
+        msg.angular_velocity.y, msg.angular_velocity.z);
     if (!time_keeper_->validate_imu_stamp(stamp)) {
       RCLCPP_WARN(get_logger(), "skip an invalid IMU sample (stamp=%f)", stamp);
       return;
@@ -432,7 +512,8 @@ private:
     async_odometry_->insert_imu(stamp, acc_scale_ * acc, angular_vel);
   }
 
-  void on_points(const PointsMsg& msg) {
+  void on_points(const PointsMsg & msg)
+  {
     if (!async_odometry_) {
       return;
     }
@@ -454,7 +535,8 @@ private:
   }
 
   /// Queue a reset to the given pose. @return an empty string if accepted, otherwise the reason
-  std::string request_reset(const PoseMsg& msg, const char* source) {
+  std::string request_reset(const PoseMsg & msg, const char * source)
+  {
     if (!odometry_) {
       return "the localization is not active";
     }
@@ -464,13 +546,17 @@ private:
     if (!error.empty()) {
       return error;
     }
-    // Compared with the last frame the odometry thread took, estimated or dropped (not the last estimated frame: none
-    // is estimated before the first pose or while LOST)
-    const InitPoseDelay delay = check_init_pose_delay(min_stamp, odometry_->last_input_frame_stamp(), max_init_pose_delay_);
+    // Compared with the last frame the odometry thread took, estimated or dropped (not the last
+    // estimated frame: none is estimated before the first pose or while LOST)
+    const InitPoseDelay delay = check_init_pose_delay(min_stamp,
+        odometry_->last_input_frame_stamp(), max_init_pose_delay_);
     if (!delay.accept) {
       char buf[192];
       std::snprintf(
-        buf, sizeof(buf), "too late: the pose is at least %.3f s older than the last frame taken by the odometry (max_init_pose_delay %.3f s)", *delay.late_by,
+        buf, sizeof(buf),
+        "too late: the pose is at least %.3f s older than the last frame taken by the odometry "
+        "(max_init_pose_delay %.3f s)",
+        *delay.late_by,
         max_init_pose_delay_);
       return buf;
     }
@@ -478,20 +564,23 @@ private:
       return "the odometry rejected the pose";
     }
     if (delay.late_by) {
-      RCLCPP_WARN(get_logger(), "%s: the pose applies at least %.3f s after its stamp", source, *delay.late_by);
+      RCLCPP_WARN(get_logger(), "%s: the pose applies at least %.3f s after its stamp", source,
+          *delay.late_by);
     }
     RCLCPP_INFO(get_logger(), "%s: reset requested (stamp=%.3f)", source, min_stamp);
     return "";
   }
 
-  void on_initial_pose(const PoseMsg& msg) {
+  void on_initial_pose(const PoseMsg & msg)
+  {
     const std::string error = request_reset(msg, "/initialpose");
     if (!error.empty()) {
       RCLCPP_WARN(get_logger(), "ignoring /initialpose: %s", error.c_str());
     }
   }
 
-  void on_initialize(const InitializeSrv::Request& req, InitializeSrv::Response& res) {
+  void on_initialize(const InitializeSrv::Request & req, InitializeSrv::Response & res)
+  {
     res.score = 0.0;
     if (req.global_search) {
       res.success = false;
@@ -499,26 +588,33 @@ private:
     } else {
       const std::string error = request_reset(req.pose, "~/initialize");
       res.success = error.empty();
-      res.message = error.empty() ? "accepted: the reset applies at the next frame at or after the stamp" : error;
+      res.message =
+        error.empty() ? "accepted: the reset applies at the next frame at or after the stamp" :
+        error;
     }
     if (!res.success) {
       RCLCPP_WARN(get_logger(), "~/initialize rejected: %s", res.message.c_str());
     }
   }
 
-  /// Restart from the newest estimate, moved to the next frame by its velocity (the core's relocalize()). Refused
-  /// unless TRACKING or DEGRADED, while a reset is pending (it would silently replace an accepted ~/initialize: the
-  /// latest request wins), and when the estimate is more than max_init_pose_delay older than the last input frame.
-  void on_relocalize(TriggerSrv::Response& res) {
+  /// Restart from the newest estimate, moved to the next frame by its velocity (the core's
+  /// relocalize()). Refused unless TRACKING or DEGRADED, while a reset is pending (it would
+  /// silently replace an accepted ~/initialize: the latest request wins), and when the estimate is
+  /// more than max_init_pose_delay older than the last input frame.
+  void on_relocalize(TriggerSrv::Response & res)
+  {
     res.success = false;
     if (!odometry_) {
       res.message = "the localization is not active";
-    } else if (const std::string error = odometry_->relocalize(max_init_pose_delay_); !error.empty()) {
-      res.message = error;
     } else {
-      res.success = true;
-      res.message = "accepted: restarting from the newest estimate at the next frame";
-      RCLCPP_INFO(get_logger(), "~/relocalize: reset requested from the newest estimate");
+      const std::string error = odometry_->relocalize(max_init_pose_delay_);
+      if (!error.empty()) {
+        res.message = error;
+      } else {
+        res.success = true;
+        res.message = "accepted: restarting from the newest estimate at the next frame";
+        RCLCPP_INFO(get_logger(), "~/relocalize: reset requested from the newest estimate");
+      }
     }
     if (!res.success) {
       RCLCPP_WARN(get_logger(), "~/relocalize rejected: %s", res.message.c_str());
@@ -541,8 +637,8 @@ private:
 
   // Set by activate
   double acc_scale_ = 0.0;
-  // Written by the subscription callbacks, read by stop(), which can also run from on_shutdown or the destructor on
-  // another thread
+  // Written by the subscription callbacks, read by stop(), which can also run from on_shutdown or
+  // the destructor on another thread
   std::atomic<size_t> num_imu_{0};
   std::atomic<size_t> num_points_{0};
   std::atomic<double> first_points_stamp_{0.0};

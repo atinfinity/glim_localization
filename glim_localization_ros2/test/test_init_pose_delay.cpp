@@ -1,16 +1,24 @@
+// Copyright (c) 2026 atinfinity
+//
+// Use of this source code is governed by an MIT-style
+// license that can be found in the LICENSE file or at
+// https://opensource.org/licenses/MIT.
+
 // The online check of a late initial pose (R2 ~/initialize and /initialpose). No ROS.
 #include <gtest/gtest.h>
 
 #include <limits>
 #include <optional>
 
-#include <glim_localization_ros2/init_pose_delay.hpp>
+#include "glim_localization_ros2/init_pose_delay.hpp"
 
 using glim_localization_ros2::check_init_pose_delay;
 
-namespace {
+namespace
+{
 constexpr double kMax = 0.2;  // max_init_pose_delay default
-constexpr double kT = 1700000000.0;  // a realistic stamp, where a double has about 0.24 us resolution
+// a realistic stamp, where a double has about 0.24 us resolution
+constexpr double kT = 1700000000.0;
 }  // namespace
 
 TEST(InitPoseDelay, UnstampedIsAlwaysAccepted) {
