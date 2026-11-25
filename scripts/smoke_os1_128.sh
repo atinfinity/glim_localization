@@ -6,10 +6,11 @@
 #
 # The reference is GLIM's own trajectory, so every number is a consistency figure against GLIM, not an accuracy.
 # Environment: PRIOR_END (seconds after the first frame, default 80) and TAIL_START (default 85) set the held-out split;
-# MAPPER_ARGS and CONFIG_PATCH are for the fallbacks (for example a smaller random_downsample_target).
+# MAPPER_ARGS and CONFIG_PATCH are for the fallbacks (for example a smaller random_downsample_target). MAPPER_ARGS goes
+# into the cache key as text only: it must not add data inputs (a file it names is not hashed), or use --force.
 #
 # Map cache: map_full and map_prefix (mapper output, compiled map and GLIM's reference trajectory) are kept in
-# SMOKE_CACHE_DIR (default /ws/out/smoke_os1_128/cache) and reused when the key matches: a hash of the dataset, the
+# SMOKE_CACHE_DIR (default /ws/out/smoke_os1_128/cache, or cache-cuda when GLIM_LOC_BUILD_WITH_CUDA=ON) and reused when the key matches: a hash of the dataset, the
 # mapping config (after CONFIG_PATCH), its extrinsics, the mapper, map_compiler and GLIM binaries and libraries, and the
 # mapper and split arguments. A cached map is validated (manifest of sizes and SHA-256, the mapper summary and the
 # trajectory) before use. A build goes to a temporary directory and is renamed into the cache only after it passed, so
@@ -19,16 +20,26 @@ set -euo pipefail
 
 usage="usage: smoke_os1_128.sh [--force] <replay dataset dir> [out dir]"
 force=false
-if [ "${1:-}" = "--force" ]; then
-  force=true
-  shift
+positional=()
+for arg in "$@"; do  # --force in any position; any other leading dash (an option, or such a path) is refused
+  case "${arg}" in
+    --force) force=true ;;
+    -*) echo "${usage}" >&2; exit 2 ;;
+    *) positional+=("${arg}") ;;
+  esac
+done
+if [ "${#positional[@]}" -lt 1 ] || [ "${#positional[@]}" -gt 2 ]; then
+  echo "${usage}" >&2; exit 2
 fi
-case "${1:-}" in -*) echo "${usage}" >&2; exit 2 ;; esac
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 build_dir="${SMOKE_BUILD_DIR:-/ws/build/core}"  # override only for the tests (fake tools)
-data="${1:?${usage}}"
-out="${2:-/ws/out/smoke_os1_128/run}"
-cache="${SMOKE_CACHE_DIR:-/ws/out/smoke_os1_128/cache}"
+data="${positional[0]}"
+out="${positional[1]:-/ws/out/smoke_os1_128/run}"
+# The CPU (dev) and CUDA (dev-cuda) containers share /ws/out but build different binaries, so each flavor has its own
+# default cache; with one cache they would rebuild each other's maps on every turn
+cache_suffix=""
+[ "${GLIM_LOC_BUILD_WITH_CUDA:-OFF}" = ON ] && cache_suffix="-cuda"
+cache="${SMOKE_CACHE_DIR:-/ws/out/smoke_os1_128/cache${cache_suffix}}"
 prior_end="${PRIOR_END:-80}"
 tail_start="${TAIL_START:-85}"
 : "${GLIM_LOC_PYTHON:?GLIM_LOC_PYTHON is not set (run inside the dev container)}"
@@ -101,15 +112,17 @@ if [ -L "${cache_marker}" ] || [ -L "${cache}/.lock" ]; then
   echo "FAIL: '${cache_marker}' or '${cache}/.lock' is a symlink" >&2; exit 1
 fi
 
+# One run at a time per cache: a second run would rebuild or read the entries under the first one. The lock is taken
+# before anything is written (opened for append, so a waiting run does not even change the lock file)
+mkdir -p "${cache}"
+exec 9>> "${cache}/.lock"
+flock -n 9 || { echo "FAIL: another smoke_os1_128.sh run holds '${cache}/.lock'" >&2; exit 1; }
+[ -f "${cache_marker}" ] || echo "map cache of scripts/smoke_os1_128.sh; remove it to drop every cached map" > "${cache_marker}"
 mkdir -p "${out}"
 echo "created by scripts/smoke_os1_128.sh; its fixed output names are removed at the start of every run" > "${marker}"
-mkdir -p "${cache}"
-echo "map cache of scripts/smoke_os1_128.sh; remove it to drop every cached map" > "${cache_marker}"
-# One run at a time per cache: a second run would rebuild or read the entries under the first one
-exec 9> "${cache}/.lock"
-flock -n 9 || { echo "FAIL: another smoke_os1_128.sh run holds '${cache}/.lock'" >&2; exit 1; }
-# Builds of an interrupted earlier run are never reused; this run's own are removed when it exits
-rm -rf "${cache}"/.tmp-map_* "${cache}"/.old-map_*
+# Builds of an interrupted earlier run are never reused; an entry displaced by an interrupted install is put back (and
+# checked like any other). This run's own builds are removed when it exits
+py "${cache_tool}" cleanup --cache "${cache}"
 trap 'rm -rf "${cache}"/.tmp-map_*-$$' EXIT
 # Remove only the fixed names this script writes (rm does not follow symlinks), so an earlier run's output can never mask a failed step
 rm -rf "${out}/config_mapping" "${out}/config_localization" "${out}/map_full" "${out}/map_prefix" "${out}/replay_heldout" "${out}/replay_self" \
@@ -227,6 +240,10 @@ map_step() {  # <label> [mapper args...]: reuse the cached map_<label> when its 
     fi
   fi
   timing "cache_key_and_check_${label}" "${start}"
+  # One line, one tsv field: escape backslashes, tabs and newlines (a file name in the reason may hold them)
+  reason="${reason//\\/\\\\}"
+  reason="${reason//$'\t'/\\t}"
+  reason="${reason//$'\n'/\\n}"
   if [ -z "${reason}" ]; then
     echo "== map_${label}: REUSED the cached map (key $(py -c "import json, sys; print(json.load(open(sys.argv[1]))['key'][:16])" "${key}"), ${entry})"
     printf '%s\treused\t%s\n' "${label}" "key matches and the cached map is valid" >> "${out}/maps.tsv"
