@@ -16,6 +16,10 @@ services:
     environment:
       - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-42}
       - ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST
+      # Passed through when set on the host (sim/scripts/record.sh)
+      - SIM_DURATION
+      - SIM_SEED
+      - SIM_TIMEOUT
     volumes:
       - ../..:/ws/src/glim_localization
       - sim_build:/ws/build_sim
@@ -29,8 +33,13 @@ services:
       args:
         JOBS: ${JOBS:-4}
     working_dir: /ws/src/glim_localization
+    environment:
+      # Passed through when set on the host (sim/scripts/localize.sh)
+      - SIM_EVAL_MAX_TRANS
+      - SIM_EVAL_MAX_ROT_DEG
     volumes:
       - ../..:/ws/src/glim_localization
+      # Its own build volume, not the one of docker/compose.yaml: the first run builds the core here.
       - build:/ws/build
       - ../../out:/ws/out
 
