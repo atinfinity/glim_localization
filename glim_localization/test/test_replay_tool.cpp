@@ -482,7 +482,7 @@ TEST_F(ReplayToolTest, InitYawSearchCorrectsAWrongInitialYaw) {
     const auto pos = text.find(key);
     ASSERT_NE(pos, std::string::npos);
     text.replace(pos, key.size(), "\"init_yaw_search\": true");
-    // A loaded CI machine must not cut the search short (parallel ctest slowed it enough that even 30 s fell short);
+    // A loaded CI machine must not cut the search short (parallel ctest once slowed it to 11 of 24 candidates in 10 s);
     // the ctest TIMEOUT bounds the run instead
     const std::string budget = "\"init_yaw_search_time_budget\": 10.0";
     const auto budget_pos = text.find(budget);
