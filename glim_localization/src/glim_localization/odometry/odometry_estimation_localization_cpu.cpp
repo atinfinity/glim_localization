@@ -83,12 +83,20 @@ gtsam::NonlinearFactorGraph OdometryEstimationLocalizationCPU::create_factors(
   gtsam::Values& new_values) {
   const auto& p = cpu_params();
   current_map_factors_ = create_map_factors(*map(), X(current), frames[current]->frame, frames[current]->T_world_imu, p.map_factors, map_factor_weight());
+  // Empty unless wheel_odom_enabled. Gated against the IMU prediction, so before the local model refines it.
+  const gtsam::NonlinearFactorGraph wheel_factors = create_wheel_factors(current);
   if (!p.use_keyframes) {
-    return current_map_factors_.factors;
+    if (wheel_factors.empty()) {
+      return current_map_factors_.factors;
+    }
+    gtsam::NonlinearFactorGraph factors = current_map_factors_.factors;
+    factors.add(wheel_factors);
+    return factors;
   }
 
   // Map factors above use the IMU prediction, before the local model refines it.
   gtsam::NonlinearFactorGraph factors = current_map_factors_.factors;
+  factors.add(wheel_factors);
   factors.add(create_local_model_factors(current, new_values));
   return factors;
 }

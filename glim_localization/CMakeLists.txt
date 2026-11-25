@@ -41,6 +41,7 @@ add_library(glim_localization SHARED
   src/glim_localization/odometry/odometry_estimation_localization_cpu.cpp
   src/glim_localization/odometry/quality_monitor.cpp
   src/glim_localization/odometry/weighted_factor.cpp
+  src/glim_localization/odometry/wheel_odometry.cpp
   src/glim_localization/relocalization/candidate_search.cpp
   src/glim_localization/relocalization/pose_candidates.cpp
   src/glim_localization/replay/replay_dataset.cpp

@@ -189,6 +189,7 @@ gtsam::NonlinearFactorGraph OdometryEstimationLocalizationGPU::create_factors(
   const gtsam_points::shared_ptr<gtsam::ImuFactor>& /*imu_factor*/,
   gtsam::Values& /*new_values*/) {
   gtsam::NonlinearFactorGraph factors = create_gpu_map_factors(current);
+  factors.add(create_wheel_factors(current));  // Empty unless wheel_odom_enabled
   if (gpu_params().use_keyframes) {
     factors.add(create_keyframe_factors(current));
   }

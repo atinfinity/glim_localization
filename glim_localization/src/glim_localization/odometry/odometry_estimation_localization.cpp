@@ -11,6 +11,7 @@
 
 #include <spdlog/spdlog.h>
 
+#include <gtsam/inference/Symbol.h>
 #include <gtsam/nonlinear/ISAM2Params.h>
 
 #include <gtsam_points/optimizers/incremental_fixed_lag_smoother_with_fallback.hpp>
@@ -168,12 +169,25 @@ OdometryEstimationLocalizationParams::OdometryEstimationLocalizationParams() {
   init_yaw_search.time_budget = config.param<double>(section, "init_yaw_search_time_budget", 10.0);
   init_yaw_search.max_iterations = config.param<int>(section, "init_yaw_search_max_iterations", 10);
   init_yaw_search.min_points = config.param<int>(section, "init_yaw_search_min_points", 100);
+
+  wheel_odom.enabled = config.param<bool>(section, "wheel_odom_enabled", false);
+  wheel_odom.T_imu_base = config.param<Eigen::Isometry3d>(section, "wheel_odom_T_imu_base", Eigen::Isometry3d::Identity());
+  wheel_odom.nonholonomic = config.param<bool>(section, "wheel_odom_nonholonomic", false);
+  wheel_odom.max_gap = config.param<double>(section, "wheel_odom_max_gap", 0.2);
+  wheel_odom.translation_sigma_min = config.param<double>(section, "wheel_odom_translation_sigma_min", 0.01);
+  wheel_odom.translation_sigma_ratio = config.param<double>(section, "wheel_odom_translation_sigma_ratio", 0.05);
+  wheel_odom.rotation_sigma_min = config.param<double>(section, "wheel_odom_rotation_sigma_min", 0.05);
+  wheel_odom.rotation_sigma_ratio = config.param<double>(section, "wheel_odom_rotation_sigma_ratio", 0.2);
+  wheel_odom.huber_threshold = config.param<double>(section, "wheel_odom_huber_threshold", 1.0);
+  wheel_odom.gate_velocity = config.param<double>(section, "wheel_odom_gate_velocity", 1.0);
+  wheel_odom.gate_angular_velocity = config.param<double>(section, "wheel_odom_gate_angular_velocity", 0.5);
 }
 
 OdometryEstimationLocalizationParams::~OdometryEstimationLocalizationParams() {}
 
 OdometryEstimationLocalization::OdometryEstimationLocalization(std::unique_ptr<Params>&& params_ptr, std::shared_ptr<const MapManager> map)
-: glim::OdometryEstimationIMU(std::move(params_ptr)), map_(require_map(std::move(map))), quality_(localization_params().quality) {
+: glim::OdometryEstimationIMU(std::move(params_ptr)), map_(require_map(std::move(map))), quality_(localization_params().quality),
+  wheel_(localization_params().wheel_odom) {
   const auto& p = localization_params();
   // Upstream estimators cannot produce a pose in the map frame, so wait for a given one.
   auto init = std::make_unique<MapInitialStateEstimation>(p.T_lidar_imu, p.imu_bias);
@@ -203,6 +217,9 @@ OdometryEstimationLocalization::OdometryEstimationLocalization(std::unique_ptr<P
       "init_yaw_search_max_iterations and init_yaw_search_min_points positive");
   }
   candidate_generator_ = std::make_unique<YawCandidateGenerator>(search.range, search.step);  // Validates the range and step
+  if (p.wheel_odom.enabled) {
+    p.wheel_odom.validate();
+  }
 
   auto& registry = reset_registry();
   std::lock_guard<std::mutex> lock(registry.mutex);
@@ -681,6 +698,49 @@ void OdometryEstimationLocalization::apply_pending_reset(double frame_stamp) {
     snapshot = status_;
   }
   LocalizationCallbacks::on_status(snapshot);
+}
+
+bool OdometryEstimationLocalization::insert_wheel_odom(double stamp, const Eigen::Vector3d& linear_vel, const Eigen::Vector3d& angular_vel) {
+  if (!localization_params().wheel_odom.enabled) {
+    return false;
+  }
+  return wheel_.insert(stamp, linear_vel, angular_vel);
+}
+
+gtsam::NonlinearFactorGraph OdometryEstimationLocalization::create_wheel_factors(const int current) {
+  const auto& p = localization_params();
+  if (!p.wheel_odom.enabled || current < 1 || !frames[current - 1] || !frames[current]) {
+    return gtsam::NonlinearFactorGraph();
+  }
+  const auto& last = frames[current - 1];
+  const auto& now = frames[current];
+
+  gtsam::NonlinearFactorGraph factors;
+  WheelFactorResult result = WheelFactorResult::NO_DATA;
+  const auto T_base = wheel_.integrate(last->stamp, now->stamp);
+  if (T_base) {
+    // frames[current] still holds the IMU prediction here
+    const Eigen::Isometry3d T_last_current_imu = last->T_world_imu.inverse() * now->T_world_imu;
+    using gtsam::symbol_shorthand::X;
+    factors = create_wheel_factor(p.wheel_odom, X(current - 1), X(current), now->stamp - last->stamp, *T_base, T_last_current_imu, result);
+  }
+  // The next interval starts at this frame
+  wheel_.trim(now->stamp);
+
+  std::lock_guard<std::mutex> lock(status_mutex_);
+  switch (result) {
+    case WheelFactorResult::ADDED:
+      status_.wheel_factors++;
+      break;
+    case WheelFactorResult::GATED:
+      status_.wheel_gated++;
+      spdlog::debug("wheel odometry at {:.3f} s disagrees with the IMU prediction: no wheel factor", now->stamp);
+      break;
+    case WheelFactorResult::NO_DATA:
+      status_.wheel_missing++;
+      break;
+  }
+  return factors;
 }
 
 double OdometryEstimationLocalization::map_factor_weight() const {

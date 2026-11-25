@@ -16,6 +16,7 @@
 #include <glim_localization/map/map_manager.hpp>
 #include <glim_localization/odometry/map_factor_builder.hpp>
 #include <glim_localization/odometry/quality_monitor.hpp>
+#include <glim_localization/odometry/wheel_odometry.hpp>
 #include <glim_localization/relocalization/pose_candidates.hpp>
 
 namespace glim_localization {
@@ -76,6 +77,11 @@ struct LocalizationStatus {
   double init_search_runner_up_score = 0.0;
   double init_search_runner_up_yaw_offset = 0.0;  ///< Its yaw relative to the given pose [rad]
   double init_search_time = 0.0;                  ///< Wall-clock seconds of the search
+
+  // Wheel odometry (wheel_odom_enabled), counted per frame since the last reset. All 0 while it is disabled.
+  int wheel_factors = 0;  ///< Frames that got a wheel relative pose factor
+  int wheel_gated = 0;    ///< Frames whose wheel motion the consistency gate rejected (slip, a stuck wheel)
+  int wheel_missing = 0;  ///< Frames whose interval the wheel samples did not cover
 };
 
 struct LocalizationCallbacks {
@@ -132,6 +138,10 @@ struct OdometryEstimationLocalizationParams : public glim::OdometryEstimationIMU
     int max_iterations = 10;            ///< Registration iterations per candidate
     int min_points = 100;               ///< Smaller frames are dropped while the search waits for its first frame
   } init_yaw_search;
+
+  /// Optional wheel odometry: a relative pose factor between consecutive frames from the twists given to
+  /// insert_wheel_odom(). Off by default.
+  WheelOdometryParams wheel_odom;
 };
 
 /// Load the map at params.map_path with params.map_voxel_resolutions.
@@ -163,6 +173,11 @@ public:
   /// Frames still in the smoother are discarded without being marginalized to callbacks.
   /// @return false, keeping the current state, if the state is non-finite or not a rigid transform
   bool reset(const Eigen::Isometry3d& T_world_imu, const Eigen::Vector3d& v_world_imu = Eigen::Vector3d::Zero(), double min_stamp = 0.0);
+
+  /// Add a wheel odometry twist of the base frame (wheel_odom_T_imu_base) at the given stamp, in the base frame.
+  /// Thread-safe. Samples are associated with frames by time, so they may arrive before or shortly after the frame.
+  /// @return false if wheel odometry is disabled or the sample was dropped (non-finite or not newer than the last one)
+  bool insert_wheel_odom(double stamp, const Eigen::Vector3d& linear_vel, const Eigen::Vector3d& angular_vel);
 
   /// Thread-safe.
   LocalizationStatus status() const;
@@ -219,6 +234,11 @@ protected:
   /// correspondences of their last linearization.
   virtual MapQuality evaluate_map_quality(const glim::EstimationFrame::ConstPtr& frame) = 0;
 
+  /// The wheel odometry factor between frames current - 1 and current (empty if disabled, the first frame, without
+  /// wheel data, or gated). Call from create_factors before the backend changes frames[current]->T_world_imu: the gate
+  /// compares the wheel motion with the IMU prediction.
+  gtsam::NonlinearFactorGraph create_wheel_factors(int current);
+
   /// The map factors and tiles of the newest frame. Set by the backend's create_factors, cleared by a reset.
   MapFactors current_map_factors_;
 
@@ -249,6 +269,7 @@ private:
 
   std::shared_ptr<const MapManager> map_;
   QualityMonitor quality_;
+  WheelOdometryBuffer wheel_;
 
   double min_stamp_ = 0.0;
 
