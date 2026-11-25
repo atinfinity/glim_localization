@@ -2,11 +2,11 @@
 
 LiDAR-IMU localization on a prebuilt 3D map, built on top of [GLIM](https://github.com/koide3/glim) and [gtsam_points](https://github.com/koide3/gtsam_points). Instead of forking GLIM, it uses GLIM as a library: GLIM itself is not modified, and a localization module replaces GLIM's odometry module, adding scan-to-map VGICP factors against a fixed, prebuilt map to GLIM's tightly coupled LiDAR-IMU fixed-lag smoother. The core library is ROS-independent and drives an offline replay tool as well as two ROS 2 integrations: a GLIM extension module (R1, for evaluation) and a dedicated lifecycle node (R2, for deployment).
 
-<img src="docs/media/replay_synthetic.gif" width="720" alt="Localization on the synthetic replay data: a slice of the map above 1 m in gray, the current scan in red, the current pose in orange, the estimate in blue and the ground truth dashed">
+<img src="docs/media/replay_synthetic.gif" width="720" alt="Localization on the synthetic replay data in an oblique 3D view: the map colored by height above a light gray floor, the current scan in red, the current pose in orange with its heading and up axis, the estimate in blue with drop lines to the surface below, and the ground truth dashed">
 
-*Offline replay on synthetic data, top-down view of a slice from 1 m to 3 m (sensor height and above; low boxes in the corridor are not drawn): each scan (red) is placed on the prebuilt map (gray) by the estimated pose (orange dot and heading). Regenerate with [`scripts/render_demo.py`](docs/replay.md#demo-animation).*
+*Offline replay on synthetic data, oblique 3D view: each scan (red) is placed on the prebuilt map (gray floor, the rest colored by height) by the estimated pose (orange dot, heading arrow and up axis). Thin lines drop from the estimate to the surface below it, so the path visibly passes over the low boxes in the corridor. Regenerate with [`scripts/render_demo.py`](docs/replay.md#demo-animation).*
 
-> **Status: under development. CPU by default; the GPU module (CUDA image) is tested on synthetic data only.** The core, the offline tools and both ROS 2 integrations work on synthetic data and pass CI. Real-data evaluation is limited (see [Limitations](#limitations)). The interfaces may still change. Details: [Status and limitations](docs/status.md), [PROGRESS](docs/PROGRESS.md), [open issues](https://github.com/atinfinity/glim_localization/issues).
+> **Status: under development. CPU by default; the GPU module (CUDA image) is tested on synthetic data only.** The core, the offline tools and both ROS 2 integrations work on synthetic data and pass CI. Real-data evaluation is limited (see [Limitations](#limitations)). The interfaces may still change. Details: [Status and limitations](docs/status.md), [progress](docs/progress/README.md), [open issues](https://github.com/atinfinity/glim_localization/issues).
 
 ## Features
 
@@ -67,7 +67,7 @@ The step-by-step guide, including real bags and setting the initial pose, is [do
 | [Design](docs/DESIGN.md) | Architecture and design decisions |
 | [Dependencies](docs/DEPENDENCIES.md) | Pinned dependencies, provenance and licenses |
 | [Implementation plan](docs/IMPLEMENTATION_PLAN.md) | Phases and their state |
-| [Progress](docs/PROGRESS.md) | History, verification results and measurements |
+| [Progress](docs/progress/README.md) | Verification results, measurements and decisions, one file per entry; the earlier history is in [PROGRESS.md](docs/PROGRESS.md) |
 | [Contributing](CONTRIBUTING.md) | Issues, pull requests and the development workflow |
 
 ## Limitations

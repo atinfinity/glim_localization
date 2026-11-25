@@ -1,18 +1,18 @@
 # CLAUDE.md — glim_localization
 
 A LiDAR-IMU localization package for prebuilt 3D maps that uses GLIM as a library.
-Design is in `docs/DESIGN.md`, the implementation plan in `docs/IMPLEMENTATION_PLAN.md`, history in `docs/PROGRESS.md`. **Read only the sections relevant to the current task.**
+Design is in `docs/DESIGN.md`, the implementation plan in `docs/IMPLEMENTATION_PLAN.md`, history in `docs/PROGRESS.md` (frozen) and `docs/progress/` (one file per entry). **Read only the sections relevant to the current task.**
 
 ## Rules
 
-- Do not modify GLIM itself (glim / gtsam_points / glim_ros2). If a fix is needed, put it in `third_party/patches/` and write the reason in `docs/PROGRESS.md`.
+- Do not modify GLIM itself (glim / gtsam_points / glim_ros2). If a fix is needed, put it in `third_party/patches/` and write the reason in a progress entry (`docs/progress/`).
 - Put this line at the top of every file derived from GLIM (if the base commit changes, update it here and in DESIGN too):
   `// Derived from koide3/glim <path> at commit 1a197c999e4865f5cab7c9cd25474128413ebbca (MIT License, Copyright (c) 2024 koide3)`
 - The core (`glim_localization/`) is ROS-independent. Keep ROS dependencies inside `glim_localization_ros2/`.
 - The GPU build is off by default (`BUILD_WITH_CUDA=OFF`).
 - Do not commit bags or maps. Tests use synthetic data.
 - Keep commits small and in English, using Conventional Commits with the area as scope (for example `feat(odometry): ...`, `fix(map): ...`, `docs: ...`, `ci: ...`). Do not force push.
-- Record verification results and design decisions in `docs/PROGRESS.md`.
+- Record verification results and design decisions as a new file `docs/progress/YYYY-MM-DD-<slug>.md` (see `docs/progress/README.md`). Do not append to `docs/PROGRESS.md`; it is frozen, and parallel appends conflict.
 
 ## Build
 
