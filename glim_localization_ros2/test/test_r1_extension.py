@@ -228,8 +228,8 @@ class TestR1Extension(unittest.TestCase):
         # pose
         by_stamp = {}
         for tf in self.transforms:
-            stamp = (tf.header.stamp.sec, tf.header.stamp.nanosec)
-            by_stamp.setdefault(stamp, {})[(tf.header.frame_id, tf.child_frame_id)] = tf.transform
+            key = (tf.header.stamp.sec, tf.header.stamp.nanosec)
+            by_stamp.setdefault(key, {})[(tf.header.frame_id, tf.child_frame_id)] = tf.transform
         both = {
             s: d for s, d in by_stamp.items()
             if ('map', 'odom') in d and ('odom', 'base_link') in d}
