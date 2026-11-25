@@ -253,6 +253,12 @@ def select_font(family):
         return FALLBACK_FONT
 
 
+def fixed_colors():
+    """The colors that gif_palette puts first, in this order."""
+    return [TEXT_COLOR, "#ffffff", MAP_COLOR, FRAME_COLOR, LEGEND_EDGE_COLOR, ESTIMATE_COLOR, SCAN_COLOR, GT_COLOR, POSE_COLOR,
+            *STATE_COLORS.values()]
+
+
 def gif_palette(images, colors):
     """One palette for all frames: the drawing colors exactly, plus adaptive colors from sample frames.
 
@@ -265,11 +271,9 @@ def gif_palette(images, colors):
     image = Image.new("RGB", (samples[0].width, sum(sample.height for sample in samples)))
     for k, sample in enumerate(samples):
         image.paste(sample.convert("RGB"), (0, k * samples[0].height))
-    fixed = [TEXT_COLOR, "#ffffff", MAP_COLOR, FRAME_COLOR, LEGEND_EDGE_COLOR, ESTIMATE_COLOR, SCAN_COLOR, GT_COLOR, POSE_COLOR,
-             *STATE_COLORS.values()]
-    entries = [tuple(int(c[k:k + 2], 16) for k in (1, 3, 5)) for c in fixed]
+    entries = [tuple(int(c[k:k + 2], 16) for k in (1, 3, 5)) for c in fixed_colors()]
     adaptive = image.quantize(colors=max(colors - len(entries), 2), method=Image.Quantize.MEDIANCUT)
-    values = adaptive.getpalette()[: 3 * len(adaptive.getcolors())] if adaptive.getcolors() else adaptive.getpalette()
+    values = adaptive.getpalette()[: 3 * len(adaptive.getcolors())]
     for k in range(0, len(values) - 2, 3):
         entry = tuple(values[k:k + 3])
         if entry not in entries and len(entries) < 256:
@@ -288,8 +292,10 @@ def to_palette(image, palette):
     colors and can map an exact drawing color (for example white) to a near neighbor.
     """
     entries = np.array(palette.getpalette()[:768], dtype=np.int32).reshape(-1, 3)
-    rgb = np.asarray(image.convert("RGB"), dtype=np.int32)
-    colors, inverse = np.unique(rgb.reshape(-1, 3), axis=0, return_inverse=True)
+    rgb = np.asarray(image.convert("RGB"), dtype=np.uint32)
+    # One integer per pixel, so np.unique sorts a flat array instead of rows (same colors, same order).
+    keys, inverse = np.unique(((rgb[..., 0] << 16) | (rgb[..., 1] << 8) | rgb[..., 2]).reshape(-1), return_inverse=True)
+    colors = np.stack([keys >> 16, (keys >> 8) & 0xFF, keys & 0xFF], axis=1).astype(np.int32)
     nearest = np.argmin(((colors[:, None, :] - entries[None, :, :]) ** 2).sum(axis=2), axis=1).astype(np.uint8)
     mapped = Image.fromarray(nearest[inverse.reshape(-1)].reshape(rgb.shape[:2]), mode="P")
     mapped.putpalette(palette.getpalette()[:768])
