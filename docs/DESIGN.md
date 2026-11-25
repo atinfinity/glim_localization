@@ -119,6 +119,7 @@ Points settled by the Phase 2 implementation:
 - For every resolution of each active submap j, add `IntegratedVGICPFactor(T_world_origin_j, X(i), voxelmap_j, frame)`. Submap poses are constants, and no new variables are created.
 - Submaps are selected with the IMU-predicted pose, and those whose overlap ratio at the coarsest voxel is below `map_min_overlap` are excluded.
 - The weight is `map_factor_weight` (default 1.0). While DEGRADED and LOST it is multiplied by `degraded_weight_scale` (default 0.1).
+- Wheel odometry (optional, `wheel_odom_enabled`, default false; [#14](https://github.com/atinfinity/glim_localization/issues/14)): `insert_wheel_odom(stamp, linear, angular)` buffers the twist of the wheel base. For each frame, `create_wheel_factors` (shared by both backends, called from `create_factors`) integrates the twist over `[t(i-1), t(i)]`, moves it to the IMU frame with `wheel_odom_T_imu_base`, and adds `BetweenFactor<Pose3>(X(i-1), X(i))` with sigmas growing with the distance and angle travelled and an optional Huber kernel on the whole 6-DoF whitened error. It is skipped when the samples do not cover the interval (`wheel_odom_max_gap`) or when the wheel motion disagrees with the IMU prediction (slip): the norm of the difference of the two translation vectors over dt above `max(wheel_odom_gate_velocity, wheel_odom_gate_velocity_ratio * speed)`, or the relative rotation over dt above `wheel_odom_gate_angular_velocity`. Without a map constraint a wrong prediction could gate every factor for good, so after `wheel_odom_gate_readmit_frames` consecutive gated frames one factor is added without the gate. A reset clears the wheel buffer, and the buffer restarts by itself after a few samples stamped before the last one (a clock that went back). Disabled, nothing is added and the factors are the same as before.
 - Outliers are suppressed only by VGICP ignoring points without correspondences. `set_enable_surface_validation` does not exist in VGICP and is not used.
 - Voxels aggregate the mean and covariance of the points, so both faces of an object thinner than a voxel collapse into one plane in the middle, which biases the result along the wall normal (up to 0.29 m with a 0.4 m wall in the synthetic scene). The effect on real data is checked in [#5](https://github.com/atinfinity/glim_localization/issues/5).
 
@@ -180,6 +181,8 @@ Pose reset at runtime: `reset(T_world_imu, v_world_imu, min_stamp)` (thread-safe
     "init_yaw_search_time_budget": 10.0,
     "init_yaw_search_max_iterations": 10,
     "init_yaw_search_min_points": 100,
+    "wheel_odom_enabled": false,
+    "wheel_odom_T_imu_base": [0, 0, 0, 0, 0, 0, 1],
     "degraded_inlier_ratio": 0.3,
     "lost_frames": 50,
     "smoother_lag": 5.0

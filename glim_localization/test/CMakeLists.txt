@@ -47,6 +47,13 @@ target_compile_definitions(test_localization_odometry PRIVATE
 target_link_libraries(test_localization_odometry PRIVATE glim_localization_synthetic GTest::gtest_main)
 gtest_discover_tests(test_localization_odometry PROPERTIES TIMEOUT 120)
 
+add_executable(test_wheel_odometry test_wheel_odometry.cpp)
+target_compile_definitions(test_wheel_odometry PRIVATE
+  GLIM_LOCALIZATION_CONFIG_DIR="${PROJECT_SOURCE_DIR}/config"
+)
+target_link_libraries(test_wheel_odometry PRIVATE glim_localization_synthetic GTest::gtest_main)
+gtest_discover_tests(test_wheel_odometry PROPERTIES TIMEOUT 300)
+
 add_executable(test_relocalization test_relocalization.cpp)
 target_link_libraries(test_relocalization PRIVATE glim_localization_synthetic GTest::gtest_main)
 gtest_discover_tests(test_relocalization PROPERTIES TIMEOUT 180)
