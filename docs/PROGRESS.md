@@ -728,3 +728,31 @@ The tests that are not about the budget now set it to 1e6 s (the clamp in `candi
   - The messages package has no C++ or Python sources. Its copyright test runs but checks no file (`.msg` files are skipped), so only lint_cmake and xmllint are required to have test cases there.
 - **Verification** (Docker on the development Mac): core ctest 276/276 (ctest entries, one per gtest case, of the core at main 6bb712f, which includes the yaw search and PLY tests merged after the 247 above; this change adds no core test), colcon test 21/21 and 3/3 (all linters pass: copyright 27, cppcheck 15, cpplint 14, cpplint_derived 1, pep257 12, uncrustify 15), interfaces, Python tests 190 (199 after merging main, which adds the demo tests). A deliberately long Python line makes `test_colcon.sh` fail on flake8.
 - **Blame**: `.git-blame-ignore-revs` lists the mechanical reformat commit (556ee17), so blame skips it (GitHub by default, locally with `blame.ignoreRevsFile`).
+
+## Simulation evaluation, Step 1 (2026-11-25, [#9](https://github.com/atinfinity/glim_localization/issues/9))
+
+> [!NOTE]
+> These are simulation results and are optimistic: instantaneous `gpu_lidar` scans (no motion distortion), a simple IMU noise model, and a map sampled from the same geometry the LiDAR sees. They do not replace [#5](https://github.com/atinfinity/glim_localization/issues/5) Step 2.
+
+- **What**: `scripts/sim_eval.sh` runs the chain from the world to `eval.json` in a clean `out/<name>` with one command (how to run: [sim_eval.md](sim_eval.md)). A separate image `glim_localization:sim` (`docker/sim/`: ROS 2 Jazzy, Gazebo Harmonic 8.15 from `ros-jazzy-ros-gz`, sdf2map pinned at 66feb61) records the bag and samples the map; the development image converts, compiles the map, replays and evaluates. Nothing is added to the development image or to `scripts/ci.sh`, and no existing script changed: `bag_to_replay.py` already drops non-finite points and copies `--gt`, and `evaluate.py` never aligns.
+- **Decisions**:
+  - The rig is moved by a small system plugin (`ScriptedMotion`) through prismatic x, y and revolute yaw joints instead of a vehicle model: the trajectory is a function of simulation time only, and the same plugin publishes the ground truth (`imu_link` world pose, 100 Hz, simulation time) from the physics state of the same step.
+  - Walls are 2.5 m thick, more than the coarsest voxel of the CPU config (2 m), so the map error from sdf2map sampling both faces of a wall (DESIGN 5.2) is kept out of Step 1.
+  - The initial pose is the ground truth at the first frame, so Step 1 measures tracking only; the offset sweep is Step 2.
+  - `check_data.py` checks the data itself before the replay: sensor periods in simulation time, and every scan placed by the ground truth on the map. This separates simulator or bridge problems from localization errors.
+  - The PGM option (map2sdf) was not used; the world is SDF primitives.
+- **Feasibility** (Docker on the development Mac, arm64, no GPU): `gpu_lidar` renders with Mesa llvmpipe through EGL (`--headless-rendering`, ogre2; LLVM 20, Mesa 25.2). Real-time factor about 12 (60 s simulated in 5.0 s of recording, 7.7 s with server start; 11.9 and 12.0 in two runs). The whole `sim_eval.sh` run takes 42 s with the images and the core build in place. Image size: 6.0 GB (`docker image inspect`).
+- **Data** (one 60 s run): 601 LiDAR frames and 12001 IMU samples, periods 0.100 s and 0.005 s in simulation time as configured; 6000 ground truth poses. Bag 606 MiB (mcap). Scan to map at the ground truth: median point distance 0.030 m per frame (worst frame 0.030 m, p90 0.049 m), consistent with the 0.01 m range noise plus the 0.05 m map voxel, so the scans are rendered at their stamps. sdf2map: 664,083 points (7.6 MB PCD) in 0.6 s.
+- **Results** (no alignment, all 601 frames evaluated, coverage 1.0):
+  - Status sequence: INITIALIZING x4 (0.0 to 0.3 s), then TRACKING x597 to the end. No DEGRADED or LOST.
+  - ATE translation rmse 0.0025 m (max 0.0073 m), rotation rmse 0.038° (max 0.083°).
+  - RPE translation rmse 0.0019 m (max 0.0035 m), rotation rmse 0.024° (max 0.047°).
+  - Processing time per frame (odometry): mean 11.5 ms, median 7.5 ms, p95 9.4 ms, p99 199 ms, max 232 ms; 2.0 % of the frames take longer than the 100 ms frame period (the first frames and submap insertions). Processing time over data length 0.17.
+  - A second run from a clean `out/`: ATE 0.0025 m and 0.038°, RPE 0.0021 m and 0.027°, the same status sequence.
+- **Determinism**: with the sensor noise set to 0, two recordings gave bit-identical messages on all three topics. With the noise of the rig, stamps, counts, ground truth and the map are identical between runs, but the noise samples are not (the gz-sensors noise does not follow `--seed`), so the errors differ in the fourth decimal as above.
+- **Risks hit**:
+  - Rendering on arm64 without a GPU was the main risk; llvmpipe was fast enough, so no GPU host was used.
+  - `gz sim --iterations` counts paused iterations, so a server started paused (to wait for the recorder) exited before it ran. The recorder and the bridge now start first, and the server starts running (`-r`) once all topics are subscribed.
+  - The background bridge and recorder ignored SIGINT from the script, and the `ros2 run` wrapper did not pass on SIGTERM. The script runs the bridge binary directly and stops both with SIGTERM, then SIGKILL after 20 s.
+  - `gpu_lidar` clouds are organized with non-finite points for missing returns (2,982,729 dropped by `bag_to_replay.py` over 601 frames, mostly the sky) and have no time field, so all per-point times are 0, which is right for an instantaneous scan. No change to `bag_to_replay.py` or `evaluate.py` was needed.
+- **Open (Step 2)**: initial pose offset sweep, map changes, IMU dropouts and frame drops, calibration of `degraded_inlier_ratio`, and a second larger world with sdf2map `--density` and `--voxel` sensitivity.
