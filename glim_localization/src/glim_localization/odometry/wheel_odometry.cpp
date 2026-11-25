@@ -39,7 +39,7 @@ void WheelOdometryParams::validate() const {
     throw std::invalid_argument("wheel_odom_translation_sigma_min and wheel_odom_rotation_sigma_min must be positive");
   }
   if (!non_negative(translation_sigma_ratio) || !non_negative(rotation_sigma_ratio) || !non_negative(huber_threshold) || !non_negative(gate_velocity) ||
-      !non_negative(gate_angular_velocity)) {
+      !non_negative(gate_velocity_ratio) || !non_negative(gate_angular_velocity) || gate_readmit_frames < 0) {
     throw std::invalid_argument("the wheel_odom sigma ratios, huber threshold and gates must not be negative");
   }
 }
@@ -61,8 +61,13 @@ bool WheelOdometryBuffer::insert(double stamp, const Eigen::Vector3d& linear, co
 
   std::lock_guard<std::mutex> lock(mutex_);
   if (!samples_.empty() && stamp <= samples_.back().stamp) {
-    return false;
+    if (++rejected_ < kRestartRejects) {
+      return false;
+    }
+    // Not a stray sample: the clock went back (a bag loop, a simulation reset). Start over from this sample.
+    samples_.clear();
   }
+  rejected_ = 0;
   samples_.push_back(sample);
   while (samples_.size() > kMaxSamples) {
     samples_.pop_front();
@@ -132,6 +137,12 @@ void WheelOdometryBuffer::trim(double keep_from) {
   }
 }
 
+void WheelOdometryBuffer::clear() {
+  std::lock_guard<std::mutex> lock(mutex_);
+  samples_.clear();
+  rejected_ = 0;
+}
+
 size_t WheelOdometryBuffer::size() const {
   std::lock_guard<std::mutex> lock(mutex_);
   return samples_.size();
@@ -144,16 +155,19 @@ gtsam::NonlinearFactorGraph create_wheel_factor(
   double dt,
   const Eigen::Isometry3d& T_base,
   const Eigen::Isometry3d& T_last_current_imu,
-  WheelFactorResult& result) {
+  WheelFactorResult& result,
+  bool apply_gate) {
   // The same rigid motion seen from the IMU: T_imu(t0)_imu(t1) = T_imu_base * T_base * T_base_imu
   Eigen::Isometry3d T_imu = params.T_imu_base * T_base * params.T_imu_base.inverse();
   T_imu.linear() = Eigen::Quaterniond(T_imu.linear()).normalized().toRotationMatrix();
 
-  if (dt > 0.0) {
+  if (apply_gate && dt > 0.0) {
+    // The vector difference of the two translations, so a wrong direction counts as well as a wrong speed
     const double velocity_diff = (T_imu.translation() - T_last_current_imu.translation()).norm() / dt;
+    const double speed = std::max(T_imu.translation().norm(), T_last_current_imu.translation().norm()) / dt;
+    const double velocity_gate = std::max(params.gate_velocity, params.gate_velocity_ratio * speed);
     const double angular_diff = Eigen::AngleAxisd(T_imu.linear().transpose() * T_last_current_imu.linear()).angle() / dt;
-    if ((params.gate_velocity > 0.0 && velocity_diff > params.gate_velocity) ||
-        (params.gate_angular_velocity > 0.0 && angular_diff > params.gate_angular_velocity)) {
+    if ((velocity_gate > 0.0 && velocity_diff > velocity_gate) || (params.gate_angular_velocity > 0.0 && angular_diff > params.gate_angular_velocity)) {
       result = WheelFactorResult::GATED;
       return gtsam::NonlinearFactorGraph();
     }

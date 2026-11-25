@@ -179,8 +179,10 @@ OdometryEstimationLocalizationParams::OdometryEstimationLocalizationParams() {
   wheel_odom.rotation_sigma_min = config.param<double>(section, "wheel_odom_rotation_sigma_min", 0.05);
   wheel_odom.rotation_sigma_ratio = config.param<double>(section, "wheel_odom_rotation_sigma_ratio", 0.2);
   wheel_odom.huber_threshold = config.param<double>(section, "wheel_odom_huber_threshold", 1.0);
-  wheel_odom.gate_velocity = config.param<double>(section, "wheel_odom_gate_velocity", 1.0);
+  wheel_odom.gate_velocity = config.param<double>(section, "wheel_odom_gate_velocity", 0.3);
+  wheel_odom.gate_velocity_ratio = config.param<double>(section, "wheel_odom_gate_velocity_ratio", 0.3);
   wheel_odom.gate_angular_velocity = config.param<double>(section, "wheel_odom_gate_angular_velocity", 0.5);
+  wheel_odom.gate_readmit_frames = config.param<int>(section, "wheel_odom_gate_readmit_frames", 20);
 }
 
 OdometryEstimationLocalizationParams::~OdometryEstimationLocalizationParams() {}
@@ -684,6 +686,9 @@ void OdometryEstimationLocalization::apply_pending_reset(double frame_stamp) {
   gap_longest_ = 0.0;
   imu_lost_ = false;
   current_map_factors_ = MapFactors();
+  // Samples of the old run may be stamped after the new one (a bag loop): they would block the new samples
+  wheel_.clear();
+  wheel_gated_streak_ = 0;
   reset_backend();
   min_stamp_ = pending->min_stamp;
 
@@ -717,12 +722,24 @@ gtsam::NonlinearFactorGraph OdometryEstimationLocalization::create_wheel_factors
 
   gtsam::NonlinearFactorGraph factors;
   WheelFactorResult result = WheelFactorResult::NO_DATA;
+  bool readmitted = false;
   const auto T_base = wheel_.integrate(last->stamp, now->stamp);
   if (T_base) {
     // frames[current] still holds the IMU prediction here
     const Eigen::Isometry3d T_last_current_imu = last->T_world_imu.inverse() * now->T_world_imu;
+    // A long disagreement may be a wrong prediction rather than slip: without a map constraint nothing else would
+    // correct it, so let one factor through every gate_readmit_frames gated frames
+    readmitted = p.wheel_odom.gate_readmit_frames > 0 && wheel_gated_streak_ >= p.wheel_odom.gate_readmit_frames;
     using gtsam::symbol_shorthand::X;
-    factors = create_wheel_factor(p.wheel_odom, X(current - 1), X(current), now->stamp - last->stamp, *T_base, T_last_current_imu, result);
+    factors = create_wheel_factor(p.wheel_odom, X(current - 1), X(current), now->stamp - last->stamp, *T_base, T_last_current_imu, result, !readmitted);
+    if (result == WheelFactorResult::GATED) {
+      wheel_gated_streak_++;
+    } else {
+      if (readmitted) {
+        spdlog::warn("wheel odometry disagreed with the IMU prediction for {} frames: adding the wheel factor at {:.3f} s anyway", wheel_gated_streak_, now->stamp);
+      }
+      wheel_gated_streak_ = 0;
+    }
   }
   // The next interval starts at this frame
   wheel_.trim(now->stamp);
@@ -731,6 +748,7 @@ gtsam::NonlinearFactorGraph OdometryEstimationLocalization::create_wheel_factors
   switch (result) {
     case WheelFactorResult::ADDED:
       status_.wheel_factors++;
+      status_.wheel_readmitted += readmitted ? 1 : 0;
       break;
     case WheelFactorResult::GATED:
       status_.wheel_gated++;

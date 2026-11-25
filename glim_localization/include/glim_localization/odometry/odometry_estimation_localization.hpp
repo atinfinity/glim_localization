@@ -81,6 +81,7 @@ struct LocalizationStatus {
   // Wheel odometry (wheel_odom_enabled), counted per frame since the last reset. All 0 while it is disabled.
   int wheel_factors = 0;  ///< Frames that got a wheel relative pose factor
   int wheel_gated = 0;    ///< Frames whose wheel motion the consistency gate rejected (slip, a stuck wheel)
+  int wheel_readmitted = 0;  ///< Of wheel_factors, those added without the gate after gate_readmit_frames gated frames
   int wheel_missing = 0;  ///< Frames whose interval the wheel samples did not cover
 };
 
@@ -176,7 +177,8 @@ public:
 
   /// Add a wheel odometry twist of the base frame (wheel_odom_T_imu_base) at the given stamp, in the base frame.
   /// Thread-safe. Samples are associated with frames by time, so they may arrive before or shortly after the frame.
-  /// @return false if wheel odometry is disabled or the sample was dropped (non-finite or not newer than the last one)
+  /// @return false if wheel odometry is disabled or the sample was dropped (non-finite, or not newer than the last one;
+  /// a run of WheelOdometryBuffer::kRestartRejects such samples is taken as a clock restart). A reset clears the samples.
   bool insert_wheel_odom(double stamp, const Eigen::Vector3d& linear_vel, const Eigen::Vector3d& angular_vel);
 
   /// Thread-safe.
@@ -270,6 +272,7 @@ private:
   std::shared_ptr<const MapManager> map_;
   QualityMonitor quality_;
   WheelOdometryBuffer wheel_;
+  int wheel_gated_streak_ = 0;  ///< Consecutive frames whose wheel factor was gated
 
   double min_stamp_ = 0.0;
 
