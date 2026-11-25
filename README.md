@@ -6,7 +6,7 @@ LiDAR-IMU localization on a prebuilt 3D map, built on top of [GLIM](https://gith
 
 *Offline replay on synthetic data, oblique 3D view: each scan (red) is placed on the prebuilt map (gray floor, the rest colored by height) by the estimated pose (orange dot, heading arrow and up axis). Thin lines drop from the estimate to the surface below it, so the path visibly passes over the low boxes in the corridor. Regenerate with [`scripts/render_demo.py`](docs/replay.md#demo-animation).*
 
-> **Status: under development. CPU by default; the GPU module (CUDA image) is tested on synthetic data only.** The core, the offline tools and both ROS 2 integrations work on synthetic data and pass CI. Real-data evaluation is limited (see [Limitations](#limitations)). The interfaces may still change. Details: [Status and limitations](docs/status.md), [PROGRESS](docs/PROGRESS.md), [open issues](https://github.com/atinfinity/glim_localization/issues).
+> **Status: under development. CPU by default; the GPU module (CUDA image) is tested on synthetic data only.** The core, the offline tools and both ROS 2 integrations work on synthetic data and pass CI. Real-data evaluation is limited (see [Limitations](#limitations)). The interfaces may still change. Details: [Status and limitations](docs/status.md), [progress](docs/progress/README.md), [open issues](https://github.com/atinfinity/glim_localization/issues).
 
 ## Features
 
@@ -66,7 +66,7 @@ The step-by-step guide, including real bags and setting the initial pose, is [do
 | [Design](docs/DESIGN.md) | Architecture and design decisions |
 | [Dependencies](docs/DEPENDENCIES.md) | Pinned dependencies, provenance and licenses |
 | [Implementation plan](docs/IMPLEMENTATION_PLAN.md) | Phases and their state |
-| [Progress](docs/PROGRESS.md) | History, verification results and measurements |
+| [Progress](docs/progress/README.md) | Verification results, measurements and decisions, one file per entry; the earlier history is in [PROGRESS.md](docs/PROGRESS.md) |
 | [Contributing](CONTRIBUTING.md) | Issues, pull requests and the development workflow |
 
 ## Limitations

@@ -66,7 +66,7 @@ Exceptions, all in `glim_localization_ros2/CMakeLists.txt` and `scripts/test_col
 ## Engineering rules
 
 - **ROS-free core.** `glim_localization/` must not depend on ROS. Keep ROS dependencies in `glim_localization_ros2/` (and the message definitions in `glim_localization_msgs/`).
-- **Upstream code is not modified.** GLIM, gtsam_points and glim_ros2 are used as pinned dependencies (see [docs/DEPENDENCIES.md](docs/DEPENDENCIES.md)). If an upstream fix is unavoidable, add a patch under `third_party/patches/` and explain why in the pull request and in `docs/PROGRESS.md`.
+- **Upstream code is not modified.** GLIM, gtsam_points and glim_ros2 are used as pinned dependencies (see [docs/DEPENDENCIES.md](docs/DEPENDENCIES.md)). If an upstream fix is unavoidable, add a patch under `third_party/patches/` and explain why in the pull request and in a progress entry under `docs/progress/` (see [docs/progress/README.md](docs/progress/README.md)).
 - **Derived-from header.** A file derived from GLIM starts with a line naming its source path and the pinned commit:
 
   ```cpp

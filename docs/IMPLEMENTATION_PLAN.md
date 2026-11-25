@@ -1,7 +1,7 @@
 # Implementation plan
 
 Development, builds, and tests run in a headless Docker container with Ubuntu 24.04 + ROS 2 Jazzy (`docker/`). The container covers **the CPU core, offline evaluation, and the ROS 2 packages**. The GPU build (`BUILD_WITH_CUDA=ON`) and real-robot evaluation need a Linux machine with an NVIDIA GPU and come later.
-When a phase meets its completion criteria, its results are recorded in `docs/PROGRESS.md`.
+When a phase meets its completion criteria, its results are recorded in a progress entry under `docs/progress/` (earlier phases: `docs/PROGRESS.md`).
 
 Status: Phases 0 to 4 are done. Phase 5 is done except the `~/aligned_points` topic ([#18](https://github.com/atinfinity/glim_localization/issues/18)). Phase 6 is partly done (PCD and PLY input and 2D occupancy grid export for map_compiler, README).
 
