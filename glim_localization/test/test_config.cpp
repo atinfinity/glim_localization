@@ -61,6 +61,9 @@ TEST(ConfigTest, OdometryUsesLocalizationModule) {
     EXPECT_DOUBLE_EQ(config->at("init_yaw_search_time_budget").get<double>(), 10.0);
     EXPECT_EQ(config->at("init_yaw_search_max_iterations").get<int>(), 10);
     EXPECT_EQ(config->at("init_yaw_search_min_points").get<int>(), 100);
+    // Wheel odometry is opt-in
+    EXPECT_FALSE(config->at("wheel_odom_enabled").get<bool>());
+    EXPECT_EQ(config->at("wheel_odom_T_imu_base").size(), 7u);
   }
 }
 
