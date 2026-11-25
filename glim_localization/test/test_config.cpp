@@ -76,6 +76,17 @@ TEST(ConfigTest, GpuConfigSelectsGpuModule) {
   const json odometry = read_config("gpu/" + global.at("config_odometry").get<std::string>()).at("odometry_estimation");
   EXPECT_EQ(odometry.at("so_name").get<std::string>(), "libodometry_localization_gpu.so");
   EXPECT_GE(odometry.at("map_gpu_max_tiles").get<int>(), odometry.at("map_max_submaps").get<int>());
+  // The tile streaming keys, within the ranges the GPU module accepts
+  const double budget_mb = odometry.at("map_gpu_memory_budget_mb").get<double>();
+  EXPECT_GE(budget_mb, 1.0);
+  EXPECT_LE(budget_mb, 1048576.0);
+  EXPECT_TRUE(odometry.at("map_gpu_prefetch").is_boolean());
+  const double lookahead = odometry.at("map_gpu_prefetch_lookahead").get<double>();
+  EXPECT_GE(lookahead, 0.0);
+  EXPECT_LE(lookahead, 10.0);
+  const int prefetch_max_tiles = odometry.at("map_gpu_prefetch_max_tiles").get<int>();
+  EXPECT_GE(prefetch_max_tiles, 1);
+  EXPECT_LE(prefetch_max_tiles, odometry.at("map_gpu_max_tiles").get<int>());
 }
 
 TEST(ConfigTest, GpuConfigSharesCommonKeysWithCpu) {

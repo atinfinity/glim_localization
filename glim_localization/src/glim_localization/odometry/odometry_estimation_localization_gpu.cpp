@@ -28,6 +28,7 @@
 #include <glim/odometry/callbacks.hpp>
 #include <glim/util/config.hpp>
 
+#include <glim_localization/map/tile_prefetch.hpp>
 #include <glim_localization/odometry/gpu_linearization_hook.hpp>
 #include <glim_localization/odometry/map_factor_builder.hpp>
 #include <glim_localization/odometry/weighted_vgicp_factor_gpu.hpp>
@@ -42,6 +43,10 @@ OdometryEstimationLocalizationGPUParams::OdometryEstimationLocalizationGPUParams
   const std::string section = "odometry_estimation";
 
   map_gpu_max_tiles = config.param<int>(section, "map_gpu_max_tiles", 32);
+  map_gpu_memory_budget_mb = config.param<double>(section, "map_gpu_memory_budget_mb", 1024.0);
+  map_gpu_prefetch = config.param<bool>(section, "map_gpu_prefetch", true);
+  map_gpu_prefetch_lookahead = config.param<double>(section, "map_gpu_prefetch_lookahead", 1.0);
+  map_gpu_prefetch_max_tiles = config.param<int>(section, "map_gpu_prefetch_max_tiles", 10);
 
   voxel_resolution = config.param<double>(section, "voxel_resolution", 0.5);
   voxel_resolution_max = config.param<double>(section, "voxel_resolution_max", voxel_resolution);
@@ -96,6 +101,15 @@ std::unique_ptr<OdometryEstimationLocalizationGPUParams> gpu_params_with_hook(co
     // A frame would evict its own tiles and upload them again on every frame.
     throw std::invalid_argument("map_gpu_max_tiles must be at least map_max_submaps");
   }
+  if (!std::isfinite(params.map_gpu_memory_budget_mb) || params.map_gpu_memory_budget_mb < 1.0 || params.map_gpu_memory_budget_mb > 1048576.0) {
+    throw std::invalid_argument("map_gpu_memory_budget_mb must be in [1, 1048576]");
+  }
+  if (!std::isfinite(params.map_gpu_prefetch_lookahead) || params.map_gpu_prefetch_lookahead < 0.0 || params.map_gpu_prefetch_lookahead > 10.0) {
+    throw std::invalid_argument("map_gpu_prefetch_lookahead must be in [0, 10]");
+  }
+  if (params.map_gpu_prefetch_max_tiles < 1 || params.map_gpu_prefetch_max_tiles > params.map_gpu_max_tiles) {
+    throw std::invalid_argument("map_gpu_prefetch_max_tiles must be in [1, map_gpu_max_tiles]");
+  }
   if (params.use_keyframes && (params.voxelmap_levels < 1 || !(params.voxel_resolution > 0.0) || params.max_num_keyframes < 1)) {
     throw std::invalid_argument("invalid keyframe parameters");
   }
@@ -111,12 +125,32 @@ OdometryEstimationLocalizationGPU::OdometryEstimationLocalizationGPU(const Param
 
 OdometryEstimationLocalizationGPU::OdometryEstimationLocalizationGPU(const Params& params, std::shared_ptr<const MapManager> map)
 : OdometryEstimationLocalization(gpu_params_with_hook(params), std::move(map)) {
+  // Errors raised by earlier work on this thread (for example by another module) are reported as such, not as ours.
+  clear_earlier_cuda_error("setting up the GPU localization module");
   stream.reset(new gtsam_points::CUDAStream());
   stream_buffer_roundrobin.reset(new gtsam_points::StreamTempBufferRoundRobin());
-  tile_cache_.reset(new GpuTileCache(params.map_gpu_max_tiles, *stream));
   const cudaError_t error = cudaGetLastError();
   if (error != cudaSuccess) {
     throw std::runtime_error(std::string("failed to set up the CUDA streams: ") + cudaGetErrorString(error));
+  }
+
+  GpuTileCacheParams cache_params;
+  cache_params.budget.max_tiles = params.map_gpu_max_tiles;
+  cache_params.budget.max_bytes = static_cast<size_t>(params.map_gpu_memory_budget_mb * 1024.0 * 1024.0);
+  cache_params.prefetch = params.map_gpu_prefetch;
+  tile_cache_.reset(new GpuTileCache(cache_params, *stream));
+
+  size_t free_bytes = 0;
+  size_t total_bytes = 0;
+  if (cudaMemGetInfo(&free_bytes, &total_bytes) == cudaSuccess) {
+    if (cache_params.budget.max_bytes > total_bytes) {
+      spdlog::warn(
+        "map_gpu_memory_budget_mb ({} MiB) exceeds the device memory ({} MiB); uploads fail when the device runs out",
+        params.map_gpu_memory_budget_mb,
+        total_bytes / (1024 * 1024));
+    }
+  } else {
+    cudaGetLastError();  // Informational only
   }
 }
 
@@ -127,6 +161,19 @@ OdometryEstimationLocalizationGPU::~OdometryEstimationLocalizationGPU() {
   smoother.reset();
   current_map_factors_ = MapFactors();
   current_gpu_tiles_.clear();
+  if (tile_cache_) {
+    const auto& stats = tile_cache_->stats();
+    spdlog::info(
+      "GPU map tiles: uploads={} prefetched={} misses={} prefetch_waits={} evictions={} over_budget={} peak_mb={:.1f} budget_mb={:.1f}",
+      stats.uploads,
+      stats.prefetch_uploads,
+      stats.misses,
+      stats.prefetch_waits,
+      stats.evictions,
+      stats.over_budget,
+      stats.peak_bytes / (1024.0 * 1024.0),
+      tile_cache_->max_bytes() / (1024.0 * 1024.0));
+  }
   tile_cache_.reset();
 }
 
@@ -207,8 +254,21 @@ gtsam::NonlinearFactorGraph OdometryEstimationLocalizationGPU::create_gpu_map_fa
   }
 
   // Tile selection and the overlap filter run on the CPU tiles, so only the selected tiles are uploaded.
-  for (const auto& tile : select_map_tiles(*map(), frame, frames[current]->T_world_imu, p.map_factors)) {
-    const auto gpu_tile = tile_cache_->get(tile);
+  const auto tiles = select_map_tiles(*map(), frame, frames[current]->T_world_imu, p.map_factors);
+  const auto gpu_tiles = tile_cache_->acquire(tiles);
+  if (p.map_gpu_prefetch) {
+    // Queue the tiles near the predicted path for the background thread; this does not wait for an upload.
+    TilePrefetchParams prefetch;
+    prefetch.search_radius = p.map_factors.search_radius;
+    prefetch.max_submaps = p.map_factors.max_submaps;
+    prefetch.lookahead = p.map_gpu_prefetch_lookahead;
+    prefetch.max_tiles = p.map_gpu_prefetch_max_tiles;
+    tile_cache_->prefetch(select_prefetch_tiles(*map(), frames[current]->T_world_imu, frames[current]->v_world_imu, prefetch));
+  }
+
+  for (size_t i = 0; i < tiles.size(); i++) {
+    const auto& tile = tiles[i];
+    const auto& gpu_tile = gpu_tiles[i];
     const gtsam::Pose3 T_world_origin(tile->T_world_origin.matrix());
 
     auto stream_buffer = stream_buffer_roundrobin->get_stream_buffer();
