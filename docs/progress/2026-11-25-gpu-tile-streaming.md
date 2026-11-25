@@ -74,6 +74,11 @@
   - The worker thread did not set the CUDA device, so on a multi-GPU host it uploaded to device 0. `GpuTileCache` reads the device in its constructor and the worker calls `cudaSetDevice` before each upload.
   - The shutdown log line adds `prefetch_failures` and `prefetch_cancels`.
   - New CPU tests: a failed prefetch seen by `prefetch()` and by `acquire()` (of another tile, and of the same tile while it runs) is dropped and reported, then uploaded in the foreground; a frame tile that fails in the foreground still throws; queued prefetches filling the budget are cancelled for the frame's tiles without going over budget; the same tile id from another map while its prefetch runs.
+  - Verification after the fixes:
+    - CPU: `scripts/ci.sh` passes (312 core tests, 17 of them `TileStreamer*`).
+    - GPU (RTX 2080 Ti, CUDA 13.1 image): 331 of 331 core tests pass, with the same two unrelated stale-image Python failures as above, and `test_replay_e2e.sh` passes.
+    - CPU vs GPU: at most 1.1e-5 m and 3.4e-4 deg on the default map, and 7.2e-5 m and 1.6e-4 deg on 4 m tiles.
+    - The 24 MB budget run: 3 evictions, a peak of 23.5 MB, and no prefetch failures or cancels.
 - **Open** ([#23](https://github.com/atinfinity/glim_localization/issues/23)):
   - Real-data GPU evaluation: latency at tile transitions, and the estimate against real tile sizes.
   - Streaming tiles from disk into host memory: the whole map still stays resident in host memory.
