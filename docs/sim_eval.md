@@ -30,9 +30,9 @@ The script builds the simulation image `glim_localization:sim` (`docker/sim/Dock
 | `SIM_EVAL_MAX_TRANS`, `SIM_EVAL_MAX_ROT_DEG` | 0.05, 1.0 | Loose accuracy gate: `evaluate.py --max-trans`, `--max-rot-deg`. |
 
 > [!WARNING]
-> The `loc` service has its own build volume, not the one of `docker/compose.yaml`, so the first run builds the core there (about 10 minutes). `COMPOSE_PROJECT_NAME` selects the compose project and so these volumes and the network (default `glim_localization_sim`). Do not set it to the project name of another compose setup, or the runs share and overwrite its volumes. Clean up with `docker compose -f docker/sim/compose.yaml down -v` under the same project name.
+> The `loc` service has its own build volume, not the one of `docker/compose.yaml`, so the first run builds the core there (a few minutes). `COMPOSE_PROJECT_NAME` selects the compose project and so these volumes and the network (default `glim_localization_sim`). Do not set it to the project name of another compose setup, or the runs share and overwrite its volumes. Clean up with `docker compose -f docker/sim/compose.yaml down -v` under the same project name.
 
-On the development Mac (Docker, arm64, CPU only) one run takes about 45 s once the images and the core build exist.
+On the development Mac (Docker, arm64, CPU only) one run takes about 45 s once the images and the core build exist. Measurements and the problems found are in the [progress entry](progress/2026-11-25-sim-eval-step1.md).
 
 ## Chain
 
