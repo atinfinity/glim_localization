@@ -81,3 +81,14 @@ The GPU module is selected with `--config glim_localization/config/gpu` in the C
 ## Evaluation mapper
 
 `glim_localization_mapper` and `scripts/smoke_os1_128.sh` build a GLIM map and a reference trajectory from a replay dataset for a real-data consistency check. They are evaluation tools, not a supported mapper; build maps for real use with GLIM.
+
+```bash
+scripts/docker_run.sh scripts/smoke_os1_128.sh [--force] <replay dataset dir> [out dir]
+```
+
+The smoke test caches its two maps (`map_full` and `map_prefix`) in `/ws/out/smoke_os1_128/cache`, or `cache-cuda` in the CUDA image, so a second run skips the mapper and only localizes again.
+- **Rebuilds:** a map is rebuilt when its key changes. The key covers the dataset, the mapping config, the binaries and libraries, and the split.
+- **Checks:** a cached map is checked against its manifest before use.
+- **Options:** `--force` rebuilds both maps, and `SMOKE_CACHE_DIR` sets another cache directory.
+
+The script header in `scripts/smoke_os1_128.sh` and section 6.5 of the [design](DESIGN.md) have the details.
