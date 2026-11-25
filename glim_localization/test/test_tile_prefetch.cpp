@@ -101,7 +101,11 @@ TEST_F(TilePrefetchTest, IgnoresAnInvalidVelocityOrLookahead) {
   EXPECT_EQ(ids(select_prefetch_tiles(*manager_, pose_at(21.0), Eigen::Vector3d(10.0, 0.0, 0.0), params(15.0, 2, nan, 10))), still);
   EXPECT_EQ(ids(select_prefetch_tiles(*manager_, pose_at(21.0), Eigen::Vector3d(10.0, 0.0, 0.0), params(15.0, 2, -1.0, 10))), still);
   // A huge velocity is sampled at a bounded number of points and still returns at most max_tiles tiles.
-  EXPECT_LE(select_prefetch_tiles(*manager_, pose_at(21.0), Eigen::Vector3d(1e12, 0.0, 0.0), params(15.0, 2, 1.0, 3)).size(), 3u);
+  const auto fast = select_prefetch_tiles(*manager_, pose_at(21.0), Eigen::Vector3d(1e12, 0.0, 0.0), params(15.0, 2, 1.0, 3));
+  EXPECT_FALSE(fast.empty());  // The tiles at the current position are still taken
+  EXPECT_LE(fast.size(), 3u);
+  // Far beyond the int range too: the sample count is capped before it is converted
+  EXPECT_FALSE(select_prefetch_tiles(*manager_, pose_at(21.0), Eigen::Vector3d(1e300, 0.0, 0.0), params(15.0, 2, 1.0, 3)).empty());
 }
 
 TEST_F(TilePrefetchTest, ReturnsNothingForInvalidParameters) {

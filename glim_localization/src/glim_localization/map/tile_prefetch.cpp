@@ -36,7 +36,9 @@ std::vector<MapTile::ConstPtr> select_prefetch_tiles(
 
   // Samples along the segment, no farther apart than half the search radius, so no stretch of the path is missed.
   const double length = (end - start).norm();
-  const int steps = std::min(1000, static_cast<int>(std::ceil(length / (0.5 * params.search_radius))));
+  // Capped in double before the conversion: a huge (finite) velocity would overflow the int otherwise.
+  const double sample_count = std::ceil(length / (0.5 * params.search_radius));
+  const int steps = sample_count < 1000.0 ? static_cast<int>(sample_count) : 1000;
   std::vector<MapTile::ConstPtr> candidates;
   std::unordered_set<int> seen;
   for (int i = 0; i <= steps; i++) {
