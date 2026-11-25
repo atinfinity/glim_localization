@@ -74,8 +74,8 @@ These are the parts of [#5](https://github.com/atinfinity/glim_localization/issu
     | 12 boxes added | 0.0333 m | not in that version |
     | combined change | 0.0721 m | 0.0858 m |
 
-    The numbers below are from arm64, and amd64 differs by up to about 0.015 m in ATE max.
-  - **Full suite:** about 9.3 min with `--jobs 3`. Rows 0 to 3 m and the map table are identical over three runs.
+    The full-suite tables below are from arm64; amd64 differs by up to about 0.015 m in ATE max.
+  - **Full suite:** about 9.3 min with `--jobs 3`. Rows 0 to 3 m and the map table match the earlier full run.
   - **Initial pose without the yaw search** (`P` pass; `i` inaccurate; `L` lost; `D` low tracking ratio):
 
     | translation \ yaw [deg] | 0-20 | 30 | 45 | 60 | 90 | 135 | 180 |
