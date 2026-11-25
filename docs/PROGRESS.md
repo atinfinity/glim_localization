@@ -1,7 +1,7 @@
 # Progress log
 
 > [!NOTE]
-> This file is frozen. New entries are separate files in [progress/](progress/README.md), so that parallel pull requests do not conflict.
+> This file is frozen. New entries are separate files in the [progress entries](progress/README.md) folder, so that parallel pull requests do not conflict.
 
 For each phase, record what was done, problems and workarounds, and open items.
 

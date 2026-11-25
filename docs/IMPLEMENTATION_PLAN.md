@@ -43,8 +43,8 @@ In the CPU version, `use_keyframes` means relative pose factors from the local m
 - `glim_localization_replay`: read a simple data format (`points/<stamp>.bin` and `imu.csv`; PLY frames are not supported), run GLIM's preprocessing and then localization, and write `traj_localization.txt` (TUM format).
 - A converter for real data, `scripts/bag_to_replay.py`: convert a ROS 2 bag (db3/mcap) to the simple format with the Python `rosbags` package (no ROS needed).
 - An evaluation script, `scripts/evaluate.py`: ATE/RPE with evo, and processing time statistics.
-- Done when: replay on synthetic data reaches the same accuracy as Phase 3. If real data is available, convert and run it, and record the results in PROGRESS.md.
-- An evaluation mapper for real data (first step of [#5](https://github.com/atinfinity/glim_localization/issues/5)): `glim_localization_mapper` (no ROS) and `scripts/smoke_os1_128.sh`. Build a GLIM map and a reference trajectory from a replay dataset, run localization with the same preprocessing, and measure the agreement with GLIM. Done when: a synthetic test shows the dump can be read with `load_map`. Record real-data results in PROGRESS.md.
+- Done when: replay on synthetic data reaches the same accuracy as Phase 3. If real data is available, convert and run it, and record the results in a progress entry under `docs/progress/`.
+- An evaluation mapper for real data (first step of [#5](https://github.com/atinfinity/glim_localization/issues/5)): `glim_localization_mapper` (no ROS) and `scripts/smoke_os1_128.sh`. Build a GLIM map and a reference trajectory from a replay dataset, run localization with the same preprocessing, and measure the agreement with GLIM. Done when: a synthetic test shows the dump can be read with `load_map`. Record real-data results in a progress entry under `docs/progress/`.
 
 ## Phase 5: ROS 2 packages (done except `~/aligned_points`)
 

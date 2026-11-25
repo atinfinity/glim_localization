@@ -19,3 +19,4 @@
 - [ ] No bags, maps or other recorded data are committed
 - [ ] Files derived from GLIM or glim_ros2 start with the Derived-from header (see CONTRIBUTING.md)
 - [ ] README or `docs/` updated if behavior or interfaces changed
+- [ ] Verification results or design decisions, if any, are recorded as a new file under `docs/progress/` (see `docs/progress/README.md`)
