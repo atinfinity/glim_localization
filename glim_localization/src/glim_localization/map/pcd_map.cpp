@@ -482,4 +482,36 @@ bool build_pcd_submaps(const PcdPoints& points, const PcdMapParams& params, Load
   return true;
 }
 
+bool recompute_covariances(LoadedSubmaps& submaps, int k_neighbors, int num_threads) {
+  if (k_neighbors < kMinPcdKNeighbors) {
+    spdlog::error("k_neighbors {} must be at least {}", k_neighbors, kMinPcdKNeighbors);
+    return false;
+  }
+  if (num_threads < 1) {
+    spdlog::error("num_threads {} must be at least 1", num_threads);
+    return false;
+  }
+
+  std::vector<gtsam_points::PointCloud::Ptr> clouds;
+  clouds.reserve(submaps.size());
+  size_t total = 0;
+  for (const auto& submap : submaps) {
+    if (!submap.points || submap.points->size() < static_cast<size_t>(k_neighbors)) {
+      spdlog::error("submap {} has {} points, fewer than k_neighbors {}", submap.id, submap.points ? submap.points->size() : 0, k_neighbors);
+      return false;
+    }
+    auto cloud = gtsam_points::PointCloudCPU::clone(*submap.points);
+    // A rigid transform keeps the neighbours, so estimating in the origin frame gives R^T * C_world * R.
+    cloud->add_covs(gtsam_points::estimate_covariances(cloud->points, cloud->size(), k_neighbors, num_threads));
+    total += cloud->size();
+    clouds.push_back(cloud);
+  }
+
+  for (size_t i = 0; i < submaps.size(); i++) {
+    submaps[i].points = clouds[i];
+  }
+  spdlog::info("recomputed the covariances of {} points in {} submaps (k_neighbors {})", total, submaps.size(), k_neighbors);
+  return true;
+}
+
 }  // namespace glim_localization

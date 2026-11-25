@@ -15,7 +15,7 @@ The commands run inside the container (see [Build and test](build.md#build-and-t
 
 ## Point cloud options
 
-Point cloud options (`.pcd` and `.ply`; rejected for dump input):
+Point cloud options (`.pcd` and `.ply`; rejected for dump input, except `--k-neighbors` with [`--recompute-covariances`](#recomputing-covariances-of-a-glim-dump)):
 
 | Option | Meaning | Default |
 | --- | --- | --- |
@@ -25,7 +25,25 @@ Point cloud options (`.pcd` and `.ply`; rejected for dump input):
 
 PCD input reads `DATA ascii` and `binary` with x, y, z as F4 or F8; other fields are ignored. PLY input reads `format ascii` and `binary_little_endian` with vertex x, y, z as `float` or `double`. Other properties (intensity, normals, colors, lists) and other elements (faces) are ignored, and big-endian PLY is rejected. The same points give the same map from either format. Localization uses up to `map_max_submaps` (default 5) tiles nearest to the robot, so 20 m tiles cover only about 40 x 40 m. For long-range LiDAR use `--grid-size` 50 to 100, or raise `map_max_submaps`.
 
-Not supported yet: compressed PCD ([#12](https://github.com/atinfinity/glim_localization/issues/12)). Covariances from a GLIM dump are kept, not recomputed ([#31](https://github.com/atinfinity/glim_localization/issues/31)). See [Status and limitations](status.md).
+Not supported yet: compressed PCD ([#12](https://github.com/atinfinity/glim_localization/issues/12)). See [Status and limitations](status.md).
+
+## Recomputing covariances of a GLIM dump
+
+By default, the per-point covariances of a GLIM dump or a compiled map are copied as they are. `--recompute-covariances` estimates them again from the k nearest neighbours, the same way as for PCD and PLY input:
+
+```bash
+/ws/build/core/tools/map_compiler /ws/out/glim_dump /ws/out/map --recompute-covariances --k-neighbors 20
+```
+
+| Option | Meaning | Default |
+| --- | --- | --- |
+| `--recompute-covariances` | Estimate the covariances again (GLIM dump or compiled map input only) | off |
+| `--k-neighbors <n>` | Neighbours for covariance estimation, 5 to 1000; for map directory input only with `--recompute-covariances` | 10 |
+
+- **Per submap:** neighbours are searched within each submap, not across submaps. GLIM submaps overlap and each covers the sensor range, so a search across submaps would mix slightly offset copies of the same surface. The default k = 10 matches GLIM's per-scan default (`k_correspondences`); GLIM itself estimates covariances per scan and merges the transformed scan covariances into the submap, so recomputed covariances come from a different neighbourhood than the ones in the dump.
+- **Tile edges:** for a map compiled from a PCD or PLY file, the tiles do not overlap, so points near a tile edge then see only the neighbours in their own tile. To change k for such a map, compile it again from the point cloud.
+- **Errors:** `--recompute-covariances` with `.pcd` or `.ply` input, and `--k-neighbors` with map directory input but without `--recompute-covariances`, are rejected. A submap with fewer than k points fails the run, and nothing is written.
+- Points, poses and submap ids are unchanged, and `map_index.json` keeps `source: "glim_dump"`.
 
 ## 2D occupancy grid for Nav2
 

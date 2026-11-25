@@ -13,7 +13,7 @@ Measurements and the history behind these items are in [PROGRESS.md](PROGRESS.md
 | 4 | Offline replay, bag conversion, evaluation, evaluation mapper | Done |
 | 5 | ROS 2: glim_ros2 layer, msgs, IMU gap policy, publisher and TF, R1 extension, R2 lifecycle node | Done |
 | 5 | Launch files, YAML parameter files, RViz config, `~/map` | Done |
-| 6 | `map_compiler` PCD and PLY input, 2D occupancy grid export | Done |
+| 6 | `map_compiler` PCD and PLY input, 2D occupancy grid export, covariance recomputation for GLIM dumps | Done |
 | 6 | README and user docs | Done |
 | 6 | GPU (CUDA) odometry module, selected by the odometry config (CUDA image) | Done; tile prefetch open ([#23](https://github.com/atinfinity/glim_localization/issues/23)) |
 
@@ -23,7 +23,7 @@ Not done yet (open issues):
 
 - GPU follow-ups ([#23](https://github.com/atinfinity/glim_localization/issues/23)): tile prefetch and a GPU memory budget, real-data timing on the GPU. The GPU module itself is in place ([CUDA variant](build.md#cuda-variant)).
 - Relocalizer ([#3](https://github.com/atinfinity/glim_localization/issues/3)): global relocalization (no pose given), and a better use of the yaw search (accumulated scans, roll and pitch from gravity, height from the map). The yaw search around a given pose is in place ([Initial pose yaw search](ros2.md#initial-pose-yaw-search)).
-- `map_compiler`: covariance recomputation for GLIM dumps ([#31](https://github.com/atinfinity/glim_localization/issues/31)); PCD follow-ups such as `binary_compressed` input ([#12](https://github.com/atinfinity/glim_localization/issues/12)).
+- `map_compiler`: PCD follow-ups such as `binary_compressed` input ([#12](https://github.com/atinfinity/glim_localization/issues/12)).
 - Evaluation on real data against an independent reference ([#5](https://github.com/atinfinity/glim_localization/issues/5)) and in simulation ([#9](https://github.com/atinfinity/glim_localization/issues/9)).
 - Optional wheel odometry fusion ([#14](https://github.com/atinfinity/glim_localization/issues/14)).
 - Follow-ups for robustness, the IMU gap policy, the publisher and the R2 node ([#6](https://github.com/atinfinity/glim_localization/issues/6), [#8](https://github.com/atinfinity/glim_localization/issues/8), [#10](https://github.com/atinfinity/glim_localization/issues/10), [#13](https://github.com/atinfinity/glim_localization/issues/13)).
