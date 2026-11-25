@@ -1,0 +1,108 @@
+<?xml version="1.0"?>
+<!--
+  Sensor rig for the Gazebo evaluation (docs/sim_eval.md): an IMU and a 32-channel gpu_lidar on one rigid
+  body. The body hangs from the world on prismatic x, prismatic y and revolute yaw joints, driven by the
+  ScriptedMotion plugin (sim/plugins/scripted_motion) from a fixed velocity profile in simulation time.
+  The links have no collision or visual, so the LiDAR never sees the rig and sdf2map samples nothing here.
+
+  Frames (all axes parallel at rest):
+    imu_link  origin of the body; the IMU sensor is at its origin. Ground truth is T_world_imu of this link.
+    LiDAR     at (0.10, 0, 0.20) in imu_link, so T_lidar_imu = translation (-0.10, 0, -0.20), identity rotation.
+  The model pose (set where it is included) is the initial imu_link pose.
+-->
+<sdf version="1.9">
+  <model name="sim_eval_rig">
+    <link name="anchor">
+      <inertial><mass>1.0</mass><inertia><ixx>0.01</ixx><iyy>0.01</iyy><izz>0.01</izz></inertia></inertial>
+    </link>
+    <link name="slider_x">
+      <inertial><mass>1.0</mass><inertia><ixx>0.01</ixx><iyy>0.01</iyy><izz>0.01</izz></inertia></inertial>
+    </link>
+    <link name="slider_y">
+      <inertial><mass>1.0</mass><inertia><ixx>0.01</ixx><iyy>0.01</iyy><izz>0.01</izz></inertia></inertial>
+    </link>
+    <link name="imu_link">
+      <inertial><mass>2.0</mass><inertia><ixx>0.02</ixx><iyy>0.02</iyy><izz>0.02</izz></inertia></inertial>
+
+      <sensor name="imu" type="imu">
+        <always_on>true</always_on>
+        <update_rate>200</update_rate>
+        <topic>/sim_eval/imu</topic>
+        <imu>
+          <angular_velocity>
+            <x><noise type="gaussian"><mean>0</mean><stddev>0.002</stddev></noise></x>
+            <y><noise type="gaussian"><mean>0</mean><stddev>0.002</stddev></noise></y>
+            <z><noise type="gaussian"><mean>0</mean><stddev>0.002</stddev></noise></z>
+          </angular_velocity>
+          <linear_acceleration>
+            <x><noise type="gaussian"><mean>0</mean><stddev>0.02</stddev></noise></x>
+            <y><noise type="gaussian"><mean>0</mean><stddev>0.02</stddev></noise></y>
+            <z><noise type="gaussian"><mean>0</mean><stddev>0.02</stddev></noise></z>
+          </linear_acceleration>
+        </imu>
+      </sensor>
+
+      <sensor name="lidar" type="gpu_lidar">
+        <pose>0.10 0 0.20 0 0 0</pose>
+        <always_on>true</always_on>
+        <update_rate>10</update_rate>
+        <topic>/sim_eval/lidar</topic>
+        <lidar>
+          <scan>
+            <horizontal>
+              <samples>1024</samples>
+              <resolution>1</resolution>
+              <min_angle>-3.14159265</min_angle>
+              <max_angle>3.14159265</max_angle>
+            </horizontal>
+            <vertical>
+              <samples>32</samples>
+              <resolution>1</resolution>
+              <min_angle>-0.2617994</min_angle>
+              <max_angle>0.2617994</max_angle>
+            </vertical>
+          </scan>
+          <range>
+            <min>0.3</min>
+            <max>50.0</max>
+            <resolution>0.01</resolution>
+          </range>
+          <noise>
+            <type>gaussian</type>
+            <mean>0.0</mean>
+            <stddev>0.01</stddev>
+          </noise>
+        </lidar>
+      </sensor>
+    </link>
+
+    <joint name="anchor_to_world" type="fixed">
+      <parent>world</parent>
+      <child>anchor</child>
+    </joint>
+    <joint name="joint_x" type="prismatic">
+      <parent>anchor</parent>
+      <child>slider_x</child>
+      <axis>
+        <xyz expressed_in="__model__">1 0 0</xyz>
+        <limit><lower>-1e6</lower><upper>1e6</upper><effort>1e6</effort><velocity>1e3</velocity></limit>
+      </axis>
+    </joint>
+    <joint name="joint_y" type="prismatic">
+      <parent>slider_x</parent>
+      <child>slider_y</child>
+      <axis>
+        <xyz expressed_in="__model__">0 1 0</xyz>
+        <limit><lower>-1e6</lower><upper>1e6</upper><effort>1e6</effort><velocity>1e3</velocity></limit>
+      </axis>
+    </joint>
+    <joint name="joint_yaw" type="revolute">
+      <parent>slider_y</parent>
+      <child>imu_link</child>
+      <axis>
+        <xyz expressed_in="__model__">0 0 1</xyz>
+        <limit><lower>-1e16</lower><upper>1e16</upper><effort>1e6</effort><velocity>1e3</velocity></limit>
+      </axis>
+    </joint>
+  </model>
+</sdf>

@@ -1,0 +1,17 @@
+# ros2 bag record --qos-profile-overrides-path for sim/scripts/record.sh: reliable subscriptions with deep
+# queues, matching sim/config/bridge.yaml, so that no message is dropped between the bridge and the bag.
+/sim_eval/lidar/points:
+  history: keep_last
+  depth: 100
+  reliability: reliable
+  durability: volatile
+/sim_eval/imu:
+  history: keep_last
+  depth: 2000
+  reliability: reliable
+  durability: volatile
+/sim_eval/imu_pose:
+  history: keep_last
+  depth: 2000
+  reliability: reliable
+  durability: volatile
