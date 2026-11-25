@@ -1,0 +1,42 @@
+name: Release Please
+
+# Opens or updates the release PR from the Conventional Commits on main since the last release, and
+# creates the tag and the GitHub Release when the release PR is merged. The config is
+# release-please-config.json, the current version .release-please-manifest.json.
+on:
+  push:
+    branches: [main]
+
+# One run at a time, in push order, so two pushes cannot race on the release PR or the tag.
+concurrency:
+  group: release-please
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  release-please:
+    # The writes use a GitHub App installation token, not GITHUB_TOKEN: pull requests opened with
+    # GITHUB_TOKEN do not trigger the CI workflow, and the ruleset requires its checks. The job is
+    # skipped until the repository variable RELEASE_PLEASE_APP_CLIENT_ID is set (and in forks).
+    if: github.repository == 'atinfinity/glim_localization' && vars.RELEASE_PLEASE_APP_CLIENT_ID != ''
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions: {}
+    steps:
+      - name: Create a GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510  # v3.3.0
+        with:
+          client-id: ${{ vars.RELEASE_PLEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_PLEASE_APP_PRIVATE_KEY }}
+          # Only what release-please needs: the release branch, tag and Release (contents), the
+          # release PR (pull-requests) and its "autorelease" labels (issues).
+          permission-contents: write
+          permission-pull-requests: write
+          permission-issues: write
+      - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7  # v5.0.0
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json

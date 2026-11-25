@@ -1,0 +1,33 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/v17.6.0/schemas/config.json",
+  "release-type": "simple",
+  "include-component-in-tag": false,
+  "include-v-in-tag": true,
+  "bump-minor-pre-major": true,
+  "changelog-sections": [
+    { "type": "feat", "section": "Features" },
+    { "type": "fix", "section": "Bug Fixes" },
+    { "type": "perf", "section": "Performance Improvements" },
+    { "type": "revert", "section": "Reverts" },
+    { "type": "refactor", "section": "Code Refactoring", "hidden": true },
+    { "type": "build", "section": "Build System", "hidden": true },
+    { "type": "docs", "section": "Documentation", "hidden": true },
+    { "type": "test", "section": "Tests", "hidden": true },
+    { "type": "style", "section": "Styles", "hidden": true },
+    { "type": "ci", "section": "Continuous Integration", "hidden": true },
+    { "type": "chore", "section": "Miscellaneous Chores", "hidden": true }
+  ],
+  "packages": {
+    ".": {
+      "package-name": "glim_localization",
+      "changelog-path": "CHANGELOG.md",
+      "extra-files": [
+        { "type": "xml", "path": "glim_localization/package.xml", "xpath": "//package/version" },
+        { "type": "xml", "path": "glim_localization_msgs/package.xml", "xpath": "//package/version" },
+        { "type": "xml", "path": "glim_localization_ros2/package.xml", "xpath": "//package/version" },
+        { "type": "generic", "path": "glim_localization/CMakeLists.txt" },
+        { "type": "generic", "path": "glim_localization/test/test_version.cpp" }
+      ]
+    }
+  }
+}
