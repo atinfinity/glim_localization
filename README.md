@@ -61,6 +61,7 @@ The step-by-step guide, including real bags and setting the initial pose, is [do
 | [Build and test](docs/build.md) | Requirements, Docker image, CI scripts, ccache, CUDA variant and GPU configs |
 | [Map preparation](docs/maps.md) | GLIM dumps, `map_compiler` and its PCD and PLY options, 2D occupancy grid export for Nav2 |
 | [Offline replay and evaluation](docs/replay.md) | Replay datasets, bag conversion, `glim_localization_replay`, `evaluate.py` |
+| [Simulation evaluation](docs/sim_eval.md) | Gazebo world with exact ground truth, `scripts/sim_eval.sh` (manual, not in CI) |
 | [ROS 2](docs/ros2.md) | Launch files, R1 extension, R2 lifecycle node, parameters, topics, services, TF |
 | [Status and limitations](docs/status.md) | Progress, open work and known limitations |
 | [Design](docs/DESIGN.md) | Architecture and design decisions |

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(glim_localization VERSION 0.1.0 LANGUAGES CXX)
+project(glim_localization VERSION 0.1.0 LANGUAGES CXX)  # x-release-please-version
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
