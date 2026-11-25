@@ -98,9 +98,45 @@ def test_directory_hash_sees_names_contents_and_new_files(inputs):
         cache.hash_tree(str(inputs / "missing"))
 
 
-def test_missing_module_is_a_component(inputs):
-    key = key_for(inputs, search_path=[str(inputs / "nowhere")])
-    assert key["components"]["missing:libfake_module.so"] == "not found"
+def test_directory_symlinks_are_followed(tmp_path):
+    real = tmp_path / "real"
+    write(str(real / "1.bin"), "a")
+    data = tmp_path / "data"
+    write(str(data / "imu.csv"), "imu")
+    os.symlink("../real", data / "points")
+    before = cache.hash_tree(str(data))
+    write(str(real / "1.bin"), "b")  # the link text is the same, the contents are not
+    assert cache.hash_tree(str(data)) != before
+
+
+def test_symlink_loop_and_dangling_link_are_errors(tmp_path):
+    data = tmp_path / "data"
+    write(str(data / "points" / "1.bin"), "a")
+    os.symlink("..", data / "points" / "up")
+    with pytest.raises(cache.CacheError, match="symlink loop"):
+        cache.hash_tree(str(data))
+    os.remove(data / "points" / "up")
+    os.symlink("missing", data / "points" / "gone")
+    with pytest.raises(cache.CacheError, match="dangling"):
+        cache.hash_tree(str(data))
+
+
+def test_a_module_that_is_not_found_is_an_error(inputs):
+    with pytest.raises(cache.CacheError, match="libfake_module.so .* is not on LD_LIBRARY_PATH"):
+        key_for(inputs, search_path=[str(inputs / "nowhere")])
+    key_path = str(inputs / "key.json")
+    assert cache.main(["key", "--out", key_path, "--modules", str(inputs / "config")]) == 2
+    assert not os.path.exists(key_path)
+
+
+def test_commented_out_modules_are_skipped(tmp_path):
+    write(str(tmp_path / "config_odometry.json"), textwrap.dedent("""\
+        {
+          // "so_name": "libodometry_estimation_gpu.so",
+          "so_name": "libodometry_estimation_cpu.so", // "so_name": "libother.so"
+        }
+        """))
+    assert cache.so_names(str(tmp_path)) == ["libodometry_estimation_cpu.so"]
 
 
 def test_parse_ldd():
@@ -200,6 +236,39 @@ def test_install_replaces_the_entry_and_refuses_an_unsealed_build(inputs, sealed
     assert len(open(os.path.join(entry, "traj_glim.txt")).readlines()) == 30
 
 
+def test_install_puts_the_old_entry_back_when_the_second_rename_fails(inputs, sealed, monkeypatch):
+    entry, key = sealed
+    build = fake_entry(str(inputs / "cache" / ".tmp-map_full-1"), poses=30)
+    cache.seal(build, key)
+    real_rename = os.rename
+
+    def rename(src, dst):
+        if src == build:
+            raise OSError("simulated failure")
+        real_rename(src, dst)
+
+    monkeypatch.setattr(os, "rename", rename)
+    with pytest.raises(OSError, match="simulated"):
+        cache.install(build, entry)
+    monkeypatch.undo()
+    assert cache.check(entry, key) is None
+    assert len(open(os.path.join(entry, "traj_glim.txt")).readlines()) == 20
+
+
+def test_cleanup_removes_builds_and_restores_a_displaced_entry(inputs, sealed):
+    entry, key = sealed
+    cache_dir = os.path.dirname(entry)
+    fake_entry(os.path.join(cache_dir, ".tmp-map_full-11"))
+    fake_entry(os.path.join(cache_dir, ".old-map_full-12"))  # map_full exists: a leftover
+    shutil.copytree(entry, os.path.join(cache_dir, ".old-map_prefix-13"))  # map_prefix is empty: put back
+    write(os.path.join(cache_dir, ".smoke_os1_128_cache"), "marker")
+    messages = cache.cleanup(cache_dir)
+    assert len(messages) == 3 and "restored .old-map_prefix-13 as map_prefix" in messages[1]
+    assert sorted(os.listdir(cache_dir)) == [".smoke_os1_128_cache", "map_full", "map_prefix"]
+    assert cache.check(entry, key) is None
+    assert cache.check(os.path.join(cache_dir, "map_prefix"), key) is None
+
+
 def test_cli_check_exit_codes(inputs, sealed):
     entry, key = sealed
     key_path = str(inputs / "key.json")
@@ -243,6 +312,8 @@ json.dump({"failed": False, "trajectory_coverage": 1.0, "num_trajectory_poses": 
 FAKE_COMPILER = """
 import os, shutil, sys
 shutil.copytree(sys.argv[1], sys.argv[2])
+if os.environ.get("FAKE_COMPILER_FAIL"):  # a partial compiled/ is left behind
+    sys.exit(1)
 open(os.path.join(sys.argv[2], "map.txt"), "w").write("compiled\\n")
 print("wrote 3 submaps")
 """
@@ -288,12 +359,15 @@ def smoke(tmp_path):
     make_tool(str(tools / "glim_localization_replay"), FAKE_REPLAY)
     log = tmp_path / "calls.log"
     cache_dir = tmp_path / "cache"
+    libs = tmp_path / "libs"  # the GLIM modules named in config/mapping_cpu, found on LD_LIBRARY_PATH
+    for name in cache.so_names(os.path.join(REPO, "glim_localization", "config", "mapping_cpu")):
+        write(str(libs / name), f"fake {name}\n")
 
     def run(*args, expect=0, **env):
         log.write_text("")
         environment = dict(os.environ, GLIM_LOC_PYTHON=sys.executable, SMOKE_BUILD_DIR=str(tmp_path / "build"),
                            SMOKE_CACHE_DIR=str(cache_dir), FAKE_LOG=str(log), PRIOR_END="20", TAIL_START="22",
-                           LD_LIBRARY_PATH="")
+                           LD_LIBRARY_PATH=str(libs))
         environment.update(env)
         result = subprocess.run(["bash", SMOKE, *args, str(data), str(tmp_path / "run")], env=environment,
                                 capture_output=True, text=True, check=False)
@@ -305,7 +379,20 @@ def smoke(tmp_path):
     run.tmp_path = tmp_path
     run.cache = cache_dir
     run.tools = tools
+    run.libs = libs
     return run
+
+
+def snapshot(*dirs):
+    """Every path below the directories with its size and modification time."""
+    state = {}
+    for top in dirs:
+        for root, subdirs, files in os.walk(top):
+            for name in subdirs + files:
+                full = os.path.join(root, name)
+                info = os.lstat(full)
+                state[full] = (info.st_size, info.st_mtime_ns)
+    return state
 
 
 def maps(run):
@@ -381,3 +468,73 @@ def test_smoke_refuses_a_foreign_cache_dir(smoke):
     output, _ = smoke(expect=1)
     assert "was not created by this script" in output
     assert os.path.exists(smoke.cache / "keep.txt")
+
+
+def test_smoke_self_branch_caches_only_the_full_map(smoke):
+    # The tail from 30 s spends only 10 s near the prefix: no revisit, so self-localization on the full map
+    output, calls = smoke(TAIL_START="30")
+    assert calls == ["full"]
+    assert "no revisit, self-localization" in output and "RESULT: PASS" in output
+    assert list(maps(smoke)) == ["full"]
+    assert sorted(os.listdir(smoke.cache)) == [".lock", ".smoke_os1_128_cache", "map_full"]
+    output, calls = smoke(TAIL_START="30")
+    assert calls == []
+    assert maps(smoke)["full"]["action"] == "reused" and "replay_self" in output
+
+
+def test_smoke_never_caches_a_failed_map_compiler(smoke):
+    output, calls = smoke(expect=1, FAKE_COMPILER_FAIL="1")
+    assert calls == ["full"]
+    assert sorted(os.listdir(smoke.cache)) == [".lock", ".smoke_os1_128_cache"]  # the partial compiled/ is gone
+    output, calls = smoke()
+    assert calls == ["full", "prefix"]
+    assert maps(smoke)["full"]["reason"] == "no cached map"
+
+
+def test_smoke_removes_leftovers_of_an_interrupted_run(smoke):
+    smoke()
+    fake_entry(str(smoke.cache / ".tmp-map_full-99999"))
+    fake_entry(str(smoke.cache / ".old-map_prefix-99998"))  # map_prefix is still there: a leftover
+    output, calls = smoke()
+    assert calls == []
+    assert "cache: removed the unfinished build .tmp-map_full-99999" in output
+    assert "cache: removed the replaced entry .old-map_prefix-99998" in output
+    assert sorted(os.listdir(smoke.cache)) == [".lock", ".smoke_os1_128_cache", "map_full", "map_prefix"]
+
+    # An install interrupted between its two renames: the displaced entry is put back and reused
+    os.rename(smoke.cache / "map_prefix", smoke.cache / ".old-map_prefix-99997")
+    output, calls = smoke()
+    assert calls == []
+    assert "restored .old-map_prefix-99997 as map_prefix" in output and "map_prefix: REUSED" in output
+
+
+def test_smoke_a_concurrent_run_exits_and_touches_nothing(smoke):
+    import fcntl
+    smoke()
+    fake_entry(str(smoke.cache / ".tmp-map_full-99999"))  # would be removed by a run that got the lock
+    before = snapshot(smoke.cache, smoke.tmp_path / "run")
+    with open(smoke.cache / ".lock", "a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        output, calls = smoke("--force", expect=1)
+    assert "another smoke_os1_128.sh run holds" in output
+    assert calls == []
+    assert snapshot(smoke.cache, smoke.tmp_path / "run") == before
+
+
+def test_smoke_force_in_any_position_and_a_missing_module(smoke):
+    environment = dict(os.environ, GLIM_LOC_PYTHON=sys.executable)
+    for args in (["-x", "data"], ["data", "out", "more"], []):
+        result = subprocess.run(["bash", SMOKE, *args], env=environment, capture_output=True, text=True)
+        assert result.returncode == 2 and "usage" in result.stderr
+    smoke()
+    # --force after the positional arguments
+    result = subprocess.run(["bash", SMOKE, str(smoke.tmp_path / "dataset"), str(smoke.tmp_path / "run"), "--force"],
+                            env=dict(os.environ, GLIM_LOC_PYTHON=sys.executable, SMOKE_BUILD_DIR=str(smoke.tmp_path / "build"),
+                                     SMOKE_CACHE_DIR=str(smoke.cache), FAKE_LOG=str(smoke.tmp_path / "calls.log"),
+                                     PRIOR_END="20", TAIL_START="22", LD_LIBRARY_PATH=str(smoke.libs)),
+                            capture_output=True, text=True)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert maps(smoke)["full"]["reason"] == "--force"
+    # A GLIM module that is not on LD_LIBRARY_PATH is an error, not a key component
+    output, calls = smoke(expect=2, LD_LIBRARY_PATH=str(smoke.tmp_path / "nowhere"))
+    assert "is not on LD_LIBRARY_PATH" in output and calls == []
