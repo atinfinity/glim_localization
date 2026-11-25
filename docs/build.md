@@ -59,7 +59,17 @@ The CUDA build adds the GPU odometry module `libodometry_localization_gpu.so`. A
 | R1 (`config_path`) | `config/r1` | `config/r1_gpu` |
 | R2 (`config_path`) | `config/r2` | `config/r2_gpu` |
 
-The GPU odometry config (`config_odometry_localization_gpu.json`) has the same common keys as the CPU one, plus `map_gpu_max_tiles` (map tiles kept on the GPU, least recently used dropped; at least `map_max_submaps`) and GLIM's GPU keyframe keys for `use_keyframes`. In a CPU build, the replay tool exits with code 2 and the R2 node fails to configure when the config names the GPU module. The GPU module also fails closed when CUDA is unusable: with no visible device it does not start (replay exits with code 1, the R2 node fails to activate), and a failed tile upload throws. The replay tool turns that into exit code 1. In R1 and R2 the exception escapes GLIM's background odometry thread and aborts the whole node process.
+The GPU odometry config (`config_odometry_localization_gpu.json`) has the same common keys as the CPU one, plus GLIM's GPU keyframe keys for `use_keyframes` and these map tile keys:
+
+| Key | Default | Range | Meaning |
+| --- | --- | --- | --- |
+| `map_gpu_max_tiles` | 32 | >= `map_max_submaps` | Map tiles kept on the GPU; the least recently used are evicted |
+| `map_gpu_memory_budget_mb` | 1024 | 1 to 1048576 | GPU memory for map tiles in MiB (estimated from each tile's points and voxels); the least recently used are evicted to stay under it. The tiles of the current frame are always kept, even above the budget, and a warning is logged at startup if the budget exceeds the device's memory |
+| `map_gpu_prefetch` | true | | Upload the tiles along the predicted path ahead of use, on a background thread and CUDA stream |
+| `map_gpu_prefetch_lookahead` | 1.0 | 0 to 10 s | How far ahead the path is predicted from the current velocity |
+| `map_gpu_prefetch_max_tiles` | 10 | 1 to `map_gpu_max_tiles` | Tiles prefetched per frame, nearest to the path first |
+
+Both limits apply: a tile is evicted when either is exceeded. Prefetching never evicts a tile of the current frame and stops when the budget is full, so with a small budget it uploads less. In a CPU build, the replay tool exits with code 2 and the R2 node fails to configure when the config names the GPU module. The GPU module also fails closed when CUDA is unusable: with no visible device it does not start (replay exits with code 1, the R2 node fails to activate), and a failed tile upload throws. The replay tool turns that into exit code 1. In R1 and R2 the exception escapes GLIM's background odometry thread and aborts the whole node process.
 
 > [!WARNING]
 > Behavior change in this release: the replay tool and the R2 node now read `so_name` in `config_odometry` and need exactly `libodometry_localization_cpu.so` or `libodometry_localization_gpu.so` (a file name, not a path). An empty or missing `so_name`, a full path, or another module is an error (replay exit 2, R2 configure fails). Before, both ignored `so_name`. R1 loads the module through GLIM and is unchanged.
