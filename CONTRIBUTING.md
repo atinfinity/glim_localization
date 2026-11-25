@@ -85,4 +85,13 @@ Exceptions, all in `glim_localization_ros2/CMakeLists.txt` and `scripts/test_col
 - If you change a file the image bakes in (`docker/Dockerfile`, `docker/entrypoint.sh`, `scripts/requirements.txt`, `third_party/patches/glim/`, `third_party/patches/glim_ros2/`; the list is `image_inputs` in `scripts/image_inputs_hash.sh`), CI builds the image itself instead of pulling the prebuilt one, which takes longer.
 - Add or update tests for behavior changes, and update the README or `docs/` when behavior or interfaces change.
 
+## Releases
+
+Releases are automated with [release-please](https://github.com/googleapis/release-please) (`.github/workflows/release-please.yml`, config in `release-please-config.json`, current version in `.release-please-manifest.json`). The repository has one version, tagged `vX.Y.Z`.
+
+- Each push to `main` opens or updates a release PR (`chore: release X.Y.Z`) when `main` has `feat`, `fix`, `perf` or `revert` commits since the last release. The release PR updates `CHANGELOG.md`, the manifest, the `<version>` in the three `package.xml` files, and the lines marked `x-release-please-version` (`project(... VERSION ...)` in `glim_localization/CMakeLists.txt` and `test_version.cpp`).
+- `docs`, `ci`, `test`, `style`, `build`, `refactor` and `chore` commits are left out of the changelog and do not start a release on their own.
+- Before 1.0.0, `feat` bumps the minor version and `fix` the patch version, and a breaking change (`feat!:` or a `BREAKING CHANGE:` footer) bumps the minor version.
+- Merging the release PR creates the tag and the GitHub Release. Do not edit the versions or the changelog by hand; to force a version, add a commit with a `Release-As: X.Y.Z` footer.
+
 By contributing, you agree that your contributions are licensed under the [MIT License](LICENSE).
