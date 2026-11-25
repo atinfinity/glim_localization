@@ -1,23 +1,43 @@
 #!/bin/bash
 # Real-data smoke test: map a converted OS1-128 sequence with GLIM through the headless mapper,
 # then localize on the compiled map and compare against GLIM's own trajectory. Run inside the container, never in CI:
-#   scripts/docker_run.sh scripts/smoke_os1_128.sh <replay dataset dir> [out dir]
+#   scripts/docker_run.sh scripts/smoke_os1_128.sh [--force] <replay dataset dir> [out dir]
 # The dataset comes from scripts/bag_to_replay.py. Output goes to the out dir (default /ws/out/smoke_os1_128/run).
 #
 # The reference is GLIM's own trajectory, so every number is a consistency figure against GLIM, not an accuracy.
 # Environment: PRIOR_END (seconds after the first frame, default 80) and TAIL_START (default 85) set the held-out split;
 # MAPPER_ARGS and CONFIG_PATCH are for the fallbacks (for example a smaller random_downsample_target).
+#
+# Map cache: map_full and map_prefix (mapper output, compiled map and GLIM's reference trajectory) are kept in
+# SMOKE_CACHE_DIR (default /ws/out/smoke_os1_128/cache) and reused when the key matches: a hash of the dataset, the
+# mapping config (after CONFIG_PATCH), its extrinsics, the mapper, map_compiler and GLIM binaries and libraries, and the
+# mapper and split arguments. A cached map is validated (manifest of sizes and SHA-256, the mapper summary and the
+# trajectory) before use. A build goes to a temporary directory and is renamed into the cache only after it passed, so
+# a partial or failed build is never reused. --force rebuilds both maps. The localization always runs.
+# The two maps are built one after the other, never in parallel (about 6 GB peak together).
 set -euo pipefail
 
+usage="usage: smoke_os1_128.sh [--force] <replay dataset dir> [out dir]"
+force=false
+if [ "${1:-}" = "--force" ]; then
+  force=true
+  shift
+fi
+case "${1:-}" in -*) echo "${usage}" >&2; exit 2 ;; esac
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-build_dir=/ws/build/core
-data="${1:?usage: smoke_os1_128.sh <replay dataset dir> [out dir]}"
+build_dir="${SMOKE_BUILD_DIR:-/ws/build/core}"  # override only for the tests (fake tools)
+data="${1:?${usage}}"
 out="${2:-/ws/out/smoke_os1_128/run}"
+cache="${SMOKE_CACHE_DIR:-/ws/out/smoke_os1_128/cache}"
 prior_end="${PRIOR_END:-80}"
 tail_start="${TAIL_START:-85}"
 : "${GLIM_LOC_PYTHON:?GLIM_LOC_PYTHON is not set (run inside the dev container)}"
 export PYTHONDONTWRITEBYTECODE=1
 py() { env -u PYTHONPATH "${GLIM_LOC_PYTHON}" "$@"; }
+cache_tool="${repo_root}/scripts/smoke_map_cache.py"
+# OS1 extrinsic T_lidar_imu (os_sensor -> os_imu from /tf_static); config/mapping_cpu has the same value
+t_lidar_imu="0.006253, -0.011775, 0.007645, 0.0, 0.0, 0.0, 1.0"
+run_start="${EPOCHREALTIME}"
 
 mapper="${build_dir}/tools/glim_localization_mapper"
 compiler="${build_dir}/tools/map_compiler"
@@ -56,20 +76,54 @@ fi
 if [ -L "${marker}" ]; then
   echo "FAIL: '${marker}' is a symlink" >&2; exit 1
 fi
+# The map cache gets the same checks: canonical, no protected path, not inside the dataset, no overlap with the out
+# directory, and a marker before anything in it is removed
+cache="$(realpath -m -- "${cache}")"
+for protected in / /ws /ws/out "${repo_root}" "${HOME:-/nonexistent}" "${data}"; do
+  if within "${protected}" "${cache}"; then
+    echo "FAIL: refusing the cache directory '${cache}': it is or contains '${protected}'" >&2; exit 1
+  fi
+done
+if within "${cache}" "${data}"; then
+  echo "FAIL: refusing the cache directory '${cache}': it is inside the dataset" >&2; exit 1
+fi
+if within "${cache}" "${out}" || within "${out}" "${cache}"; then
+  echo "FAIL: the cache directory '${cache}' and the output directory '${out}' must not contain each other" >&2; exit 1
+fi
+cache_marker="${cache}/.smoke_os1_128_cache"
+if [ -e "${cache}" ] && [ ! -d "${cache}" ]; then
+  echo "FAIL: '${cache}' is not a directory" >&2; exit 1
+fi
+if [ -d "${cache}" ] && [ ! -f "${cache_marker}" ] && [ -n "$(ls -A -- "${cache}")" ]; then
+  echo "FAIL: '${cache}' is not empty and was not created by this script (no marker); use a new cache directory" >&2; exit 1
+fi
+if [ -L "${cache_marker}" ] || [ -L "${cache}/.lock" ]; then
+  echo "FAIL: '${cache_marker}' or '${cache}/.lock' is a symlink" >&2; exit 1
+fi
+
 mkdir -p "${out}"
 echo "created by scripts/smoke_os1_128.sh; its fixed output names are removed at the start of every run" > "${marker}"
+mkdir -p "${cache}"
+echo "map cache of scripts/smoke_os1_128.sh; remove it to drop every cached map" > "${cache_marker}"
+# One run at a time per cache: a second run would rebuild or read the entries under the first one
+exec 9> "${cache}/.lock"
+flock -n 9 || { echo "FAIL: another smoke_os1_128.sh run holds '${cache}/.lock'" >&2; exit 1; }
+# Builds of an interrupted earlier run are never reused; this run's own are removed when it exits
+rm -rf "${cache}"/.tmp-map_* "${cache}"/.old-map_*
+trap 'rm -rf "${cache}"/.tmp-map_*-$$' EXIT
 # Remove only the fixed names this script writes (rm does not follow symlinks), so an earlier run's output can never mask a failed step
 rm -rf "${out}/config_mapping" "${out}/config_localization" "${out}/map_full" "${out}/map_prefix" "${out}/replay_heldout" "${out}/replay_self" \
-  "${out}/mapper_full.log" "${out}/mapper_prefix.log" "${out}/replay_heldout.log" "${out}/replay_self.log"
+  "${out}/mapper_full.log" "${out}/mapper_prefix.log" "${out}/replay_heldout.log" "${out}/replay_self.log" \
+  "${out}/cache_key_full.json" "${out}/cache_key_prefix.json" "${out}/timings.tsv" "${out}/maps.tsv" "${out}/smoke_summary.json"
 # Both configs get the OS1 extrinsic T_lidar_imu = (os_sensor -> os_imu from /tf_static); the shipped localization config has zeros
 cp -r "${repo_root}/glim_localization/config/mapping_cpu" "${out}/config_mapping"
 mkdir "${out}/config_localization"
 cp "${repo_root}"/glim_localization/config/*.json "${out}/config_localization/"
-py - "${out}/config_localization/config_sensors.json" <<'PY'
+py - "${out}/config_localization/config_sensors.json" "${t_lidar_imu}" <<'PY'
 import re, sys
-path = sys.argv[1]
+path, value = sys.argv[1:3]
 text = open(path).read()
-new, n = re.subn(r'"T_lidar_imu"\s*:\s*\[[^\]]*\]', '"T_lidar_imu": [0.006253, -0.011775, 0.007645, 0.0, 0.0, 0.0, 1.0]', text)
+new, n = re.subn(r'"T_lidar_imu"\s*:\s*\[[^\]]*\]', '"T_lidar_imu": [%s]' % value, text)
 assert n == 1, "T_lidar_imu not found"
 open(path, "w").write(new)
 PY
@@ -94,7 +148,15 @@ PY
 at() { py -c "print('%.9f' % (${t0} + $1))"; }
 echo "first frame ${t0}"
 
-echo "== mapper: full sequence"
+# Wall time of each step, in timings.tsv (step, seconds) and smoke_summary.json at the end
+elapsed() { awk -v a="$1" -v b="${EPOCHREALTIME}" 'BEGIN { printf "%.1f", b - a }'; }
+timing() {  # <step> <start>
+  local seconds
+  seconds="$(elapsed "$2")"
+  printf '%s\t%s\n' "$1" "${seconds}" >> "${out}/timings.tsv"
+  echo "time: $1 ${seconds} s"
+}
+
 # Acceptance gates (see the real-data smoke test in docs/PROGRESS.md): at least 95 % of the frames in the trajectory and of the frames after initialization
 check_mapper_coverage() {  # <label> <summary.json>
   py - "$1" "$2" <<'PY' || { echo "FAIL: the mapper ($1) trajectory_coverage gate (>= 0.95) was not met" >&2; exit 1; }
@@ -136,12 +198,70 @@ run_mapper() {  # <label> <out dir> [mapper args...]
     exit 1
   fi
 }
-run_mapper full "${out}/map_full"
-check_mapper_coverage full "${out}/map_full/mapper_summary.json"
-cat "${out}/map_full/mapper_summary.json"
+
+# The mapping config's extrinsics, a key component of its own so the log can name it (the config hash covers it too)
+mapping_extrinsics="$(py - "${out}/config_mapping/config_sensors.json" <<'PY'
+import re, sys
+found = re.findall(r'^\s*"T_lidar_imu"\s*:\s*\[([^\]]*)\]', open(sys.argv[1]).read(), re.M)
+assert len(found) == 1, "T_lidar_imu not found in the mapping config"
+print(" ".join(v.strip() for v in found[0].split(",")))
+PY
+)"
+
+map_step() {  # <label> [mapper args...]: reuse the cached map_<label> when its key matches and it is valid, else build it
+  local label="$1"; shift
+  local entry="${cache}/map_${label}" key="${out}/cache_key_${label}.json"
+  local start="${EPOCHREALTIME}" status=0 reason="" split=()
+  [ "${label}" = prefix ] && split=(--value "prior_end=${prior_end}")
+  py "${cache_tool}" key --out "${key}" --input "data=${data}" --input "mapping_config=${out}/config_mapping" \
+    --value "extrinsics=${mapping_extrinsics}" --value "mapper_args=$* ${MAPPER_ARGS:-}" "${split[@]}" \
+    --binary "${mapper}" --binary "${compiler}" --modules "${out}/config_mapping" > /dev/null
+  if [ "${force}" = true ]; then
+    reason="--force"
+  else
+    reason="$(py "${cache_tool}" check --entry "${entry}" --key "${key}")" || status=$?
+    if [ "${status}" -eq 0 ]; then
+      reason=""
+    elif [ -z "${reason}" ]; then
+      reason="the cache check failed (exit ${status})"
+    fi
+  fi
+  timing "cache_key_and_check_${label}" "${start}"
+  if [ -z "${reason}" ]; then
+    echo "== map_${label}: REUSED the cached map (key $(py -c "import json, sys; print(json.load(open(sys.argv[1]))['key'][:16])" "${key}"), ${entry})"
+    printf '%s\treused\t%s\n' "${label}" "key matches and the cached map is valid" >> "${out}/maps.tsv"
+  else
+    echo "== map_${label}: REBUILDING (${reason})"
+    printf '%s\trebuilt\t%s\n' "${label}" "${reason}" >> "${out}/maps.tsv"
+    local build="${cache}/.tmp-map_${label}-$$"
+    rm -rf "${build}"
+    echo "== mapper: ${label}${*:+ ($*)}"
+    start="${EPOCHREALTIME}"
+    run_mapper "${label}" "${build}" "$@"
+    timing "mapper_${label}" "${start}"
+    check_mapper_coverage "${label}" "${build}/mapper_summary.json"
+    echo "== map_compiler: ${label}"
+    start="${EPOCHREALTIME}"
+    "${compiler}" "${build}/dump" "${build}/compiled" 2>&1 | tail -3
+    timing "map_compiler_${label}" "${start}"
+    cp "${out}/mapper_${label}.log" "${build}/mapper.log"
+    # Validated and sealed (manifest of every file), then renamed over the old entry: only a complete build enters the cache
+    start="${EPOCHREALTIME}"
+    py "${cache_tool}" seal --entry "${build}" --key "${key}" || { echo "FAIL: the new map_${label} failed validation" >&2; exit 1; }
+    py "${cache_tool}" install --build "${build}" --entry "${entry}"
+    timing "cache_store_${label}" "${start}"
+  fi
+  # The gate runs on every run, cached or not
+  check_mapper_coverage "${label}" "${entry}/mapper_summary.json"
+}
+
+map_full="${cache}/map_full"
+map_prefix="${cache}/map_prefix"
+map_step full
+cat "${map_full}/mapper_summary.json"
 
 # Is there a revisit? The tail must pass within 10 m of the prefix poses for at least 15 s
-revisit="$(py - "${out}/map_full/traj_glim.txt" "$(at 0)" "$(at "${prior_end}")" "$(at "${tail_start}")" <<'PY'
+revisit="$(py - "${map_full}/traj_glim.txt" "$(at 0)" "$(at "${prior_end}")" "$(at "${tail_start}")" <<'PY'
 import sys
 import numpy as np
 traj = np.loadtxt(sys.argv[1])
@@ -159,16 +279,14 @@ PY
 )"
 echo "revisit check (tail within 10 m of the prefix, >= 15 s): ${revisit}"
 
-echo "== map_compiler: full"
-"${compiler}" "${out}/map_full/dump" "${out}/map_full/compiled" 2>&1 | tail -3
-
 evaluate() {  # <label> <replay out dir> [gate: ATE rmse limit in m]; fails the script when evaluate.py fails or the gate is exceeded
   local label="$1" dir="$2" gate="${3:-}"
   rm -f "${dir}/eval.json" "${dir}/eval.txt"
-  local status=0
+  local status=0 start="${EPOCHREALTIME}"
   # evaluate.py prints its own RESULT line; this script prints the final one only after every gate has passed
-  py "${repo_root}/scripts/evaluate.py" --est "${dir}/traj_localization.txt" --gt "${out}/map_full/traj_glim.txt" \
+  py "${repo_root}/scripts/evaluate.py" --est "${dir}/traj_localization.txt" --gt "${map_full}/traj_glim.txt" \
     --frames "${dir}/frames.csv" --out "${dir}" 2>&1 | { grep -v '^RESULT: PASS' || true; } || status=${PIPESTATUS[0]}
+  timing "evaluate_${label}" "${start}"
   if [ "${status}" -ne 0 ] || [ ! -f "${dir}/eval.json" ]; then
     echo "FAIL: evaluate.py (${label}) exited ${status}" >&2
     exit 1
@@ -186,7 +304,7 @@ PY
 }
 
 init_pose() {  # <first stamp>: GLIM's pose at that stamp, as x y z qx qy qz qw
-  py - "${out}/map_full/traj_glim.txt" "$1" <<'PY'
+  py - "${map_full}/traj_glim.txt" "$1" <<'PY'
 import sys
 import numpy as np
 traj = np.loadtxt(sys.argv[1])
@@ -196,13 +314,11 @@ PY
 }
 
 if [ "${revisit%% *}" = "yes" ]; then
-  echo "== mapper: prefix (end ${prior_end} s) for the held-out run"
-  run_mapper prefix "${out}/map_prefix" --end "$(at "${prior_end}")"
-  cat "${out}/map_prefix/mapper_summary.json"
-  check_mapper_coverage prefix "${out}/map_prefix/mapper_summary.json"
-  "${compiler}" "${out}/map_prefix/dump" "${out}/map_prefix/compiled" 2>&1 | tail -3
+  echo "== map_prefix (end ${prior_end} s) for the held-out run"
+  map_step prefix --end "$(at "${prior_end}")"
+  cat "${map_prefix}/mapper_summary.json"
   # The full and prefix runs must share a world frame for the initial pose to transfer: report their disagreement on the overlap
-  py - "${out}/map_full/traj_glim.txt" "${out}/map_prefix/traj_glim.txt" <<'PY'
+  py - "${map_full}/traj_glim.txt" "${map_prefix}/traj_glim.txt" <<'PY'
 import sys
 import numpy as np
 a, b = (np.loadtxt(p) for p in sys.argv[1:3])
@@ -213,18 +329,35 @@ print("full vs prefix GLIM runs on the overlap: %d poses, translation difference
 PY
   tail_stamp="$(at "${tail_start}")"
   echo "== replay: held-out tail from ${tail_stamp} on the prefix map"
-  "${replay}" --data "${data}" --config "${out}/config_localization" --map "${out}/map_prefix/compiled" --out "${out}/replay_heldout" \
+  start="${EPOCHREALTIME}"
+  "${replay}" --data "${data}" --config "${out}/config_localization" --map "${map_prefix}/compiled" --out "${out}/replay_heldout" \
     --start "${tail_stamp}" --init-pose $(init_pose "${tail_stamp}") 2>&1 | tee "${out}/replay_heldout.log" | tail -5
+  timing replay_heldout "${start}"
   evaluate heldout "${out}/replay_heldout"
   check_replay_frames heldout "${out}/replay_heldout/frames.csv"
 else
   echo "== replay: no revisit, self-localization of the full sequence on the full map"
   first_stamp="$(py -c "
+import sys
 import numpy as np
-print('%.9f' % np.loadtxt('${out}/map_full/traj_glim.txt')[0, 0])")"
-  "${replay}" --data "${data}" --config "${out}/config_localization" --map "${out}/map_full/compiled" --out "${out}/replay_self" \
+print('%.9f' % np.loadtxt(sys.argv[1])[0, 0])" "${map_full}/traj_glim.txt")"
+  start="${EPOCHREALTIME}"
+  "${replay}" --data "${data}" --config "${out}/config_localization" --map "${map_full}/compiled" --out "${out}/replay_self" \
     --init-stamp "${first_stamp}" --init-pose $(init_pose "${first_stamp}") 2>&1 | tee "${out}/replay_self.log" | tail -5
+  timing replay_self "${start}"
   evaluate self "${out}/replay_self" 0.3
   check_replay_frames self "${out}/replay_self/frames.csv"
 fi
+timing total "${run_start}"
+# Which maps were reused or rebuilt and why, and the time of every step
+py - "${out}" <<'PY'
+import csv, json, os, sys
+out = sys.argv[1]
+maps = {row[0]: {"action": row[1], "reason": row[2]} for row in csv.reader(open(os.path.join(out, "maps.tsv")), delimiter="\t")}
+timings = {row[0]: float(row[1]) for row in csv.reader(open(os.path.join(out, "timings.tsv")), delimiter="\t")}
+json.dump({"maps": maps, "timings_s": timings}, open(os.path.join(out, "smoke_summary.json"), "w"), indent=2)
+for label, value in maps.items():
+    print("map_%s: %s (%s)" % (label, value["action"], value["reason"]))
+print("timings [s]: " + ", ".join("%s %.1f" % item for item in timings.items()))
+PY
 echo "RESULT: PASS (every step succeeded and every gate passed; consistency figures against GLIM's trajectory, not accuracy)"
