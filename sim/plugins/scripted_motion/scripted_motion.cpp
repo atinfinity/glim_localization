@@ -21,9 +21,17 @@
 //   w = 0 (none), w_amp * (1 - cos(2 pi s)) / 2 (bump; integral w_amp * T / 2),
 //       or w_amp * sin(2 pi w_cycles s) (sine; zero net yaw for whole cycles)
 // Before the first and after the last segment, v = w = 0.
+//
+// The first pose is published at the first update (t = 0 when the server starts paused, even before
+// it runs) and then every 1 / pose_rate s of simulation time, so the ground truth
+// covers the first sensor messages. A missing joint or link, pose_rate <= 0, a segment duration <= 0,
+// or a physics step that does not divide the pose period stops the server (exit code 2): a broken
+// setup must not produce a recording.
 
 #include <chrono>
 #include <cmath>
+#include <cstdlib>
+#include <iostream>
 #include <memory>
 #include <string>
 #include <vector>
@@ -39,6 +47,12 @@
 #include <gz/transport/Node.hh>
 
 namespace sim_eval {
+
+[[noreturn]] void Fail(const std::string &what) {
+  gzerr << "ScriptedMotion: " << what << std::endl;
+  std::cerr << "ScriptedMotion: FAIL: " << what << std::endl;
+  std::_Exit(2);  // no static destructors while the server threads run
+}
 
 struct Segment {
   double duration = 0.0;
@@ -61,7 +75,7 @@ class ScriptedMotion : public gz::sim::System,
       const std::string name = sdf->Get<std::string>(key);
       const gz::sim::Entity e = model.JointByName(ecm, name);
       if (e == gz::sim::kNullEntity) {
-        gzerr << "ScriptedMotion: joint [" << name << "] (" << key << ") not found" << std::endl;
+        Fail("joint [" + name + "] (" + key + ") not found");
       }
       return e;
     };
@@ -71,10 +85,13 @@ class ScriptedMotion : public gz::sim::System,
     const std::string link_name = sdf->Get<std::string>("pose_link");
     pose_link_ = model.LinkByName(ecm, link_name);
     if (pose_link_ == gz::sim::kNullEntity) {
-      gzerr << "ScriptedMotion: link [" << link_name << "] not found" << std::endl;
+      Fail("link [" + link_name + "] not found");
     }
     pose_topic_ = sdf->Get<std::string>("pose_topic", "/sim_eval/imu_pose").first;
     const double rate = sdf->Get<double>("pose_rate", 100.0).first;
+    if (!(rate > 0.0)) {
+      Fail("pose_rate must be > 0");
+    }
     pose_period_ns_ = static_cast<int64_t>(std::llround(1e9 / rate));
 
     double start = 0.0;
@@ -86,6 +103,12 @@ class ScriptedMotion : public gz::sim::System,
       seg.w_shape = e->Get<std::string>("w", "none").first;
       seg.w_amp = e->Get<double>("w_amp", 0.0).first;
       seg.w_cycles = e->Get<double>("w_cycles", 1.0).first;
+      if (!(seg.duration > 0.0)) {
+        Fail("segment duration must be > 0");
+      }
+      if (seg.w_shape != "none" && seg.w_shape != "bump" && seg.w_shape != "sine") {
+        Fail("unknown segment w shape [" + seg.w_shape + "]");
+      }
       segments_.push_back(seg);
       starts_.push_back(start);
       start += seg.duration;
@@ -99,6 +122,14 @@ class ScriptedMotion : public gz::sim::System,
   void PreUpdate(const gz::sim::UpdateInfo &info, gz::sim::EntityComponentManager &ecm) override {
     if (info.paused) {
       return;
+    }
+    if (!step_checked_) {
+      const int64_t dt_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(info.dt).count();
+      if (dt_ns <= 0 || pose_period_ns_ % dt_ns != 0) {
+        Fail("the physics step (" + std::to_string(dt_ns) + " ns) does not divide the pose period (" +
+             std::to_string(pose_period_ns_) + " ns)");
+      }
+      step_checked_ = true;
     }
     const double t = std::chrono::duration<double>(info.simTime).count();
     double v = 0.0;
@@ -116,13 +147,16 @@ class ScriptedMotion : public gz::sim::System,
   }
 
   void PostUpdate(const gz::sim::UpdateInfo &info, const gz::sim::EntityComponentManager &ecm) override {
-    if (info.paused) {
+    // The first pose is published even while paused (at t = 0, like the first LiDAR frame of a server
+    // that starts paused), then every period while running.
+    if (info.paused && published_) {
       return;
     }
     const int64_t t_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(info.simTime).count();
-    if (t_ns % pose_period_ns_ != 0) {
+    if (published_ && t_ns % pose_period_ns_ != 0) {
       return;
     }
+    published_ = true;
     const gz::math::Pose3d pose = gz::sim::worldPose(pose_link_, ecm);
     gz::msgs::Pose msg;
     *msg.mutable_header()->mutable_stamp() = gz::msgs::Convert(info.simTime);
@@ -159,6 +193,8 @@ class ScriptedMotion : public gz::sim::System,
   gz::sim::Entity pose_link_ = gz::sim::kNullEntity;
   std::string pose_topic_;
   int64_t pose_period_ns_ = 10000000;
+  bool step_checked_ = false;
+  bool published_ = false;
   std::vector<Segment> segments_;
   std::vector<double> starts_;
   gz::transport::Node node_;

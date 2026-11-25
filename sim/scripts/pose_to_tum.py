@@ -27,7 +27,7 @@ def main(argv=None):
     parser.add_argument("--topic", required=True, help="geometry_msgs/msg/PoseStamped topic")
     parser.add_argument("--out", required=True, help="output TUM file")
     parser.add_argument("--stats", help="also write the real-time factor of the recording to this JSON file")
-    parser.add_argument("--stats-extra", nargs="*", default=[], help="key=value pairs (numbers) added to --stats")
+    parser.add_argument("--stats-extra", nargs="*", default=[], help="key=value pairs added to --stats (numbers where they parse)")
     args = parser.parse_args(argv)
 
     reader = rosbag2_py.SequentialReader()
@@ -40,12 +40,12 @@ def main(argv=None):
     msg_type = get_message(POSE_STAMPED)
 
     rows = {}
-    receive_ns = []
+    receive_ns = {}
     while reader.has_next():
         _, data, received = reader.read_next()
-        receive_ns.append(received)
         msg = deserialize_message(data, msg_type)
         stamp_ns = msg.header.stamp.sec * 1_000_000_000 + msg.header.stamp.nanosec
+        receive_ns[stamp_ns] = received
         p, q = msg.pose.position, msg.pose.orientation
         rows[stamp_ns] = (p.x, p.y, p.z, q.x, q.y, q.z, q.w)  # a repeated stamp keeps the last pose
     if not rows:
@@ -60,8 +60,10 @@ def main(argv=None):
     print(f"pose_to_tum: {len(rows)} poses from {args.topic} to {args.out}")
 
     if args.stats:
-        sim_span = (max(rows) - min(rows)) * 1e-9
-        wall_span = (max(receive_ns) - min(receive_ns)) * 1e-9
+        # From the second pose on: the first one may be sent while the server still waits paused.
+        stamps = sorted(rows)[1:] if len(rows) > 2 else sorted(rows)
+        sim_span = (stamps[-1] - stamps[0]) * 1e-9
+        wall_span = (receive_ns[stamps[-1]] - receive_ns[stamps[0]]) * 1e-9
         stats = {
             "poses": len(rows),
             "sim_span_s": sim_span,
@@ -70,7 +72,10 @@ def main(argv=None):
         }
         for item in args.stats_extra:
             key, _, value = item.partition("=")
-            stats[key] = float(value)
+            try:
+                stats[key] = float(value)
+            except ValueError:
+                stats[key] = value
         with open(args.stats, "w") as f:
             json.dump(stats, f, indent=2)
         print(f"pose_to_tum: {sim_span:.1f} s simulated in {wall_span:.1f} s, real-time factor {stats['real_time_factor']:.3f}")
