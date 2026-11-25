@@ -240,10 +240,20 @@ def read_init_search(run):
     if not isinstance(search, dict) or search.get("result") != "ACCEPTED":
         raise InputError(f"summary.json in {run} has no accepted yaw search (run with init_yaw_search: true)")
     try:
-        search = {key: float(search[key]) for key in ("yaw_offset_deg", "score", "candidates", "seconds")}
+        record = {key: float(search[key]) for key in ("yaw_offset_deg", "score", "candidates", "seconds")}
+        record["candidates_total"] = float(search.get("candidates_total", record["candidates"]))
     except (KeyError, TypeError, ValueError) as error:
         raise InputError(f"incomplete init_search in {run}/summary.json: {error}") from error
-    return pose_matrix(values), search
+    record["truncated"] = bool(search.get("truncated", False))
+    return pose_matrix(values), record
+
+
+def candidates_text(search):
+    """'24 candidates', or '24/48 candidates (truncated)' when the search did not score all of them."""
+    scored, total = search["candidates"], search["candidates_total"]
+    if search["truncated"] or scored < total:
+        return f"{scored:.0f}/{total:.0f} candidates" + (" (truncated)" if search["truncated"] else "")
+    return f"{scored:.0f} candidates"
 
 
 def pose_matrix(values):
@@ -328,20 +338,44 @@ def height_levels(z, low, high):
     return np.clip(np.floor(scaled), 0, HEIGHT_LEVELS - 1).astype(int)
 
 
-def support_heights(map_points, positions, radius=0.35, clearance=0.05):
-    """For each position, the highest map point below it (minus a clearance) within radius in x y.
+def floor_height(z):
+    """The floor level: a low percentile of the map heights, robust to a few stray points below the floor."""
+    return float(np.percentile(z, 0.5))
 
-    The surface the sensor is over: the floor, or the top of an obstacle it passes over. The lowest map
-    height where nothing is below.
+
+class SurfaceHeights:
+    """The height of the surface below a position: the floor, or the top of an obstacle it passes over.
+
+    Of the map points within radius in x y and below the position (minus a clearance), the most common
+    height (bins of bin_size; the higher bin on a tie) is the surface. A horizontal surface puts many
+    points into one bin, while a wall or a pillar spreads its points over many bins, so a drop line
+    near a wall still ends on the floor and not on the wall. Where no map point is below, the floor level.
     """
-    tree = cKDTree(map_points[:, :2])
-    floor = float(map_points[:, 2].min())
-    heights = []
-    for position in positions:
-        near = tree.query_ball_point(position[:2], radius)
-        below = [map_points[k, 2] for k in near if map_points[k, 2] < position[2] - clearance]
-        heights.append(max(below) if below else floor)
-    return np.array(heights)
+
+    def __init__(self, map_points, radius=0.35, clearance=0.05, bin_size=0.05):
+        self.points = np.asarray(map_points, dtype=float)
+        self.tree = cKDTree(self.points[:, :2])
+        self.floor = floor_height(self.points[:, 2])
+        self.radius, self.clearance, self.bin_size = radius, clearance, bin_size
+
+    def __call__(self, positions):
+        heights = []
+        for position in np.asarray(positions, dtype=float).reshape(-1, 3):
+            z = self.points[self.tree.query_ball_point(position[:2], self.radius), 2]
+            z = z[z < position[2] - self.clearance]
+            if len(z) == 0:
+                heights.append(self.floor)
+                continue
+            bins = np.floor(z / self.bin_size).astype(np.int64)
+            values, counts = np.unique(bins, return_counts=True)
+            top = values[counts == counts.max()].max()
+            heights.append(float(z[bins == top].mean()))
+        return np.array(heights)
+
+
+def support_heights(map_points, positions, **kwargs):
+    """SurfaceHeights of map_points at each position."""
+    return SurfaceHeights(map_points, **kwargs)(positions)
 
 
 def collect_frames(args):
@@ -384,8 +418,9 @@ def select_font(family):
 
 def fixed_colors():
     """The colors that gif_palette puts first, in this order."""
-    return [TEXT_COLOR, "#ffffff", MAP_COLOR, FRAME_COLOR, LEGEND_EDGE_COLOR, ESTIMATE_COLOR, SCAN_COLOR, GT_COLOR, POSE_COLOR,
-            POSE_EDGE_COLOR, *STATE_COLORS.values(), INIT_GUESS_COLOR, GROUND_COLOR, *HEIGHT_COLORS]
+    colors = [TEXT_COLOR, "#ffffff", MAP_COLOR, FRAME_COLOR, LEGEND_EDGE_COLOR, ESTIMATE_COLOR, SCAN_COLOR, GT_COLOR, POSE_COLOR,
+              POSE_EDGE_COLOR, *STATE_COLORS.values(), INIT_GUESS_COLOR, GROUND_COLOR, *HEIGHT_COLORS]
+    return list(dict.fromkeys(color.lower() for color in colors))  # each once (the estimate is INITIALIZING blue)
 
 
 def gif_palette(images, colors):
@@ -469,9 +504,10 @@ class TopView:
         self.est_xyz = est_xyz
         self.axes = axes
 
-    def update(self, index, T_world_imu, scan):
+    def update(self, index, T_world_imu, scan, trajectory=True):
         self.scan_artist.set_offsets(scan[:, :2] if len(scan) else np.zeros((0, 2)))
-        self.est_line.set_data(self.est_xyz[: index + 1, 0], self.est_xyz[: index + 1, 1])
+        shown = index + 1 if trajectory else 0
+        self.est_line.set_data(self.est_xyz[:shown, 0], self.est_xyz[:shown, 1])
         position = T_world_imu[:2, 3]
         forward = unit_xy(T_world_imu[:3, 0])
         self.pose_marker.set_data([position[0]], [position[1]])
@@ -510,15 +546,16 @@ class PerspectiveView:
         self.map_points = subsample(cropped, args.max_map_points, rng)
         # The ground is gray up to GROUND_CUT above the floor (a low percentile, robust to stray points);
         # the height colors span from there to the top of the map
-        z_floor, z_high = np.percentile(cropped[:, 2], [0.5, 99.5])
-        cut = round(round(float(z_floor), 1) + GROUND_CUT, 2) + 0.0
+        z_floor, z_high = floor_height(cropped[:, 2]), np.percentile(cropped[:, 2], 99.5)
+        cut = round(round(z_floor, 1) + GROUND_CUT, 2) + 0.0
         self.z_range = (cut, max(round(float(z_high), 1) + 0.0, cut + 0.1))
         palette = np.array([rgba_of(c) for c in HEIGHT_COLORS])
         self.map_ground = self.map_points[:, 2] < cut
         self.map_rgba = palette[height_levels(self.map_points[:, 2], *self.z_range)]
         self.map_rgba[self.map_ground] = rgba_of(GROUND_COLOR)
         self.scan_rgba = rgba_of(SCAN_COLOR)
-        self.support = support_heights(cropped, est_xyz)
+        self.surface = SurfaceHeights(cropped)
+        self.support = self.surface(est_xyz)
         travelled = np.concatenate([[0.0], np.cumsum(np.linalg.norm(np.diff(est_xyz, axis=0), axis=1))])
         self.drop_indices = np.searchsorted(travelled, np.arange(0.0, travelled[-1] + 1e-9, 0.6))
 
@@ -536,6 +573,8 @@ class PerspectiveView:
         self.heading = axes.annotate(
             "", xy=(0, 0), xytext=(0, 0), arrowprops={"arrowstyle": "-|>", "color": POSE_COLOR, "linewidth": 2.0,
                                                       "mutation_scale": 12}, zorder=5, annotation_clip=False)
+        # Clipped to the plot like the other artists, so an arrow near the edge never draws over the header
+        self.heading.arrow_patch.set_clip_path(axes.patch)
         (self.pose_marker,) = axes.plot([], [], marker="o", markersize=7, color=POSE_COLOR, markeredgecolor=POSE_EDGE_COLOR,
                                         markeredgewidth=0.8, linestyle="none", zorder=6, label="pose")
 
@@ -544,18 +583,25 @@ class PerspectiveView:
             self.fixed_camera = self.oblique_camera(cropped)
 
     def oblique_camera(self, cropped):
-        """A fixed camera above and behind the run that fits the map around it into the view."""
+        """A fixed camera above and beside the run that fits the run and the map around it into the view."""
+        # The map around the run (at most the margin), and always the whole trajectory, also where it
+        # leaves the map
         low = np.array([*self.est_xyz[:, :2].min(axis=0) - self.args.margin, cropped[:, 2].min()])
         high = np.array([*self.est_xyz[:, :2].max(axis=0) + self.args.margin, np.percentile(cropped[:, 2], 99.5)])
         low[:2] = np.maximum(low[:2], cropped[:, :2].min(axis=0))
         high[:2] = np.minimum(high[:2], cropped[:, :2].max(axis=0))
+        low = np.minimum(low, self.est_xyz.min(axis=0))
+        high = np.maximum(high, self.est_xyz.max(axis=0))
         target = (low + high) / 2.0
         azimuth, elevation = np.radians(self.args.azimuth), np.radians(self.args.elevation)
         direction = np.array([np.cos(elevation) * np.cos(azimuth), np.cos(elevation) * np.sin(azimuth), np.sin(elevation)])
         eye = target + self.args.distance * float(np.linalg.norm(high - low)) * direction
         R = look_at(eye, target)
         corners = np.array([[x, y, z] for x in (low[0], high[0]) for y in (low[1], high[1]) for z in (low[2], high[2])])
-        focal, center = fit_camera(R, eye, corners, self.width, self.height, margin=4)
+        try:
+            focal, center = fit_camera(R, eye, corners, self.width, self.height, margin=4)
+        except ValueError as error:
+            raise InputError(f"the oblique camera does not see the whole run ({error}); use a larger --distance") from error
         return Camera(R, eye, focal, center)
 
     def chase_camera(self, index):
@@ -578,7 +624,8 @@ class PerspectiveView:
         uv, _ = camera.project(points)
         return uv[:, 0], uv[:, 1]
 
-    def update(self, index, T_world_imu, scan):
+    def update(self, index, T_world_imu, scan, trajectory=True):
+        """Draw frame index with the pose T_world_imu; trajectory=False draws the pose alone (an intro image)."""
         camera = self.fixed_camera if self.view == "oblique" else self.chase_camera(index)
         map_uv, map_depth = camera.project(self.map_points)
         scan = scan[np.all((scan >= self.box[0]) & (scan <= self.box[1]), axis=1)]
@@ -596,14 +643,16 @@ class PerspectiveView:
 
         if self.gt_line is not None:
             self.gt_line.set_data(*self.line(camera, self.gt_xyz))
-        self.est_line.set_data(*self.line(camera, self.est_xyz[: index + 1]))
-        past = self.drop_indices[self.drop_indices <= index]
+        shown = index + 1 if trajectory else 0
+        self.est_line.set_data(*self.line(camera, self.est_xyz[:shown]))
+        past = self.drop_indices[self.drop_indices < shown]
         tops = self.est_xyz[past]
         bottoms = np.column_stack([tops[:, :2], self.support[past]])
         gaps = np.full_like(tops, np.nan)
         self.drops.set_data(*self.line(camera, np.stack([tops, bottoms, gaps], axis=1).reshape(-1, 3)))
+        # The stem goes from the pose drawn, which in an intro image is not an estimate
         origin = T_world_imu[:3, 3]
-        ground = np.array([origin[0], origin[1], self.support[index] if index < len(self.support) else self.support[-1]])
+        ground = np.array([origin[0], origin[1], self.surface(origin)[0]])
         self.stem.set_data(*self.line(camera, np.stack([origin, ground])))
         self.foot.set_data(*self.line(camera, ground[None]))
         self.up_axis.set_data(*self.line(camera, np.stack([origin, origin + 0.8 * T_world_imu[:3, 2]])))
@@ -676,7 +725,7 @@ def render(args):
     state_text = text(pad_px, 46, fontsize=10, weight="bold")
     text(-(pad_px + 205), 46, "t", ha="right", fontsize=9.4)
     time_text = text(-(pad_px + 150), 46, ha="right", fontsize=9.4)
-    text(-(pad_px + 40), 46, "inlier ratio", ha="right", fontsize=9.4)
+    inlier_label = text(-(pad_px + 40), 46, "inlier ratio", ha="right", fontsize=9.4)
     inlier_text = text(-pad_px, 46, ha="right", fontsize=9.4)
     if isinstance(view, PerspectiveView):
         # Height key on the title line: one swatch per level, from the ground cut to z_high (the floor
@@ -706,17 +755,21 @@ def render(args):
         # The given pose with the first scan placed by it, then the pose the yaw search picked
         T_given, search = intro
         first_scan = frames[0][4]
-        given = (T_given, f"INITIAL GUESS: yaw off by {-search['yaw_offset_deg']:+.0f} deg", scan_in_map(T_given, first_scan), "-")
-        found = (frames[0][1], f"YAW SEARCH: {search['yaw_offset_deg']:+.0f} deg, {search['candidates']:.0f} candidates",
-                 scan_in_map(frames[0][1], first_scan), f"{search['score']:.2f}")
+        given = (T_given, f"INITIAL GUESS: yaw off by {-search['yaw_offset_deg']:+.0f} deg", scan_in_map(T_given, first_scan), "-", False)
+        found = (frames[0][1], f"YAW SEARCH: {search['yaw_offset_deg']:+.0f} deg, {candidates_text(search)}",
+                 scan_in_map(frames[0][1], first_scan), f"{search['score']:.2f}", True)
         time_text.set_text(f"{0.0:.1f} s")
-        for T_world_imu, label, scan, score in (given, found):
-            view.update(0, T_world_imu, scan)
+        # The search score is a map inlier ratio from the search's own scorer, not the inlier ratio of
+        # frames.csv, so the intro labels it as the search score
+        inlier_label.set_text("search score")
+        for T_world_imu, label, scan, score, trajectory in (given, found):
+            view.update(0, T_world_imu, scan, trajectory=trajectory)
             state_text.set_text(label)
             state_text.set_color(INIT_GUESS_COLOR)
             inlier_text.set_text(score)
             image = capture()
             images.extend([image] * args.intro_frames)
+        inlier_label.set_text("inlier ratio")
     for i, (stamp, T_world_imu, state, inlier, scan_path) in enumerate(frames):
         view.update(i, T_world_imu, scan_in_map(T_world_imu, scan_path))
         state_text.set_text(state)
@@ -758,7 +811,7 @@ def parse_args(argv):
     parser.add_argument("--margin", type=float, help="map margin around the trajectory in meters (default 8 for top, 6 for the 3D views)")
     parser.add_argument("--azimuth", type=float, default=-110.0, help="oblique view: direction from the run to the camera, degrees from +x toward +y (default -110)")
     parser.add_argument("--elevation", type=float, default=42.0, help="oblique view: camera elevation above the horizon in degrees (default 42)")
-    parser.add_argument("--distance", type=float, default=0.9, help="oblique view: camera distance as a multiple of the map box diagonal (default 0.9)")
+    parser.add_argument("--distance", type=float, default=0.9, help="oblique view: camera distance as a multiple of the map box diagonal, at least 0.5 (default 0.9)")
     parser.add_argument("--aspect", type=float, default=0.5, help="3D views: plot height / width (default 0.5)")
     parser.add_argument("--init-search", action="store_true",
                         help="start with the given initial pose and the pose the yaw search picked (needs init_search in <run>/summary.json)")
@@ -774,12 +827,13 @@ def parse_args(argv):
     parser.add_argument("--font", default="Noto Sans", help="font family for all text (default Noto Sans, in the image; DejaVu Sans if missing)")
     parser.add_argument("--title", default="glim_localization: replay on a prebuilt map", help="title line")
     args = parser.parse_args(argv)
-    if args.stride < 1 or args.fps <= 0 or args.width < 160 or args.scale <= 0 or not 24 <= args.colors <= 256:
-        parser.error("--stride must be >= 1, --fps > 0, --width >= 160, --scale > 0 and --colors in [24, 256]")
+    min_colors = len(fixed_colors()) + 8  # the fixed drawing colors and a few adaptive ones
+    if args.stride < 1 or args.fps <= 0 or args.width < 160 or args.scale <= 0 or not min_colors <= args.colors <= 256:
+        parser.error(f"--stride must be >= 1, --fps > 0, --width >= 160, --scale > 0 and --colors in [{min_colors}, 256]")
     if args.z_min is not None and args.z_max is not None and args.z_min >= args.z_max:
         parser.error("--z-min must be below --z-max")
-    if not (0.1 <= args.aspect <= 2.0 and 5.0 <= args.elevation <= 85.0 and args.distance > 0 and args.intro_frames >= 1):
-        parser.error("--aspect must be in [0.1, 2], --elevation in [5, 85], --distance > 0 and --intro-frames >= 1")
+    if not (0.1 <= args.aspect <= 2.0 and 5.0 <= args.elevation <= 85.0 and args.distance >= 0.5 and args.intro_frames >= 1):
+        parser.error("--aspect must be in [0.1, 2], --elevation in [5, 85], --distance >= 0.5 and --intro-frames >= 1")
     if args.margin is None:
         args.margin = 8.0 if args.view == "top" else 6.0
     if args.max_scan_points is None:

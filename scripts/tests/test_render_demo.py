@@ -194,6 +194,7 @@ def test_palette_starts_with_the_exact_drawing_colors():
     fixed = render_demo.fixed_colors()
     assert {"#000000", "#ffffff", render_demo.POSE_COLOR, render_demo.POSE_EDGE_COLOR, render_demo.SCAN_COLOR, render_demo.ESTIMATE_COLOR} <= set(fixed)
     assert set(render_demo.STATE_COLORS.values()) <= set(fixed)
+    assert len(fixed) == len(set(fixed))  # each color once
     expected = [int(color[k:k + 2], 16) for color in fixed for k in (1, 3, 5)]
     assert palette[: len(expected)] == expected
     assert len(palette) == 768
@@ -242,8 +243,14 @@ def test_heights_and_support():
     floor = [(x, y, 0.0) for x in np.arange(0.0, 4.0, 0.2) for y in np.arange(-1.0, 1.0, 0.2)]
     box_top = [(x, y, 0.6) for x in np.arange(2.0, 3.0, 0.2) for y in np.arange(-0.4, 0.4, 0.2)]
     positions = np.array([[1.0, 0.0, 1.0], [2.4, 0.0, 1.0], [2.4, 0.0, 0.5], [9.0, 0.0, 1.0]])
-    # Over the floor, over the box top, below the box top, and outside the map (the lowest height)
-    np.testing.assert_allclose(render_demo.support_heights(np.array(floor + box_top), positions), [0.0, 0.6, 0.0, 0.0])
+    # Over the floor, over the box top, below the box top, and outside the map (the floor level)
+    np.testing.assert_allclose(render_demo.support_heights(np.array(floor + box_top), positions), [0.0, 0.6, 0.0, 0.0], atol=1e-9)
+    # Next to a wall (a column of points up to 2.5 m) the surface is still the floor, not a point on the
+    # wall; and a stray point below the floor moves neither the surface nor the fallback floor level
+    wall = [(1.2, 0.0, z) for z in np.arange(0.1, 2.5, 0.05)]
+    stray = [(1.0, 0.2, -3.0)]
+    points = np.array(floor + box_top + wall + stray)
+    np.testing.assert_allclose(render_demo.support_heights(points, [[1.0, 0.0, 1.5], [9.0, 0.0, 1.0]]), [0.0, 0.0], atol=1e-9)
 
 
 def test_palette_has_the_exact_height_and_intro_colors():
@@ -280,7 +287,8 @@ def test_every_view_renders(replay, view):
 
 
 def test_bad_view_options_exit_2(replay):
-    for extra in (["--view", "side"], ["--aspect", "5"], ["--elevation", "90"], ["--distance", "0"], ["--intro-frames", "0"], ["--margin", "-1"]):
+    for extra in (["--view", "side"], ["--aspect", "5"], ["--elevation", "90"], ["--distance", "0"], ["--distance", "0.1"],
+                  ["--intro-frames", "0"], ["--margin", "-1"], ["--colors", str(len(render_demo.fixed_colors()))]):
         with pytest.raises(SystemExit) as error:
             render_demo.parse_args(args(replay, replay / "bad.gif", *extra))
         assert error.value.code == 2, extra
@@ -298,6 +306,8 @@ def test_init_search_intro(replay):
     T_given, search = render_demo.read_init_search(str(run))
     np.testing.assert_allclose(T_given[:3, 0], [0.5, math.sqrt(3) / 2, 0.0], atol=1e-12)
     assert search["yaw_offset_deg"] == -60.0 and search["candidates"] == 24
+    assert render_demo.candidates_text(search) == "24 candidates"
+    assert render_demo.candidates_text({**search, "candidates_total": 48, "truncated": True}) == "24/48 candidates (truncated)"
     out = replay / "intro.gif"
     assert render_demo.main(args(replay, out, "--init-search", "--intro-frames", "4")) == 0
     # The two held intro images (identical frames are merged into one longer frame), then the 3 estimates
@@ -312,3 +322,24 @@ def test_init_search_without_an_accepted_search_exits_2(replay):
     assert render_demo.main(args(replay, replay / "b.gif", "--init-search")) == 2
     write_init_search(run, {"result": "ACCEPTED", "score": 0.9})
     assert render_demo.main(args(replay, replay / "c.gif", "--init-search")) == 2
+
+
+def test_a_run_past_the_map_stays_in_view(replay):
+    """Poses beyond the map: the camera fits the whole run, and nothing of the pose reaches the header."""
+    run = replay / "run"
+    traj = (run / "traj_localization.txt").read_text().splitlines()
+    moved = []
+    for line in traj:
+        values = line.split()
+        values[1] = str(float(values[1]) + 6.0)  # the map ends at x = 3
+        moved.append(" ".join(values) + "\n")
+    (run / "traj_localization.txt").write_text("".join(moved))
+    for view in ("oblique", "top"):
+        out = replay / f"past_{view}.gif"
+        assert render_demo.main(args(replay, out, "--view", view, "--no-gt")) == 0
+        pose = np.array(ImageColor.getrgb(render_demo.POSE_COLOR))
+        for frame in ImageSequence.Iterator(Image.open(out)):
+            rgb = np.asarray(frame.convert("RGB"))
+            rows = np.nonzero(np.all(rgb == pose, axis=2))[0]
+            assert len(rows) > 0, view  # the pose is drawn
+            assert rows.min() >= 64, view  # below the header (64 px at --scale 1)
