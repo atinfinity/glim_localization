@@ -92,11 +92,12 @@ if(BUILD_TESTING)
   # ament_package().
   find_package(ament_lint_auto REQUIRED)
   # src/localization_node.cpp is derived from glim_ros2 and starts with its provenance lines (CLAUDE.md),
-  # which are longer than 100 columns and must stay unchanged. cpplint checks that file in a test of its
-  # own (cpplint_derived) with every check but the line length; the other linters check it as usual.
+  # which are up to 150 columns long and must stay unchanged. cpplint checks that file in a test of its
+  # own (cpplint_derived) with a line length of 150, so the rest of the file keeps a limit; the other
+  # linters check it as usual.
   set(ament_cmake_cpplint_ADDITIONAL_EXCLUDE src/localization_node.cpp)
   ament_lint_auto_find_test_dependencies()
-  ament_cpplint(src/localization_node.cpp TESTNAME cpplint_derived FILTERS -whitespace/line_length)
+  ament_cpplint(src/localization_node.cpp TESTNAME cpplint_derived MAX_LINE_LENGTH 150)
 
   find_package(ament_cmake_gtest REQUIRED)
   # ROS isolation for parallel tests (colcon test passes ctest -j): each test that uses ROS runs through
