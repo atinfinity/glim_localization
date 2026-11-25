@@ -11,6 +11,9 @@ Subcommands:
            reason (one line) if it is not
   seal     validate a freshly built entry and write its cache_entry.json (the manifest)
   install  replace an entry with a sealed build directory by renaming it (same parent directory)
+  cleanup  at the start of a run: remove leftover builds (.tmp-map_*), and put a displaced entry
+           (.old-map_<label>-<pid>, left by an install that was interrupted between its two renames)
+           back when its slot is empty, else remove it. A restored entry is checked like any other
 
 The key components are named, so `check` can say which input changed. Inputs:
   --input NAME=PATH   a file or a directory (hashed recursively: relative names, sizes, contents)
@@ -19,7 +22,9 @@ The key components are named, so `check` can say which input changed. Inputs:
                       resolves for it (unresolved ones become "missing:<name>" components)
   --modules CONFIG_DIR
                       the GLIM modules a config loads at run time (every "so_name" in its JSON
-                      files), found on LD_LIBRARY_PATH and hashed like --binary
+                      files, // comments skipped), found on LD_LIBRARY_PATH (an error if one is
+                      not) and hashed like --binary
+  Only these inputs are hashed: a file named in a --value (for example in MAPPER_ARGS) is not.
 
 Exit codes: 0 ok, 1 invalid or mismatched entry (check) or failed validation (seal, install),
 2 bad arguments.
@@ -56,25 +61,34 @@ def sha256_file(path):
 
 
 def hash_tree(path):
-    """SHA-256 of a file, or of a directory: every entry's relative name, type, size and contents."""
+    """SHA-256 of a file, or of a directory: every entry's relative name, type, size and contents.
+
+    Symlinks are followed, so a dataset whose points/ is a link to another directory is hashed by what the
+    tools read. A link back to a directory that is already being walked (a loop) and a dangling link are
+    errors."""
     if os.path.isfile(path):
         return sha256_file(path)
     if not os.path.isdir(path):
         raise CacheError(f"input does not exist: {path}")
     digest = hashlib.sha256()
-    for root, dirs, files in os.walk(path):
-        dirs.sort()
-        rel_root = os.path.relpath(root, path)
-        for name in list(dirs):
-            full = os.path.join(root, name)
-            if os.path.islink(full):  # not followed: record the link itself
-                digest.update(f"L {os.path.join(rel_root, name)} {os.readlink(full)}\n".encode())
-                dirs.remove(name)
+
+    def walk(directory, rel, active):
+        real = os.path.realpath(directory)
+        if real in active:
+            raise CacheError(f"symlink loop in the input at {os.path.join(path, rel)}")
+        active = active | {real}
+        for name in sorted(os.listdir(directory)):
+            full = os.path.join(directory, name)
+            rel_name = os.path.join(rel, name)
+            if os.path.isdir(full):
+                digest.update(f"D {rel_name}\n".encode())
+                walk(full, rel_name, active)
+            elif os.path.isfile(full):
+                digest.update(f"F {rel_name} {os.path.getsize(full)} {sha256_file(full)}\n".encode())
             else:
-                digest.update(f"D {os.path.join(rel_root, name)}\n".encode())
-        for name in sorted(files):
-            full = os.path.join(root, name)
-            digest.update(f"F {os.path.join(rel_root, name)} {os.path.getsize(full)} {sha256_file(full)}\n".encode())
+                raise CacheError(f"not a file or directory (a dangling link?): {full}")
+
+    walk(path, ".", frozenset())
     return digest.hexdigest()
 
 
@@ -110,11 +124,14 @@ def ldd(path):
 
 
 def so_names(config_dir):
+    """Every "so_name" in the config's JSON files; GLIM's configs are JSONC, so // comments are skipped."""
     names = set()
     for name in sorted(os.listdir(config_dir)):
         if name.endswith(".json"):
             with open(os.path.join(config_dir, name)) as handle:
-                names.update(re.findall(r'"so_name"\s*:\s*"([^"]+)"', handle.read()))
+                for line in handle:
+                    code = line.split("//", 1)[0]  # a so_name never contains //
+                    names.update(re.findall(r'"so_name"\s*:\s*"([^"]+)"', code))
     return sorted(names)
 
 
@@ -167,10 +184,9 @@ def make_key(inputs=(), values=(), binaries=(), module_configs=(), search_path=N
     for config_dir in module_configs:
         for name in so_names(config_dir):
             found = find_library(name, search_path)
-            if found is None:
-                components[f"missing:{name}"] = "not found"
-            else:
-                paths.append(found)
+            if found is None:  # the mapper could not load it either
+                raise CacheError(f"the module {name} of {config_dir} is not on LD_LIBRARY_PATH")
+            paths.append(found)
     components.update(binary_components(paths))
     components = dict(sorted(components.items()))
     key = hashlib.sha256(json.dumps({"format": FORMAT, "components": components}, sort_keys=True).encode()).hexdigest()
@@ -332,12 +348,46 @@ def install(build, entry):
     if os.path.lexists(entry):
         old = os.path.join(os.path.dirname(entry), f".old-{os.path.basename(entry)}-{os.getpid()}")
         os.rename(entry, old)
-    os.rename(build, entry)
+    try:
+        os.rename(build, entry)
+    except OSError:
+        if old is not None:
+            os.rename(old, entry)  # the previous entry goes back; cleanup() does the same after a crash here
+        raise
     if old is not None:
-        if os.path.isdir(old) and not os.path.islink(old):
-            shutil.rmtree(old)
+        remove(old)
+
+
+def remove(path):
+    if os.path.isdir(path) and not os.path.islink(path):
+        shutil.rmtree(path)
+    else:
+        os.remove(path)
+
+
+OLD_PATTERN = re.compile(r"^\.old-(map_[A-Za-z0-9_]+)-\d+$")
+
+
+def cleanup(cache_dir):
+    """Messages for the log about what was removed or restored."""
+    messages = []
+    for name in sorted(os.listdir(cache_dir)):
+        full = os.path.join(cache_dir, name)
+        if name.startswith(".tmp-map_"):
+            remove(full)
+            messages.append(f"removed the unfinished build {name}")
+            continue
+        match = OLD_PATTERN.match(name)
+        if match is None:
+            continue
+        entry = os.path.join(cache_dir, match.group(1))
+        if os.path.lexists(entry):
+            remove(full)
+            messages.append(f"removed the replaced entry {name}")
         else:
-            os.remove(old)
+            os.rename(full, entry)
+            messages.append(f"restored {name} as {match.group(1)} (an install was interrupted)")
+    return messages
 
 
 def main(argv=None):
@@ -359,6 +409,8 @@ def main(argv=None):
     p_install = sub.add_parser("install")
     p_install.add_argument("--build", required=True)
     p_install.add_argument("--entry", required=True)
+    p_cleanup = sub.add_parser("cleanup")
+    p_cleanup.add_argument("--cache", required=True)
     args = parser.parse_args(argv)
 
     try:
@@ -383,6 +435,10 @@ def main(argv=None):
             key = read_json(args.key, "the key file")
             notes = dict(split_assignment(text, "--note") for text in args.note)
             seal(args.entry, key, {"notes": notes} if notes else None)
+            return 0
+        if args.command == "cleanup":
+            for message in cleanup(args.cache):
+                print(f"cache: {message}")
             return 0
         install(args.build, args.entry)
         return 0
