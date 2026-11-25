@@ -22,9 +22,13 @@ Clock offset (absolute per-point times only): by default the first point time mu
 sensor clock while the header and the IMU use the host clock) is rejected.
 --point-clock-offset SECONDS adds a fixed offset to every per-point time (header clock = point
 clock + offset); --point-clock-offset estimate takes it from the first frame as header stamp -
-first point time. Each frame must still be within 1 s of its header after the offset (this
-catches drift and clock jumps). The offset, its source and the residuals are written to
-meta.json under conversion.point_clock_offset.
+first point time. After the offset, each frame must still be within 1 s of its header (this
+catches a wrong offset and large jumps), and the residual (first point - header) may spread
+over at most one scan period, the median header interval (this catches drift and smaller
+jumps). The offset, its source and the residuals are written to meta.json under
+conversion.point_clock_offset. estimate assumes that the header stamps the first point: a
+driver that stamps the end of the scan gives a constant error of up to one scan period,
+which the residual cannot show (it is near 0 by construction); only a known offset avoids it.
 
 Exit codes: 0 ok, 1 conversion failed, 2 bad arguments.
 """
@@ -193,7 +197,7 @@ def normalize_times(stamp_ns, time_raw, settings, frame_index, clock_offset_ns=N
                 raise ConversionError(
                     f"frame {frame_index}: after the point clock offset {clock_offset_ns * 1e-9:+.9f} s, the first point time "
                     f"{corrected_ns * 1e-9:.6f} s is still more than {ABSOLUTE_STAMP_TOLERANCE_NS * 1e-9:g} s from the header stamp "
-                    f"{stamp_ns * 1e-9:.6f} s (a wrong offset, a drifting clock or a clock jump)"
+                    f"{stamp_ns * 1e-9:.6f} s (a wrong offset, or a drift or jump of the point clock against the header clock)"
                 )
             first_point_ns = corrected_ns
         elif abs(first_point_ns - stamp_ns) > ABSOLUTE_STAMP_TOLERANCE_NS:
@@ -255,6 +259,7 @@ class Converter:
         self.clock_offset_source = None
         self.clock_offset_frame = None
         self.clock_residuals_ns = []  # first point time after the offset - header stamp, per frame
+        self.clock_headers_ns = []  # the header stamps of those frames, for the scan period
         if args.point_clock_offset is not None and args.point_clock_offset != "estimate":
             self.clock_offset_ns = int(round(float(args.point_clock_offset) * 1e9))
             self.clock_offset_source = "given"
@@ -305,6 +310,7 @@ class Converter:
             stamp_ns, t = normalize_times(stamp_ns, time_raw, self.settings, index, self.clock_offset_ns)
             if self.clock_offset_ns is not None:
                 self.clock_residuals_ns.append(stamp_ns - header_ns)
+                self.clock_headers_ns.append(header_ns)
 
         if stamp_ns in self.frame_stamps:
             self.counts["frames_duplicate_stamp"] += 1
@@ -318,6 +324,22 @@ class Converter:
             raise ConversionError(
                 f"--point-clock-offset applies to absolute per-point times only, but they are {self.settings.mode} "
                 "(relative times follow the header stamp and need no offset)"
+            )
+
+    def check_clock_residual_spread(self):
+        """A fixed offset leaves a residual that stays within one scan period; a larger spread is drift or a jump."""
+        headers = np.unique(np.array(self.clock_headers_ns, dtype=np.int64))
+        if headers.size < 2:
+            return
+        period_ns = float(np.median(np.diff(headers)))
+        residuals = np.array(self.clock_residuals_ns, dtype=np.int64)
+        spread_ns = int(residuals.max() - residuals.min())
+        if spread_ns > period_ns:
+            raise ConversionError(
+                f"after the point clock offset {self.clock_offset_ns * 1e-9:+.9f} s, the first point - header residual spreads over "
+                f"{spread_ns * 1e-9:.6f} s (min {residuals.min() * 1e-9:+.6f} s, max {residuals.max() * 1e-9:+.6f} s), more than "
+                f"one scan period ({period_ns * 1e-9:.6f} s, the median header interval): the point clock drifts or jumps "
+                "against the header clock, and a fixed offset cannot correct that"
             )
 
     def describe_clock_offset(self):
@@ -438,6 +460,8 @@ def convert(args):
         raise ConversionError("no usable point cloud frames")
     if args.point_clock_offset is not None and not converter.clock_residuals_ns:
         raise ConversionError("--point-clock-offset was given, but no frame had per-point times to apply it to")
+    if args.point_clock_offset is not None:
+        converter.check_clock_residual_spread()
     acc_scale, num_imu, median_acc = converter.write_imu()
 
     if args.gt:
@@ -504,8 +528,8 @@ def validate_point_clock_offset(args):
             return f"must be a number of seconds or 'estimate', got '{args.point_clock_offset}'"
         if not math.isfinite(seconds):
             return f"must be finite, got '{args.point_clock_offset}'"
-        if abs(seconds) > 1e10:
-            return f"is {seconds:g} s, more than 1e10 s (about 317 years); check that the unit is seconds"
+        if abs(seconds) > 1e9:
+            return f"is {seconds:g} s, more than 1e9 s (about 32 years); check that the unit is seconds"
         args.point_clock_offset = repr(seconds)
     if args.time_mode == "relative":
         return "applies to absolute per-point times only, and --time-mode is relative"
