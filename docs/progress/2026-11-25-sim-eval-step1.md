@@ -65,7 +65,9 @@
     - **Lost first messages.** A server started running published its first steps before the bridge had discovered its gz-transport publishers, and the first IMU sample was lost. The server now waits paused for discovery.
     - **Messages dropped during the run.** In most runs, a few IMU samples or poses were dropped in the middle of the run, and the new count checks caught it.
       - Capping the real-time factor at 2 did not help, and neither did deep bridge and recorder queues alone.
-      - The cause is the ZeroMQ high-water mark of gz-transport, 1000 queued messages per socket by default. `record.sh` sets `GZ_TRANSPORT_RCVHWM=0` and `GZ_TRANSPORT_SNDHWM=0` (no limit) and keeps the deep queues (`sim/config/`).
+      - `record.sh` sets `GZ_TRANSPORT_RCVHWM=0` and `GZ_TRANSPORT_SNDHWM=0` (no limit) and keeps the deep queues (`sim/config/`). This did **not** fix it: about 1 in 4 full `scripts/sim_eval.sh` runs still loses 1 to 7 IMU samples or poses.
+      - The recorder logs `Number of messages lost on the transport layer`, so the loss is on the DDS side between the bridge and `ros2 bag record`, not in Gazebo or gz-transport. Recordings of the record step alone were complete in 9 of 9 runs.
+      - `check_data.py` fails such a run on the IMU or pose count and period, so a run with lost messages reports no numbers; a rerun passes. Fixing the loss is left for Step 2 of [#9](https://github.com/atinfinity/glim_localization/issues/9).
     - **Signals.** The background bridge and recorder ignored SIGINT from the script, and the `ros2 run` wrapper did not pass on SIGTERM. The script now runs the bridge binary directly and stops both with SIGTERM, then SIGKILL after 20 s.
     - **`gpu_lidar` clouds:**
       - They are organized, with non-finite points for missing returns. `bag_to_replay.py` drops 2,982,729 of them over 601 frames, mostly the sky.
