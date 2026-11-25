@@ -17,6 +17,15 @@ Per-point time field (decided from the first frame, then fixed):
 Without a time field the frames have no per-point time and all t are 0. Livox CustomMsg
 is not supported.
 
+Clock offset (absolute per-point times only): by default the first point time must be within
+1 s of the header stamp, and a bag whose per-point times use another clock (for example the
+sensor clock while the header and the IMU use the host clock) is rejected.
+--point-clock-offset SECONDS adds a fixed offset to every per-point time (header clock = point
+clock + offset); --point-clock-offset estimate takes it from the first frame as header stamp -
+first point time. Each frame must still be within 1 s of its header after the offset (this
+catches drift and clock jumps). The offset, its source and the residuals are written to
+meta.json under conversion.point_clock_offset.
+
 Exit codes: 0 ok, 1 conversion failed, 2 bad arguments.
 """
 import argparse
@@ -154,8 +163,17 @@ def detect_time_settings(time_field, time_values, mode_override, scale_override)
     return TimeSettings(time_field.name, time_field.datatype, mode, scale)
 
 
-def normalize_times(stamp_ns, time_raw, settings, frame_index):
-    """Return (stamp_ns, t) with t in seconds since the frame stamp and min(t) == 0."""
+CLOCK_OFFSET_HINT = (
+    "pass --point-clock-offset <seconds> (header clock = point clock + offset) or --point-clock-offset estimate "
+    "if the header and IMU stamps share one clock and only the per-point times are offset"
+)
+
+
+def normalize_times(stamp_ns, time_raw, settings, frame_index, clock_offset_ns=None):
+    """Return (stamp_ns, t) with t in seconds since the frame stamp and min(t) == 0.
+
+    clock_offset_ns (absolute mode only) is added to the per-point times to move them to the header clock.
+    """
     values = time_raw * settings.scale
     low, high = float(np.min(values)), float(np.max(values))
     hint = "decided from the first frame; override with --time-mode/--time-scale"
@@ -169,7 +187,16 @@ def normalize_times(stamp_ns, time_raw, settings, frame_index):
         stamp_ns += int(round(low * 1e9))
     else:
         first_point_ns = int(round(low * 1e9))
-        if abs(first_point_ns - stamp_ns) > ABSOLUTE_STAMP_TOLERANCE_NS:
+        if clock_offset_ns is not None:
+            corrected_ns = first_point_ns + clock_offset_ns
+            if abs(corrected_ns - stamp_ns) > ABSOLUTE_STAMP_TOLERANCE_NS:
+                raise ConversionError(
+                    f"frame {frame_index}: after the point clock offset {clock_offset_ns * 1e-9:+.9f} s, the first point time "
+                    f"{corrected_ns * 1e-9:.6f} s is still more than {ABSOLUTE_STAMP_TOLERANCE_NS * 1e-9:g} s from the header stamp "
+                    f"{stamp_ns * 1e-9:.6f} s (a wrong offset, a drifting clock or a clock jump)"
+                )
+            first_point_ns = corrected_ns
+        elif abs(first_point_ns - stamp_ns) > ABSOLUTE_STAMP_TOLERANCE_NS:
             if high < 1.0:
                 raise ConversionError(
                     f"frame {frame_index}: the per-point times look relative (largest {high:.6f} s), which contradicts the absolute "
@@ -179,7 +206,7 @@ def normalize_times(stamp_ns, time_raw, settings, frame_index):
                 f"frame {frame_index}: the first point time {first_point_ns * 1e-9:.6f} s is more than "
                 f"{ABSOLUTE_STAMP_TOLERANCE_NS * 1e-9:g} s from the header stamp {stamp_ns * 1e-9:.6f} s. The per-point times and the "
                 f"header use different clocks (an offset between the sensor clock and the host clock); --time-mode/--time-scale cannot fix "
-                f"this, and the IMU stamps must share the clock of the points, so fix the clock offset in the bag first"
+                f"this, and the IMU stamps must share the clock of the points. Fix the clock offset in the bag, or {CLOCK_OFFSET_HINT}"
             )
         if first_point_ns < 0:
             raise ConversionError(f"frame {frame_index}: negative first point time {first_point_ns * 1e-9:.9f} s")
@@ -223,6 +250,14 @@ class Converter:
             "imu_duplicate_stamp": 0,
         }
         self.frame_index = 0
+        # Point clock offset: None (off), a given value, or estimated from the first frame with per-point times
+        self.clock_offset_ns = None
+        self.clock_offset_source = None
+        self.clock_offset_frame = None
+        self.clock_residuals_ns = []  # first point time after the offset - header stamp, per frame
+        if args.point_clock_offset is not None and args.point_clock_offset != "estimate":
+            self.clock_offset_ns = int(round(float(args.point_clock_offset) * 1e9))
+            self.clock_offset_source = "given"
 
     def add_frame(self, msg):
         index = self.frame_index
@@ -231,6 +266,8 @@ class Converter:
 
         if self.has_time_field is None:
             self.has_time_field = time_field is not None
+            if self.args.point_clock_offset is not None and not self.has_time_field:
+                raise ConversionError("--point-clock-offset needs per-point times, but the point cloud has no time field")
         elif self.has_time_field != (time_field is not None):
             raise ConversionError(f"frame {index}: the time field appears or disappears between frames")
 
@@ -252,9 +289,22 @@ class Converter:
         if time_raw is not None:
             if self.settings is None:
                 self.settings = detect_time_settings(time_field, time_raw, self.args.time_mode, self.args.time_scale)
+                self.check_clock_offset_mode()
             elif time_field.name != self.settings.field or time_field.datatype != self.settings.datatype:
                 raise ConversionError(f"frame {index}: the time field changed from '{self.settings.field}'")
-            stamp_ns, t = normalize_times(stamp_ns, time_raw, self.settings, index)
+            if self.args.point_clock_offset == "estimate" and self.clock_offset_ns is None:
+                first_point_ns = int(round(float(np.min(time_raw * self.settings.scale)) * 1e9))
+                self.clock_offset_ns = stamp_ns - first_point_ns
+                self.clock_offset_source = "estimated"
+                self.clock_offset_frame = index
+                print(
+                    f"point clock offset: estimated {self.clock_offset_ns * 1e-9:+.9f} s from frame {index} "
+                    "(header stamp - first point time; assumes the header stamp is the first point time)"
+                )
+            header_ns = stamp_ns
+            stamp_ns, t = normalize_times(stamp_ns, time_raw, self.settings, index, self.clock_offset_ns)
+            if self.clock_offset_ns is not None:
+                self.clock_residuals_ns.append(stamp_ns - header_ns)
 
         if stamp_ns in self.frame_stamps:
             self.counts["frames_duplicate_stamp"] += 1
@@ -262,6 +312,31 @@ class Converter:
         self.frame_stamps.add(stamp_ns)
         write_bin(os.path.join(self.args.out, "points", f"{stamp_ns:019d}.bin"), stamp_ns, xyz, t, intensity)
         self.counts["frames_written"] += 1
+
+    def check_clock_offset_mode(self):
+        if self.args.point_clock_offset is not None and self.settings.mode != "absolute":
+            raise ConversionError(
+                f"--point-clock-offset applies to absolute per-point times only, but they are {self.settings.mode} "
+                "(relative times follow the header stamp and need no offset)"
+            )
+
+    def describe_clock_offset(self):
+        if self.clock_offset_ns is None:
+            return None
+        residuals = np.array(self.clock_residuals_ns, dtype=np.float64) * 1e-9
+        return {
+            "source": self.clock_offset_source,
+            "offset_ns": self.clock_offset_ns,
+            "offset_s": self.clock_offset_ns * 1e-9,
+            "estimated_from_frame": self.clock_offset_frame,
+            "definition": "header clock = point clock + offset",
+            "residual_s": {
+                "description": "first point time after the offset - header stamp, over the frames with per-point times",
+                "min": float(residuals.min()),
+                "median": float(np.median(residuals)),
+                "max": float(residuals.max()),
+            },
+        }
 
     def add_imu(self, msg):
         stamp_ns = stamp_to_ns(msg.header.stamp)
@@ -361,6 +436,8 @@ def convert(args):
 
     if converter.counts["frames_written"] == 0:
         raise ConversionError("no usable point cloud frames")
+    if args.point_clock_offset is not None and not converter.clock_residuals_ns:
+        raise ConversionError("--point-clock-offset was given, but no frame had per-point times to apply it to")
     acc_scale, num_imu, median_acc = converter.write_imu()
 
     if args.gt:
@@ -373,6 +450,7 @@ def convert(args):
         "points_topic": points_connection.topic,
         "imu_topic": imu_connection.topic,
         "time_field": converter.settings.describe() if converter.settings else None,
+        "point_clock_offset": converter.describe_clock_offset(),
         "acc_scale": acc_scale,
         "imu_median_acc_norm_before_scale": median_acc,
         "excluded": converter.counts,
@@ -402,9 +480,36 @@ def parse_args(argv):
     parser.add_argument("--time-field", help="per-point time field name (default: t, time, time_stamp, timestamp)")
     parser.add_argument("--time-mode", choices=("relative", "absolute"), help="override the detected per-point time mode")
     parser.add_argument("--time-scale", type=float, help="override the factor that converts field values to seconds")
+    parser.add_argument(
+        "--point-clock-offset",
+        metavar="SECONDS|estimate",
+        help="absolute per-point times only: add this offset to every per-point time (header clock = point clock + offset), "
+        "or 'estimate' it from the first frame as header stamp - first point time. Default: off, and a bag whose first "
+        "point time is more than 1 s from the header stamp is rejected",
+    )
     parser.add_argument("--intensity-field", default="intensity", help="intensity field name (default: intensity)")
     parser.add_argument("--gt", help="ground truth in TUM format (T_world_imu) to copy into the dataset as traj_gt.txt")
     return parser.parse_args(argv)
+
+
+def validate_point_clock_offset(args):
+    """Return an error message, or None. Normalizes the value to 'estimate' or the repr of a float."""
+    value = args.point_clock_offset.strip()
+    if value == "estimate":
+        args.point_clock_offset = value
+    else:
+        try:
+            seconds = float(value)
+        except ValueError:
+            return f"must be a number of seconds or 'estimate', got '{args.point_clock_offset}'"
+        if not math.isfinite(seconds):
+            return f"must be finite, got '{args.point_clock_offset}'"
+        if abs(seconds) > 1e10:
+            return f"is {seconds:g} s, more than 1e10 s (about 317 years); check that the unit is seconds"
+        args.point_clock_offset = repr(seconds)
+    if args.time_mode == "relative":
+        return "applies to absolute per-point times only, and --time-mode is relative"
+    return None
 
 
 def main(argv=None):
@@ -412,6 +517,15 @@ def main(argv=None):
     if args.acc_scale is not None and not (math.isfinite(args.acc_scale) and args.acc_scale > 0):
         sys.stderr.write("error: --acc-scale must be positive\n")
         return 2
+    if args.point_clock_offset is not None:
+        error = validate_point_clock_offset(args)
+        if error:
+            sys.stderr.write(f"error: --point-clock-offset {error}\n")
+            return 2
+        if args.point_clock_offset == "estimate":
+            print("point clock offset: estimate from the first frame with per-point times")
+        else:
+            print(f"point clock offset: {float(args.point_clock_offset):+.9f} s added to every per-point time (given)")
     try:
         meta = convert(args)
     except ConversionError as error:
@@ -420,6 +534,13 @@ def main(argv=None):
     conversion = meta["conversion"]
     print(f"wrote {meta['num_frames']} frames and {meta['num_imu']} IMU samples to {args.out}")
     print(f"per-point time: {conversion['time_field']}; excluded: {conversion['excluded']}")
+    offset = conversion["point_clock_offset"]
+    if offset:
+        residual = offset["residual_s"]
+        print(
+            f"point clock offset ({offset['source']}): {offset['offset_s']:+.9f} s; first point - header after the offset: "
+            f"min {residual['min']:+.6f} s, median {residual['median']:+.6f} s, max {residual['max']:+.6f} s"
+        )
     return 0
 
 
