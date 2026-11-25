@@ -14,7 +14,45 @@ Unless prefixed with `scripts/docker_run.sh`, the commands below run inside the 
 scripts/docker_run.sh scripts/test_replay_e2e.sh
 ```
 
-Generates a 12 s synthetic map and dataset, localizes from an offset initial pose on the GLIM dump and on a PCD map, and checks accuracy (0.1 m, 1 deg after 3 s), determinism and exit codes. Results are in `out/phase4_e2e/`.
+Generates a 12 s synthetic map and dataset, localizes from an offset initial pose on the GLIM dump and on a PCD map, and checks accuracy (0.1 m, 1 deg after 3 s), determinism and exit codes, and runs the quick suite of [Robustness on synthetic data](#robustness-on-synthetic-data). Results are in `out/phase4_e2e/`.
+
+## Robustness on synthetic data
+
+`scripts/replay_robustness.py` replays the synthetic data from perturbed initial poses and against changed maps:
+
+- **Initial pose:** the ground truth at the first frame, moved by a translation along the xy diagonal (1, -1)/sqrt(2) and rotated about the world z axis. Each pose is replayed with the yaw search (`init_yaw_search`) off and on.
+- **Map change:** the scans stay the same. The map PCD is changed and compiled with `map_compiler`: points removed at random, pillars and low boxes removed, boxes added beside the path, or all of these together. The replay starts from the offset of the end-to-end test.
+- **Pass:** the replay exits 0 and `evaluate.py` meets 0.1 m and 1 deg after 3 s.
+- **Outcome:** each case is classified as one of the following:
+  - `pass`;
+  - `inaccurate`: exit 0 but outside the limits, which is a wrong convergence;
+  - `lost`;
+  - `rejected_<reason>`: the yaw search rejected the pose, as `ambiguous`, `low_score`, `truncated` or `no_candidate`;
+  - `low_tracking`;
+  - `timeout`: each replay and each evaluation gets `--timeout`, 120 s by default;
+  - `error`: an exception in the script, recorded for that case only;
+  - `exit<N>`: any other replay exit code.
+- **Quick suite:** each case has an expected outcome, not just pass or fail, so a crash or a bad argument does not count as the expected failure. The cases are:
+  - 0.5 m and 10 deg without the search: pass;
+  - 0 m and 90 deg without the search: lost or inaccurate;
+  - 0.5 m and 90 deg with the search: pass;
+  - 8 m with the search: `rejected_low_score`;
+  - 50 % of the points removed: pass;
+  - 12 boxes added: pass.
+
+  All of them are far from the measured boundary.
+
+```bash
+# quick: the cases above; test_replay_e2e.sh runs it, so CI does too (about 15 s)
+scripts/docker_run.sh bash -c 'env -u PYTHONPATH $GLIM_LOC_PYTHON scripts/replay_robustness.py --suite quick'
+# full: the whole grid, reported only (about 9 min with --jobs 3 on 8 arm64 cores)
+scripts/docker_run.sh bash -c 'env -u PYTHONPATH $GLIM_LOC_PYTHON scripts/replay_robustness.py --suite full --jobs 3 --out /ws/out/robustness_full'
+```
+
+The results are in `<out>/results.md` and `<out>/results.json`, written even when a case fails. Other options: `--input` (reuse a `synthetic_replay_dataset` output), `--keep-runs`, `--settle`, `--max-trans`, `--max-rot-deg`, `--timeout`. The measured boundary is in [the progress entry](progress/2026-11-25-real-data-prep.md).
+
+> [!NOTE]
+> The numbers in the progress entry are from arm64. amd64 gives slightly different errors for the same case. For example, the combined map change has an ATE max of 0.072 m on arm64 and 0.086 m on amd64. For this reason the quick suite uses only cases with a wide margin.
 
 ## Demo animation
 
@@ -60,7 +98,7 @@ scripts/docker_run.sh bash -c '
 
 ```bash
 # 1. Convert a rosbag2 (sqlite3 or mcap) to a replay dataset
-py scripts/bag_to_replay.py <bag_dir> --out /ws/out/dataset [--points-topic /points] [--imu-topic /imu] [--acc-scale 9.80665] [--gt traj.txt]
+py scripts/bag_to_replay.py <bag_dir> --out /ws/out/dataset [--points-topic /points] [--imu-topic /imu] [--acc-scale 9.80665] [--point-clock-offset <s>|estimate] [--gt traj.txt]
 
 # 2. Localize
 /ws/build/core/tools/glim_localization_replay --data /ws/out/dataset --config glim_localization/config \
@@ -72,9 +110,18 @@ py scripts/evaluate.py --est /ws/out/run/traj_localization.txt --gt /ws/out/data
 ```
 
 - `bag_to_replay.py`: per-point time is detected as GLIM does (override with `--time-field`, `--time-mode`, `--time-scale`). `--acc-scale` is required when the accelerations look like units of g. Livox `CustomMsg` is not supported.
+- Clock offset: with absolute per-point times, the first point of every frame must be within 1 s of the header stamp. By default a bag whose per-point times use another clock (for example the sensor clock, while the header and the IMU use the host clock) is rejected. If the header and IMU stamps share one clock and only the per-point times are offset, pass `--point-clock-offset`:
+  - `--point-clock-offset <seconds>` adds the offset to every per-point time (header clock = point clock + offset). Use the `=` form for a value like `-inf` that argparse would take for an option; a plain negative number such as `-7.5` works.
+  - `--point-clock-offset estimate` takes it from the first frame as header stamp - first point time.
+  - After the offset there are two checks on the residual (first point after the offset - header). Each frame must be within 1 s of its header, which catches a wrong offset and large jumps. The residual may spread (max - min over all frames) over at most one scan period, taken as the median interval of the header stamps, which catches drift and smaller jumps. Changes below one scan period pass.
+  - The value must be finite and at most 1e9 s (about 32 years). The option is refused for relative per-point times, `--time-mode relative`, and clouds without a time field.
+  - The offset is printed, and `meta.json` records it under `conversion.point_clock_offset`: `source` (`given` or `estimated`), `offset_ns`, `offset_s`, `estimated_from_frame`, `definition` (`header clock = point clock + offset`), and the residual as min, median and max (`residual_s`). Without the option the field is `null`.
 - `glim_localization_replay`: `--init-pose` is `T_world_imu` in the map frame. Other options: `--init-vel`, `--start`, `--end`, `--max-frames`, `--max-imu-gap` (default 0.05 s), `--on-imu-gap abort|reset`, `--min-tracking-ratio` (default 0.9). Outputs: `traj_localization.txt` (TUM), `frames.csv`, `summary.json`, `replay_args.json`. Exit codes: 0 ok, 1 runtime failure (including LOST or a low tracking ratio), 2 bad arguments, config, map or initial pose, 3 invalid dataset (including IMU gaps), 4 no pose.
 - `evaluate.py`: ATE and RPE with evo (no realignment) and processing time statistics; writes `eval.json` and `eval.txt`, and exits 1 when a threshold or the pose coverage (`--min-coverage`, default 0.9) is not met.
 - Set `T_lidar_imu` in `config_sensors.json` of a copied config for your sensor; the shipped configs use identity. Then pass `--config` your copied config instead of `glim_localization/config`.
+
+> [!WARNING]
+> `--point-clock-offset estimate` assumes that the header stamp is the time of the first point. If the driver stamps the end or the middle of the scan, every frame is shifted by the same error, up to one scan period, against the IMU. The residual in `meta.json` cannot show this: the estimate comes from frame 0, so the residual is near 0 by construction. Only an offset that you know (given as `--point-clock-offset <seconds>`) avoids it.
 
 The GPU module is selected with `--config glim_localization/config/gpu` in the CUDA image; see [CUDA variant](build.md#cuda-variant).
 

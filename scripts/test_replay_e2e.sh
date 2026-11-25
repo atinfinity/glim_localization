@@ -244,6 +244,12 @@ else
   echo "SKIPPED: GPU replay (not a CUDA build with a visible GPU)"
 fi
 
+# Robustness, quick suite: perturbed initial poses (yaw search off and on) and changed maps, on the same data.
+# The full grid is manual: scripts/replay_robustness.py --suite full (docs/replay.md).
+py "${repo_root}/scripts/replay_robustness.py" --suite quick --build-dir "${build_dir}" --input "${out}/input" \
+  --out "${out}/robustness" > "${out}/robustness.log" 2>&1 || { cat "${out}/robustness.log" >&2; exit 1; }
+grep -E "^(pose|map)_|^PASS" "${out}/robustness.log"
+
 # Exit codes
 set +e
 "${replay}" --data "${out}/input/data" --config "${repo_root}/glim_localization/config" --map "${out}/input/map" --out "${out}/no_init" >/dev/null 2>&1

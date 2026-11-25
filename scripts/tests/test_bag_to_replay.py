@@ -334,3 +334,148 @@ def test_coordinates_that_overflow_float32_are_dropped(tmp_path):
     (file,) = os.listdir(tmp_path / "out" / "points")
     pts = read_bin(tmp_path / "out" / "points" / file)[5]
     assert pts.shape[0] == NUM_POINTS - 1 and np.isfinite(pts).all()
+
+
+# Point clock offset (--point-clock-offset): the per-point times run on a sensor clock that is OFFSET_S behind the
+# header and IMU clock. The header stamps the first point of each frame on the host clock.
+OFFSET_S = 3 * 3600 + 0.25
+
+
+def offset_bag(tmp_path, frames=3, drift_s=0.0, name="bag"):
+    clouds = []
+    for frame in range(frames):
+        header = BASE + frame * 100_000_000
+        sensor = SEC + frame * 0.1 - OFFSET_S + frame * drift_s
+        clouds.append((header, build_cloud(header, xyz_columns() + [("t", "<f8", sensor + RAMP)])))
+    bag = tmp_path / name
+    write_bag(bag, clouds, imu_stream(), StoragePlugin.SQLITE3)
+    return bag
+
+
+def stamps(out):
+    return [read_bin(out / "points" / f)[2] for f in sorted(os.listdir(out / "points"))]
+
+
+def test_clock_offset_is_rejected_by_default_with_a_hint(tmp_path, capsys):
+    bag = offset_bag(tmp_path)
+    assert bag_to_replay.main([str(bag), "--out", str(tmp_path / "out")]) == 1
+    err = capsys.readouterr().err
+    assert "different clocks" in err and "--point-clock-offset" in err
+
+
+def test_negative_clock_offset(tmp_path):
+    # The point clock is ahead of the header clock: a negative offset, given as a plain argument
+    clouds = []
+    for frame in range(2):
+        header = BASE + frame * 100_000_000
+        clouds.append((header, build_cloud(header, xyz_columns() + [("t", "<f8", SEC + frame * 0.1 + 7.5 + RAMP)])))
+    bag = tmp_path / "bag"
+    write_bag(bag, clouds, imu_stream(), StoragePlugin.SQLITE3)
+    out = tmp_path / "out"
+    assert bag_to_replay.main([str(bag), "--out", str(out), "--point-clock-offset", "-7.5"]) == 0
+    assert all(abs(s - (BASE + i * 100_000_000)) <= 20_000 for i, s in enumerate(stamps(out)))
+    assert json.loads((out / "meta.json").read_text())["conversion"]["point_clock_offset"]["offset_ns"] == -7_500_000_000
+
+
+@pytest.mark.parametrize("value", [str(OFFSET_S), "estimate"])
+def test_clock_offset_given_or_estimated(tmp_path, capsys, value):
+    bag = offset_bag(tmp_path)
+    out = tmp_path / "out"
+    assert bag_to_replay.main([str(bag), "--out", str(out), "--point-clock-offset", value]) == 0
+    logged = capsys.readouterr().out
+    assert "point clock offset" in logged
+    for frame, stamp in enumerate(stamps(out)):
+        assert abs(stamp - (BASE + frame * 100_000_000)) <= 20_000  # float64 rounding of the source, as above
+    offset = json.loads((out / "meta.json").read_text())["conversion"]["point_clock_offset"]
+    assert offset["source"] == ("estimated" if value == "estimate" else "given")
+    assert offset["estimated_from_frame"] == (0 if value == "estimate" else None)
+    assert abs(offset["offset_ns"] - OFFSET_S * 1e9) <= 20_000
+    assert offset["definition"] == "header clock = point clock + offset"
+    assert abs(offset["residual_s"]["max"]) < 1e-4 and abs(offset["residual_s"]["min"]) < 1e-4
+
+
+def test_no_offset_records_null_in_meta(tmp_path):
+    msg, _, _ = layout("hesai", 0)
+    bag = tmp_path / "bag"
+    write_bag(bag, [(BASE, msg)], imu_stream(), StoragePlugin.SQLITE3)
+    assert bag_to_replay.main([str(bag), "--out", str(tmp_path / "out")]) == 0
+    assert json.loads((tmp_path / "out" / "meta.json").read_text())["conversion"]["point_clock_offset"] is None
+
+
+def test_clock_offset_drift_is_caught(tmp_path, capsys):
+    # 0.6 s of drift per frame: frame 2 is 1.2 s away from its header after the offset from frame 0
+    bag = offset_bag(tmp_path, drift_s=0.6)
+    assert bag_to_replay.main([str(bag), "--out", str(tmp_path / "out"), "--point-clock-offset", "estimate"]) == 1
+    err = capsys.readouterr().err
+    assert "frame 2" in err and "after the point clock offset" in err
+
+
+def test_clock_offset_slow_drift_is_caught(tmp_path, capsys):
+    # 30 ms of drift per 0.1 s frame: every frame is well within 1 s, but over 5 frames the residual spreads over
+    # 0.12 s, more than one scan period
+    bag = offset_bag(tmp_path, frames=5, drift_s=0.03)
+    assert bag_to_replay.main([str(bag), "--out", str(tmp_path / "out"), "--point-clock-offset", "estimate"]) == 1
+    err = capsys.readouterr().err
+    assert "spreads over 0.12" in err and "scan period (0.100000 s" in err
+    # Within one scan period (here 5 ms per frame, 20 ms in all) the conversion passes and records the spread
+    bag2 = offset_bag(tmp_path, frames=5, drift_s=0.005, name="bag2")
+    out = tmp_path / "out2"
+    assert bag_to_replay.main([str(bag2), "--out", str(out), "--point-clock-offset", "estimate"]) == 0
+    residual = json.loads((out / "meta.json").read_text())["conversion"]["point_clock_offset"]["residual_s"]
+    assert residual["max"] - residual["min"] == pytest.approx(0.02, abs=1e-4)
+
+
+@pytest.mark.parametrize("first", ["nan_times", "empty"])
+def test_clock_offset_estimate_skips_an_unusable_first_frame(tmp_path, first):
+    # Frame 0 has no usable point (all per-point times NaN, or no point at all): the estimate comes from frame 1
+    clouds = []
+    for frame in range(3):
+        header = BASE + frame * 100_000_000
+        times = SEC + frame * 0.1 - OFFSET_S + RAMP
+        columns = xyz_columns() + [("t", "<f8", times)]
+        if frame == 0 and first == "nan_times":
+            columns[-1] = ("t", "<f8", np.full(NUM_POINTS, np.nan))
+        elif frame == 0:
+            columns = [(name, dtype, values[:0]) for name, dtype, values in columns]
+        clouds.append((header, build_cloud(header, columns)))
+    bag = tmp_path / "bag"
+    write_bag(bag, clouds, imu_stream(), StoragePlugin.SQLITE3)
+    out = tmp_path / "out"
+    assert bag_to_replay.main([str(bag), "--out", str(out), "--point-clock-offset", "estimate"]) == 0
+    meta = json.loads((out / "meta.json").read_text())
+    offset = meta["conversion"]["point_clock_offset"]
+    assert offset["estimated_from_frame"] == 1
+    assert abs(offset["offset_ns"] - OFFSET_S * 1e9) <= 20_000
+    assert meta["num_frames"] == 2 and meta["conversion"]["excluded"]["frames_empty"] == 1
+
+
+def test_wrong_clock_offset_is_caught(tmp_path, capsys):
+    bag = offset_bag(tmp_path)
+    assert bag_to_replay.main([str(bag), "--out", str(tmp_path / "out"), "--point-clock-offset", str(OFFSET_S + 5)]) == 1
+    assert "after the point clock offset" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("value", ["abc", "nan", "inf", "-inf", "2e9", "-2e9", ""])
+def test_clock_offset_input_is_validated(tmp_path, capsys, value):
+    bag = offset_bag(tmp_path)
+    # The = form, so that argparse does not take "-inf" for an option
+    assert bag_to_replay.main([str(bag), "--out", str(tmp_path / "out"), f"--point-clock-offset={value}"]) == 2
+    assert "--point-clock-offset" in capsys.readouterr().err
+    assert not (tmp_path / "out").exists()
+
+
+def test_clock_offset_with_relative_mode_is_refused(tmp_path, capsys):
+    bag = offset_bag(tmp_path)
+    args = [str(bag), "--out", str(tmp_path / "o1"), "--point-clock-offset", "1", "--time-mode", "relative"]
+    assert bag_to_replay.main(args) == 2
+    # Detected relative times (Ouster layout) and clouds without a time field cannot take an offset either
+    msg, _, _ = layout("ouster", 0)
+    bag2 = tmp_path / "rel"
+    write_bag(bag2, [(BASE, msg)], imu_stream(), StoragePlugin.SQLITE3)
+    assert bag_to_replay.main([str(bag2), "--out", str(tmp_path / "o2"), "--point-clock-offset", "estimate"]) == 1
+    assert "absolute per-point times only" in capsys.readouterr().err
+    msg, _, _ = layout("none", 0)
+    bag3 = tmp_path / "none"
+    write_bag(bag3, [(BASE, msg)], imu_stream(), StoragePlugin.SQLITE3)
+    assert bag_to_replay.main([str(bag3), "--out", str(tmp_path / "o3"), "--point-clock-offset", "0.5"]) == 1
+    assert "no time field" in capsys.readouterr().err
