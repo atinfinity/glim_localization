@@ -11,12 +11,17 @@ Map change: the scans stay the same, the map PCD is changed (points removed at r
 objects added) and compiled with map_compiler, and the replay starts from the small offset of
 test_replay_e2e.sh. The report has the accuracy, the mean inlier ratio and the tracking ratio.
 
-Suites:
-  quick  a few cases with expected outcomes; exits 1 if one differs (run by scripts/ci.sh)
-  full   the whole grid, reported only (manual; results are recorded in docs/PROGRESS.md)
+Every case gets an outcome: pass, inaccurate (exit 0 but outside the limits, a wrong convergence), lost,
+rejected_<reason> (the yaw search rejected the pose, for example rejected_ambiguous), low_tracking, timeout,
+error (an exception in this script), or exit<N> for any other replay exit code.
 
-Outputs: <out>/results.json and <out>/results.md. Exit codes: 0 ok, 1 an expectation failed, 2 bad arguments
-or a setup error.
+Suites:
+  quick  a few cases with an expected outcome; exits 1 if one differs (run by scripts/test_replay_e2e.sh)
+  full   the whole grid, reported only (manual; the measured results are in
+         docs/progress/2026-11-25-real-data-prep.md)
+
+Outputs: <out>/results.json and <out>/results.md, also when a case fails. Exit codes: 0 ok, 1 an expectation
+failed, 2 bad arguments or a setup error.
 """
 import argparse
 import concurrent.futures
@@ -24,9 +29,11 @@ import csv
 import json
 import math
 import os
+import platform
 import shutil
 import subprocess
 import sys
+import traceback
 
 import numpy as np
 from scipy.spatial.transform import Rotation
@@ -39,21 +46,34 @@ EVALUATE = os.path.join(REPO_ROOT, "scripts", "evaluate.py")
 OFFSET_DIRECTION = np.array([1.0, -1.0, 0.0]) / math.sqrt(2.0)
 E2E_OFFSET = ((0.3, -0.2, 0.1), 3.0)  # The offset of test_replay_e2e.sh: translation [m], yaw [deg]
 
-FULL_TRANSLATIONS = (0.0, 0.5, 1.0, 1.5, 2.0, 3.0)
+FULL_TRANSLATIONS = (0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0, 8.0)
 FULL_YAWS = (0.0, 5.0, 10.0, 15.0, 20.0, 30.0, 45.0, 60.0, 90.0, 135.0, 180.0)
 FULL_MAP_CHANGES = (
     "none", "drop30", "drop50", "drop70", "drop90", "drop95", "drop98", "objects_removed", "objects_added", "combined"
 )
 
-# quick: (translation m, yaw deg, yaw search, expected pass). The expectations sit well inside or outside the
-# boundary measured by the full suite (docs/PROGRESS.md), so noise between platforms does not flip them.
+# Expected outcomes of the quick suite: the outcomes each one accepts
+EXPECTATIONS = {
+    "pass": ("pass",),
+    "lost_or_wrong": ("lost", "inaccurate"),  # Without the search: LOST, or a wrong convergence caught by evaluate.py
+    "low_score": ("rejected_low_score",),  # The search rejects the pose: no yaw reaches the minimum inlier ratio
+}
+
+# quick: (translation m, yaw deg, yaw search, expectation). The cases sit well inside or outside the boundary
+# measured by the full suite (docs/progress/2026-11-25-real-data-prep.md), so noise between platforms does not
+# flip them.
 QUICK_POSES = (
-    (0.5, 10.0, False, True),
-    (0.0, 90.0, False, False),
-    (0.5, 90.0, True, True),
-    (3.0, 0.0, True, False),  # The search rejects the pose as ambiguous (the corridor flipped by 180 deg scores close)
+    (0.5, 10.0, False, "pass"),
+    (0.0, 90.0, False, "lost_or_wrong"),
+    (0.5, 90.0, True, "pass"),
+    # Best inlier ratio about 0.43 against the minimum 0.7. The ambiguous rejection (2.25 to 3 m) is in the full
+    # suite only: its score gap is about 0.012 from the threshold.
+    (8.0, 0.0, True, "low_score"),
 )
-QUICK_MAP_CHANGES = (("drop50", True), ("combined", True))
+# Mild changes: ATE max about 0.03 m on amd64 and arm64 against the 0.1 m limit. The combined change (0.07 to
+# 0.09 m) is in the full suite only.
+QUICK_MAP_CHANGES = (("drop50", "pass"), ("objects_added", "pass"))
+CASE_TIMEOUT_S = 120.0
 
 # Synthetic scene layout (glim_localization/test/synthetic/synthetic_map.cpp, cross_walls on): a corridor along x,
 # floor at z = 0, side walls at |y| = 5, thin walls across it every 5.3 m from x = -17, alternating sides.
@@ -169,18 +189,73 @@ def perturbed_pose(data, translation, yaw_deg):
     return [*position, *rotation.as_quat()]
 
 
+def run_logged(cmd, log_path, timeout):
+    """Run cmd with its output in log_path; returns the exit code, or None on a timeout (the process is killed)."""
+    with open(log_path, "w") as log:
+        try:
+            return subprocess.run(cmd, stdout=log, stderr=subprocess.STDOUT, timeout=timeout).returncode
+        except subprocess.TimeoutExpired:
+            return None
+
+
+REJECTION_REASONS = (
+    ("ambiguous:", "ambiguous"),
+    ("best inlier ratio", "low_score"),
+    ("the time budget", "truncated"),
+    ("no candidate", "no_candidate"),
+)
+
+
+def classify(record, log_lines):
+    """The outcome of a case (see the module docstring)."""
+    if record["timed_out"]:
+        return "timeout"
+    rc = record["replay_exit"]
+    if rc == 0:
+        return "pass" if record["eval_exit"] == 0 else "inaccurate" if record["eval_exit"] == 1 else "evaluate_error"
+    if rc == 1:
+        rejected = record["init_search_rejected"]
+        if rejected:
+            # The messages of candidate_search.cpp, by reason
+            message = rejected.split("rejected the given pose:", 1)[-1].strip()
+            for prefix, reason in REJECTION_REASONS:
+                if message.startswith(prefix):
+                    return f"rejected_{reason}"
+            return "rejected_unknown"
+        if any("is LOST" in line for line in log_lines):
+            return "lost"
+        if any("tracking ratio" in line and "below" in line for line in log_lines):
+            return "low_tracking"
+    return f"exit{rc}"
+
+
 def run_case(case, ctx):
-    """Replay and evaluate one case; returns the result record."""
+    """Replay and evaluate one case; returns the result record. An exception becomes the outcome "error"."""
+    record = {key: case[key] for key in case if key not in ("init_pose", "map")}
+    record.update(
+        replay_exit=None, eval_exit=None, timed_out=False, tracking_ratio=None, init_search=None,
+        init_search_rejected=None, mean_inlier_ratio=None, ate_trans_max_m=None, ate_trans_rmse_m=None,
+        ate_rot_max_deg=None, passed=False, outcome="error", error=None,
+    )
+    try:
+        run_case_into(record, case, ctx)
+    except Exception:  # noqa: BLE001 - one broken case must not lose the others
+        record["error"] = traceback.format_exc(limit=3).strip()
+        record["outcome"] = "error"
+        record["passed"] = False
+    return record
+
+
+def run_case_into(record, case, ctx):
     dest = os.path.join(ctx["out"], "runs", case["name"])
     shutil.rmtree(dest, ignore_errors=True)
     os.makedirs(os.path.dirname(dest), exist_ok=True)
     config = ctx["config_search"] if case.get("yaw_search") else CONFIG
     cmd = [ctx["replay"], "--data", ctx["data"], "--config", config, "--map", case["map"], "--out", dest]
     cmd += ["--init-pose", *(f"{v:.17g}" for v in case["init_pose"])]
-    with open(dest + ".log", "w") as log:
-        replay_rc = subprocess.call(cmd, stdout=log, stderr=subprocess.STDOUT)
-    record = {key: case[key] for key in case if key not in ("init_pose", "map")}
+    replay_rc = run_logged(cmd, dest + ".log", ctx["timeout"])
     record["replay_exit"] = replay_rc
+    record["timed_out"] = replay_rc is None
 
     summary_path = os.path.join(dest, "summary.json")
     summary = json.load(open(summary_path)) if os.path.isfile(summary_path) else {}
@@ -188,8 +263,9 @@ def run_case(case, ctx):
     search = summary.get("init_search")
     record["init_search"] = None if not search else {k: search[k] for k in ("result", "reason", "yaw_offset_deg", "score")}
     # A rejected search stops the run before summary.json; keep its log line (the reason, such as an ambiguous yaw)
-    with open(dest + ".log") as log:
-        rejected = [line.strip() for line in log if "initial pose search" in line and "rejected" in line]
+    with open(dest + ".log", errors="replace") as log:
+        log_lines = log.readlines()
+    rejected = [line.strip() for line in log_lines if "initial pose search" in line and "rejected" in line]
     record["init_search_rejected"] = rejected[0] if rejected else None
 
     frames_path = os.path.join(dest, "frames.csv")
@@ -200,25 +276,23 @@ def run_case(case, ctx):
     record["mean_inlier_ratio"] = float(np.mean(ratios)) if ratios else None
 
     traj = os.path.join(dest, "traj_localization.txt")
-    record["eval_exit"] = None
-    record["ate_trans_max_m"] = record["ate_trans_rmse_m"] = record["ate_rot_max_deg"] = None
     if os.path.isfile(traj) and os.path.getsize(traj) > 0:
         cmd = py(EVALUATE, "--est", traj, "--gt", os.path.join(ctx["data"], "traj_gt.txt"), "--frames", frames_path, "--out", dest)
         cmd += ["--settle", str(ctx["settle"]), "--max-trans", str(ctx["max_trans"]), "--max-rot-deg", str(ctx["max_rot_deg"])]
         if replay_rc != 0:
             cmd.append("--allow-incomplete")  # For the numbers only; the case fails on the replay exit code
-        with open(dest + ".eval.log", "w") as log:
-            record["eval_exit"] = subprocess.call(cmd, stdout=log, stderr=subprocess.STDOUT)
+        record["eval_exit"] = run_logged(cmd, dest + ".eval.log", ctx["timeout"])
+        record["timed_out"] = record["timed_out"] or record["eval_exit"] is None
         report_path = os.path.join(dest, "eval.json")
         if os.path.isfile(report_path):
             errors = json.load(open(report_path))["errors"]
             record["ate_trans_max_m"] = errors["ate_trans_m"]["max"]
             record["ate_trans_rmse_m"] = errors["ate_trans_m"]["rmse"]
             record["ate_rot_max_deg"] = errors["ate_rot_deg"]["max"]
-    record["passed"] = replay_rc == 0 and record["eval_exit"] == 0
+    record["outcome"] = classify(record, log_lines)
+    record["passed"] = record["outcome"] == "pass"
     if not ctx["keep_runs"]:
         shutil.rmtree(dest, ignore_errors=True)
-    return record
 
 
 def prepare(args):
@@ -263,6 +337,7 @@ def prepare(args):
         "max_trans": args.max_trans,
         "max_rot_deg": args.max_rot_deg,
         "keep_runs": args.keep_runs,
+        "timeout": args.timeout,
     }
 
 
@@ -289,6 +364,9 @@ def fmt(value, digits=3):
     return "-" if value is None else f"{value:.{digits}f}"
 
 
+OUTCOME_MARKS = {"pass": "P", "inaccurate": "i", "lost": "L", "rejected": "R", "timeout": "T", "error": "E"}
+
+
 def pose_table(records):
     lines = []
     for search in (False, True):
@@ -299,7 +377,8 @@ def pose_table(records):
         yaws = sorted({r["yaw_deg"] for r in rows})
         cell = {(r["translation_m"], r["yaw_deg"]): r for r in rows}
         lines += [
-            f"Initial pose, yaw search {'on' if search else 'off'} (P pass; xN replay exit code N; i replay ok but outside the accuracy limits)",
+            f"Initial pose, yaw search {'on' if search else 'off'} (P pass; i inaccurate: exit 0 but outside the limits; "
+            "L lost; R rejected by the yaw search; T timeout; E error; xN other replay exit code N)",
             "",
         ]
         lines.append("| translation \\ yaw | " + " | ".join(f"{y:g}" for y in yaws) + " |")
@@ -310,12 +389,8 @@ def pose_table(records):
                 r = cell.get((t, y))
                 if r is None:
                     marks.append(" ")
-                elif r["passed"]:
-                    marks.append("P")
-                elif r["replay_exit"] != 0:
-                    marks.append(f"x{r['replay_exit']}")
                 else:
-                    marks.append("i")
+                    marks.append(OUTCOME_MARKS.get(r["outcome"].split("_")[0], f"x{r['replay_exit']}"))
             lines.append(f"| {t:g} m | " + " | ".join(marks) + " |")
         lines.append("")
     return lines
@@ -326,12 +401,12 @@ def map_table(records):
     if not rows:
         return []
     lines = ["Map change (initial offset of test_replay_e2e.sh)", ""]
-    lines.append("| map | change | points | passed | ATE rmse [m] | ATE max [m] | rot max [deg] | mean inlier ratio | tracking ratio |")
+    lines.append("| map | change | points | outcome | ATE rmse [m] | ATE max [m] | rot max [deg] | mean inlier ratio | tracking ratio |")
     lines.append("|---|---|---|---|---|---|---|---|---|")
     for r in rows:
         points = "-" if r["map_points"] is None else f"{r['map_points']}/{r['map_points_original']}"
         lines.append(
-            f"| {r['map_change']} | {r['map_description']} | {points} | {'yes' if r['passed'] else 'no'} | {fmt(r['ate_trans_rmse_m'], 4)} | "
+            f"| {r['map_change']} | {r['map_description']} | {points} | {r['outcome']} | {fmt(r['ate_trans_rmse_m'], 4)} | "
             f"{fmt(r['ate_trans_max_m'], 4)} | {fmt(r['ate_rot_max_deg'])} | {fmt(r['mean_inlier_ratio'])} | {fmt(r['tracking_ratio'])} |"
         )
     lines.append("")
@@ -350,9 +425,13 @@ def main(argv=None):
     parser.add_argument("--max-trans", type=float, default=0.1)
     parser.add_argument("--max-rot-deg", type=float, default=1.0)
     parser.add_argument("--keep-runs", action="store_true", help="keep the replay outputs under <out>/runs")
+    parser.add_argument(
+        "--timeout", type=float, default=CASE_TIMEOUT_S,
+        help=f"seconds for each replay and each evaluation; past it the process is killed and the case is a timeout (default {CASE_TIMEOUT_S:g})",
+    )
     args = parser.parse_args(sys.argv[1:] if argv is None else argv)
-    if args.jobs < 1 or not args.duration > 0:
-        parser.error("--jobs must be at least 1 and --duration positive")
+    if args.jobs < 1 or not args.duration > 0 or not args.timeout > 0:
+        parser.error("--jobs must be at least 1, and --duration and --timeout positive")
 
     try:
         ctx = prepare(args)
@@ -407,14 +486,21 @@ def main(argv=None):
 
     failures = []
     for r in records:
-        status = "pass" if r["passed"] else f"fail (replay exit {r['replay_exit']}, evaluate exit {r['eval_exit']})"
+        status = r["outcome"] if r["passed"] else f"{r['outcome']} (replay exit {r['replay_exit']}, evaluate exit {r['eval_exit']})"
         print(f"{r['name']}: {status}; ATE max {fmt(r['ate_trans_max_m'], 4)} m, inlier {fmt(r['mean_inlier_ratio'])}")
-        if r["expected"] is not None and r["expected"] != r["passed"]:
-            failures.append(f"{r['name']}: expected {'pass' if r['expected'] else 'fail'}, got {'pass' if r['passed'] else 'fail'}")
+        if r["init_search_rejected"]:
+            print(f"  {r['init_search_rejected']}")
+        if r["error"]:
+            print("  " + r["error"].replace("\n", "\n  "))
+        if r["expected"] is not None and r["outcome"] not in EXPECTATIONS[r["expected"]]:
+            accepted = " or ".join(EXPECTATIONS[r["expected"]])
+            failures.append(f"{r['name']}: expected {r['expected']} ({accepted}), got {r['outcome']}")
 
     report = {
         "suite": args.suite,
+        "machine": platform.machine(),
         "criteria": {"settle_s": args.settle, "max_trans_m": args.max_trans, "max_rot_deg": args.max_rot_deg, "replay_exit": 0},
+        "timeout_s": args.timeout,
         "offset_direction": OFFSET_DIRECTION.tolist(),
         "results": records,
         "failures": failures,
