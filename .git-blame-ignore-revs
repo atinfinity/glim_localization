@@ -1,0 +1,5 @@
+# Commits that git blame skips (git config blame.ignoreRevsFile .git-blame-ignore-revs; GitHub uses
+# this file by default). Only mechanical changes with no functional effect belong here.
+
+# style(ros2): apply uncrustify and single quotes (#30)
+556ee17ac06eb65e110b2687b93d2ca62a77dc59

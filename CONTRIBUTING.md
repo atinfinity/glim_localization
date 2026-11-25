@@ -45,6 +45,8 @@ Fix the C++ formatting with uncrustify, then check the diff:
 scripts/docker_run.sh bash -c 'cd glim_localization_ros2 && ament_uncrustify --reformat .'
 ```
 
+The commit that reformatted the packages is listed in `.git-blame-ignore-revs`. GitHub's blame view skips it; for a local `git blame`, run `git config blame.ignoreRevsFile .git-blame-ignore-revs` once. Add a commit there only if it is purely mechanical.
+
 Python uses single quotes, lines of at most 99 columns, imports in the google order, and docstrings whose one-line summary is on the line after the opening `"""`. Every source file starts with the short MIT header:
 
 ```cpp
@@ -57,7 +59,7 @@ Python uses single quotes, lines of at most 99 columns, imports in the google or
 
 Exceptions, all in `glim_localization_ros2/CMakeLists.txt` and `scripts/test_colcon.sh`:
 
-- `src/localization_node.cpp` is derived from glim_ros2, and its provenance lines (see below) must come first and are longer than 100 columns. cpplint checks it in a test of its own (`cpplint_derived`) without the line length check; the other linters check it as usual.
+- `src/localization_node.cpp` is derived from glim_ros2, and its provenance lines (see below) must come first and are longer than 100 columns. cpplint checks it in a test of its own (`cpplint_derived`) with a line length of 150 columns instead of 100, so the rest of the file still has a limit; the other linters check it as usual.
 - `ament_cppcheck` skips cppcheck 2.x (Jazzy ships 2.13) unless `AMENT_CPPCHECK_ALLOW_SLOW_VERSIONS=1` is set, which `scripts/test_colcon.sh` does.
 - Imports after a `sys.path.insert` in the launch tests carry `# noqa: E402` (and `I100` on the first one).
 
