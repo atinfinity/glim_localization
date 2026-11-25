@@ -1,5 +1,6 @@
 #include <glim_localization/map/gpu_tile_cache.hpp>
 
+#include <exception>
 #include <stdexcept>
 #include <string>
 
@@ -58,6 +59,15 @@ GpuTile::ConstPtr upload_gpu_tile(const MapTile::ConstPtr& tile, CUstream_st* st
 }
 
 GpuTileCache::GpuTileCache(const GpuTileCacheParams& params, CUstream_st* stream) : params_(params), stream_(stream) {
+  // The current device of the constructing (odometry) thread. A new thread starts on device 0, so the background
+  // thread selects this one before each upload.
+  clear_earlier_cuda_error("setting up the GPU tile cache");
+  const cudaError_t device_error = cudaGetDevice(&device_);
+  if (device_error != cudaSuccess) {
+    cudaGetLastError();
+    throw std::runtime_error(std::string("failed to get the current CUDA device: ") + cudaGetErrorString(device_error));
+  }
+
   if (params_.prefetch) {
     // Non-blocking, so work on the legacy default stream does not wait for a background upload.
     clear_earlier_cuda_error("creating the GPU tile prefetch stream");
@@ -69,11 +79,34 @@ GpuTileCache::GpuTileCache(const GpuTileCacheParams& params, CUstream_st* stream
   }
 
   CUstream_st* const prefetch_stream = prefetch_stream_ ? static_cast<CUstream_st*>(*prefetch_stream_) : nullptr;
-  auto upload = [stream, prefetch_stream](const MapTile::ConstPtr& tile, TileStreamer<GpuTile>::Context context) {
-    const auto gpu = upload_gpu_tile(tile, context == TileStreamer<GpuTile>::Context::Background ? prefetch_stream : stream);
+  const int device = device_;
+  auto upload = [stream, prefetch_stream, device](const MapTile::ConstPtr& tile, TileStreamer<GpuTile>::Context context) {
+    const bool background = context == TileStreamer<GpuTile>::Context::Background;
+    if (background) {
+      const cudaError_t error = cudaSetDevice(device);
+      if (error != cudaSuccess) {
+        cudaGetLastError();
+        throw std::runtime_error("failed to select CUDA device " + std::to_string(device) + " for a tile prefetch: " + cudaGetErrorString(error));
+      }
+    }
+    const auto gpu = upload_gpu_tile(tile, background ? prefetch_stream : stream);
     return TileStreamer<GpuTile>::Upload{gpu, gpu->memory_usage_gpu};
   };
-  streamer_ = std::make_unique<TileStreamer<GpuTile>>(params_.budget, upload, [](const MapTile& tile) { return estimate_tile_device_bytes(tile); });
+  auto on_prefetch_failure = [](int id, std::exception_ptr error) {
+    std::string what = "unknown error";
+    try {
+      std::rethrow_exception(error);
+    } catch (const std::exception& e) {
+      what = e.what();
+    } catch (...) {
+    }
+    spdlog::warn("prefetch of map tile {} failed and was dropped (it is uploaded when a frame needs it): {}", id, what);
+  };
+  streamer_ = std::make_unique<TileStreamer<GpuTile>>(
+    params_.budget,
+    upload,
+    [](const MapTile& tile) { return estimate_tile_device_bytes(tile); },
+    on_prefetch_failure);
 }
 
 GpuTileCache::GpuTileCache(const int max_tiles, CUstream_st* stream)

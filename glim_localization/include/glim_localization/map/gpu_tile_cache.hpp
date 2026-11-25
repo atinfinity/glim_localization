@@ -43,13 +43,14 @@ struct GpuTileCacheParams {
 /// the budget. An evicted tile stays alive while factors in the smoother still reference it, so GPU memory is bounded
 /// by the budget plus the tiles of the frames in the smoother window.
 ///
-/// Every upload synchronizes its stream and checks for CUDA errors, and fails closed with std::runtime_error. A CUDA
+/// Every upload synchronizes its stream and checks for CUDA errors. A failed acquire() upload fails closed with
+/// std::runtime_error; a failed prefetch is logged and dropped, and the tile is uploaded when a frame needs it. A CUDA
 /// error left over from earlier work on the same thread is reported as such and cleared first, so it is not blamed on
-/// the upload.
+/// the upload. The background thread uses the device that was current when the cache was constructed.
 class GpuTileCache {
 public:
   /// @throw std::invalid_argument for an invalid budget
-  /// @throw std::runtime_error if the prefetch stream cannot be created
+  /// @throw std::runtime_error if the current device cannot be read or the prefetch stream cannot be created
   GpuTileCache(const GpuTileCacheParams& params, CUstream_st* stream);
   /// At most max_tiles tiles, the default byte budget, no prefetch
   GpuTileCache(int max_tiles, CUstream_st* stream);
@@ -60,7 +61,7 @@ public:
 
   /// The GPU copies of `tiles`, in order, uploading those that are not resident. They are kept until the next call.
   /// @throw std::invalid_argument if a tile has no points or covariances
-  /// @throw std::runtime_error if an upload fails (also a failed earlier prefetch)
+  /// @throw std::runtime_error if an upload of one of `tiles` fails (a failed prefetch of one is retried here first)
   std::vector<GpuTile::ConstPtr> acquire(const std::vector<MapTile::ConstPtr>& tiles);
 
   /// acquire() for one tile
@@ -91,6 +92,7 @@ public:
 private:
   GpuTileCacheParams params_;
   CUstream_st* stream_;
+  int device_ = 0;  ///< CUDA device current at construction, also used by the background thread
   std::unique_ptr<gtsam_points::CUDAStream> prefetch_stream_;
   std::unique_ptr<TileStreamer<GpuTile>> streamer_;
 };

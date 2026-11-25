@@ -164,11 +164,14 @@ OdometryEstimationLocalizationGPU::~OdometryEstimationLocalizationGPU() {
   if (tile_cache_) {
     const auto& stats = tile_cache_->stats();
     spdlog::info(
-      "GPU map tiles: uploads={} prefetched={} misses={} prefetch_waits={} evictions={} over_budget={} peak_mb={:.1f} budget_mb={:.1f}",
+      "GPU map tiles: uploads={} prefetched={} misses={} prefetch_waits={} prefetch_failures={} prefetch_cancels={} evictions={} over_budget={} "
+      "peak_mb={:.1f} budget_mb={:.1f}",
       stats.uploads,
       stats.prefetch_uploads,
       stats.misses,
       stats.prefetch_waits,
+      stats.prefetch_failures,
+      stats.prefetch_cancels,
       stats.evictions,
       stats.over_budget,
       stats.peak_bytes / (1024.0 * 1024.0),
