@@ -249,13 +249,24 @@ def test_heights_and_support():
 def test_palette_has_the_exact_height_and_intro_colors():
     fixed = render_demo.fixed_colors()
     assert len(render_demo.HEIGHT_COLORS) == render_demo.HEIGHT_LEVELS
-    assert set(render_demo.HEIGHT_COLORS) <= set(fixed) and render_demo.INIT_GUESS_COLOR in fixed
+    assert set(render_demo.HEIGHT_COLORS) <= set(fixed)
+    assert render_demo.INIT_GUESS_COLOR in fixed and render_demo.GROUND_COLOR in fixed
     assert len(fixed) <= 256
     palette = render_demo.gif_palette([Image.new("RGB", (8, 8), color) for color in ("#808080", "#123456")], 256)
     # A drawing color maps to its own entry exactly, without dithering
-    for color in (render_demo.HEIGHT_COLORS[0], render_demo.HEIGHT_COLORS[-1], render_demo.INIT_GUESS_COLOR, render_demo.POSE_COLOR):
+    for color in (render_demo.HEIGHT_COLORS[0], render_demo.HEIGHT_COLORS[-1], render_demo.INIT_GUESS_COLOR, render_demo.POSE_COLOR,
+                  render_demo.GROUND_COLOR):
         image = Image.new("RGB", (4, 4), color)
         assert render_demo.to_palette(image, palette).convert("RGB").getpixel((1, 1)) == ImageColor.getrgb(color)
+
+
+def test_height_colors_stay_apart_from_the_scan_and_the_pose():
+    def rgb(color):
+        return np.array(ImageColor.getrgb(color), dtype=float)
+
+    for color in render_demo.HEIGHT_COLORS + [render_demo.GROUND_COLOR]:
+        for mark in (render_demo.SCAN_COLOR, render_demo.POSE_COLOR):
+            assert np.linalg.norm(rgb(color) - rgb(mark)) > 100, (color, mark)
 
 
 @pytest.mark.parametrize("view", ["oblique", "chase", "top"])

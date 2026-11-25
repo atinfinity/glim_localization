@@ -75,11 +75,17 @@ STATE_COLORS = {
 # The --init-search intro: the given pose, then the pose the yaw search picked
 INIT_GUESS_COLOR = "#6a1b9a"
 
-# Map points of the 3D views: reversed viridis (perceptually uniform, and without the red of the scan) in
-# a few discrete levels, so each level is one exact palette entry. Reversed, the floor is the lightest
-# color and recedes on the white background, so the trajectory and the ground truth stay visible on it.
+# Map points of the 3D views. The ground (up to GROUND_CUT above the lowest map height) is a light gray,
+# drawn smaller, so it recedes and the red scan keeps its contrast on it. An opaque light gray stands in
+# for transparency: blended points would make colors that are not palette entries. The points above it
+# are colored by height with viridis (perceptually uniform, no red) from dark purple to light green, in
+# a few discrete levels so each level is one exact palette entry. The yellow top of viridis is left out,
+# so no level is near the orange pose.
+GROUND_COLOR = "#d9d9d9"
+GROUND_CUT = 0.15
+GROUND_SIZE = 0.75  # diameter relative to the other points
 HEIGHT_LEVELS = 16
-HEIGHT_COLORS = [to_hex(colormaps["viridis_r"](k / (HEIGHT_LEVELS - 1))) for k in range(HEIGHT_LEVELS)]
+HEIGHT_COLORS = [to_hex(colormaps["viridis"](0.85 * k / (HEIGHT_LEVELS - 1))) for k in range(HEIGHT_LEVELS)]
 
 VIEWS = ("oblique", "chase", "top")
 
@@ -379,7 +385,7 @@ def select_font(family):
 def fixed_colors():
     """The colors that gif_palette puts first, in this order."""
     return [TEXT_COLOR, "#ffffff", MAP_COLOR, FRAME_COLOR, LEGEND_EDGE_COLOR, ESTIMATE_COLOR, SCAN_COLOR, GT_COLOR, POSE_COLOR,
-            POSE_EDGE_COLOR, *STATE_COLORS.values(), INIT_GUESS_COLOR, *HEIGHT_COLORS]
+            POSE_EDGE_COLOR, *STATE_COLORS.values(), INIT_GUESS_COLOR, GROUND_COLOR, *HEIGHT_COLORS]
 
 
 def gif_palette(images, colors):
@@ -423,6 +429,11 @@ def to_palette(image, palette):
     mapped = Image.fromarray(nearest[inverse.reshape(-1)].reshape(rgb.shape[:2]), mode="P")
     mapped.putpalette(palette.getpalette()[:768])
     return mapped
+
+
+def rgba_of(color):
+    """(r, g, b, 1) in [0, 1] of a #rrggbb color."""
+    return np.array([int(color[k:k + 2], 16) / 255.0 for k in (1, 3, 5)] + [1.0])
 
 
 def unit_xy(vector, fallback=(1.0, 0.0)):
@@ -497,11 +508,16 @@ class PerspectiveView:
         # Scan points are drawn inside the same box, up to the top of the map
         self.box = (np.array([*cropped[:, :2].min(axis=0), -np.inf]), np.array([*cropped[:, :2].max(axis=0), cropped[:, 2].max() + 0.1]))
         self.map_points = subsample(cropped, args.max_map_points, rng)
-        z_low, z_high = np.percentile(cropped[:, 2], [0.5, 99.5])
-        self.z_range = (round(float(z_low), 1) + 0.0, round(float(z_high), 1) + 0.0)
-        palette = np.array([[int(c[k:k + 2], 16) / 255.0 for k in (1, 3, 5)] + [1.0] for c in HEIGHT_COLORS])
+        # The ground is gray up to GROUND_CUT above the floor (a low percentile, robust to stray points);
+        # the height colors span from there to the top of the map
+        z_floor, z_high = np.percentile(cropped[:, 2], [0.5, 99.5])
+        cut = round(round(float(z_floor), 1) + GROUND_CUT, 2) + 0.0
+        self.z_range = (cut, max(round(float(z_high), 1) + 0.0, cut + 0.1))
+        palette = np.array([rgba_of(c) for c in HEIGHT_COLORS])
+        self.map_ground = self.map_points[:, 2] < cut
         self.map_rgba = palette[height_levels(self.map_points[:, 2], *self.z_range)]
-        self.scan_rgba = np.array([int(SCAN_COLOR[k:k + 2], 16) / 255.0 for k in (1, 3, 5)] + [1.0])
+        self.map_rgba[self.map_ground] = rgba_of(GROUND_COLOR)
+        self.scan_rgba = rgba_of(SCAN_COLOR)
         self.support = support_heights(cropped, est_xyz)
         travelled = np.concatenate([[0.0], np.cumsum(np.linalg.norm(np.diff(est_xyz, axis=0), axis=1))])
         self.drop_indices = np.searchsorted(travelled, np.arange(0.0, travelled[-1] + 1e-9, 0.6))
@@ -570,12 +586,13 @@ class PerspectiveView:
         uv = np.concatenate([map_uv, scan_uv])
         depth = np.concatenate([map_depth, scan_depth - self.SCAN_DEPTH_BIAS])
         rgba = np.concatenate([self.map_rgba, np.tile(self.scan_rgba, (len(scan), 1))])
+        diameter = np.concatenate([np.where(self.map_ground, GROUND_SIZE, 1.0), np.ones(len(scan))])
         visible = np.isfinite(uv).all(axis=1)
         order = painter_order(depth[visible])
         reference = float(np.median(map_depth[np.isfinite(map_uv).all(axis=1)])) if np.any(np.isfinite(map_uv)) else 1.0
         self.cloud.set_offsets(uv[visible][order])
         self.cloud.set_facecolors(rgba[visible][order])
-        self.cloud.set_sizes(self.point_sizes(depth[visible][order], reference))
+        self.cloud.set_sizes(self.point_sizes(depth[visible][order], reference) * diameter[visible][order] ** 2)
 
         if self.gt_line is not None:
             self.gt_line.set_data(*self.line(camera, self.gt_xyz))
@@ -643,6 +660,8 @@ def render(args):
     # Proxy handles: the scan dots are tiny on the plot but need a visible legend marker
     handles = [view.pose_marker, view.est_line] + ([view.gt_line] if view.gt_line is not None else []) + [
         Line2D([], [], marker="o", markersize=4, color=SCAN_COLOR, linestyle="none", label="scan")]
+    if isinstance(view, PerspectiveView):
+        handles.append(Line2D([], [], marker="s", markersize=5, color=GROUND_COLOR, linestyle="none", label="floor"))
     legend = view.axes.legend(handles=handles, loc="lower right", fontsize=8.6, framealpha=1.0, fancybox=False)
     legend.get_frame().set_facecolor("white")
     legend.get_frame().set_edgecolor(LEGEND_EDGE_COLOR)
@@ -660,7 +679,8 @@ def render(args):
     text(-(pad_px + 40), 46, "inlier ratio", ha="right", fontsize=9.4)
     inlier_text = text(-pad_px, 46, ha="right", fontsize=9.4)
     if isinstance(view, PerspectiveView):
-        # Height key on the title line: one swatch per level, from z_low to z_high
+        # Height key on the title line: one swatch per level, from the ground cut to z_high (the floor
+        # below the cut is gray, in the legend)
         z_low, z_high = view.z_range
         bar_right, bar_w, bar_h = width_px - pad_px - 30, 96, 8
         text(-(pad_px + 30 + bar_w + 4), 18, f"map height  {z_low:g} m", ha="right", fontsize=9.4)
