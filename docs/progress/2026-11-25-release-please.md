@@ -1,0 +1,25 @@
+# Release automation with release-please ([#16](https://github.com/atinfinity/glim_localization/issues/16))
+
+- **Change**:
+  - `.github/workflows/release-please.yml` runs `googleapis/release-please-action` v5.0.0 on each push to `main`. The action is pinned by commit SHA and bundles release-please 17.6.0.
+  - The manifest config (`release-please-config.json`, `.release-please-manifest.json` at `0.1.0`) has one package at the root, `release-type: simple`, tags `vX.Y.Z` without a component, and `CHANGELOG.md` at the root.
+  - The last release is the hand-made `v0.1.0` GitHub Release, which release-please finds by its tag.
+  - The release process is described in CONTRIBUTING.md (Releases).
+  - Version fields:
+    - the `<version>` of the three `package.xml` files (`xml` updater, `//package/version`);
+    - the lines marked `x-release-please-version` (`generic` updater): `project(glim_localization VERSION ...)` and the expected string in `test_version.cpp`, so the version test keeps passing on the release PR.
+    - `simple` also updates `version.txt`, but only if it exists; there is none.
+- **Decisions**:
+  - Changelog sections: Features (`feat`), Bug Fixes (`fix`), Performance Improvements (`perf`), Reverts (`revert`). The area scope shows as a bold prefix.
+  - `refactor`, `build`, `docs`, `test`, `style`, `ci` and `chore` are hidden. release-please skips a release whose changelog would be empty ("No user facing commits found"), so docs-only or ci-only pushes leave the release PR alone.
+  - `bump-minor-pre-major`: before 1.0.0 a breaking change bumps the minor version, not the major one.
+  - The workflow runs on every push to `main` (no `paths-ignore`), since merging the release PR itself must create the tag and the Release. Runs go one at a time (`concurrency`, not cancelled).
+  - Token: a GitHub App installation token from `actions/create-github-app-token` v3.3.0 (pinned by SHA).
+    - It is limited to `contents`, `pull-requests` and `issues` (labels) write. The workflow's `GITHUB_TOKEN` has no permissions (`permissions: {}`).
+    - Pull requests opened with `GITHUB_TOKEN` do not trigger other workflows, so the checks the ruleset requires (`build-and-test`, `build-and-test-arm64`) would never run on the release PR. An App token avoids that, and Actions needs no permission to create pull requests.
+  - The job is skipped until the repository variable `RELEASE_PLEASE_APP_CLIENT_ID` is set, and in forks. The owner creates the App and sets the variable and the secret `RELEASE_PLEASE_APP_PRIVATE_KEY`. This change does not modify any setting.
+- **Verification**:
+  - Both JSON files validate against the release-please 17.6.0 schemas (`ajv-cli` 5.0.0, draft-07).
+  - The CLI dry run (`release-please release-pr --dry-run`) was not run. It needs a token even for a public repository, because GraphQL refuses anonymous calls.
+  - Instead, the `xml` and `generic` updaters of release-please 17.6.0 were applied offline to the files with version 0.2.0. Each `package.xml` changes only its `<version>`, and the CMake and test lines change only the version.
+- **Open**: the first end-to-end run (release PR, CI on it, tag and Release on merge) waits for the App setup.
