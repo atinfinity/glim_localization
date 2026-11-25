@@ -2,7 +2,7 @@
 
 > **Status: under development. CPU by default; the GPU module (CUDA image) is tested on synthetic data only.** The core, the offline tools and both ROS 2 integrations work on synthetic data and pass CI. Real-data evaluation is limited (see [Limitations](#limitations)). The interfaces may still change.
 
-Measurements and the history behind these items are in [PROGRESS.md](PROGRESS.md); the plan is in [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md).
+Measurements and the history behind these items are in [PROGRESS.md](PROGRESS.md) and the [progress entries](progress/README.md); the plan is in [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md).
 
 ## Progress
 
