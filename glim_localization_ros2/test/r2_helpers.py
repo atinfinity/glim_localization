@@ -288,7 +288,10 @@ class R2Client:
 
     def play_and_wait(self, bag, topics, during=None, node_matched=None):
         """
-        Play the bag with /clock and spin until a pose near the last ground truth stamp arrives.
+        Play `topics` of the bag with /clock until a pose near the last ground truth stamp arrives.
+
+        Only `topics` are played: the shared fixture bag also has /wheel_odom, which no R2 test
+        plays.
 
         `during`, if given, is called after every spin while the bag plays (it may call services).
         Fails, never passes, when a deadline is reached; fails early, with the number of poses,
@@ -296,7 +299,7 @@ class R2Client:
         initial pose). The player exits at the end of the bag; the node does not. `node_matched`:
         see _start_player.
         """
-        player = self._start_player(bag, topics, [], node_matched)
+        player = self._start_player(bag, topics, ['--topics'] + list(topics), node_matched)
         try:
             last = self.gt_stamps[-1]
             deadline = time.monotonic() + DEADLINE_S

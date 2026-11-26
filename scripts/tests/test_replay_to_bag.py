@@ -1,4 +1,4 @@
-"""Tests for scripts/replay_to_bag.py: round trip through bag_to_replay.py and the /initialpose messages."""
+"""Tests for scripts/replay_to_bag.py: round trip through bag_to_replay.py, the /initialpose and /wheel_odom messages."""
 import os
 import sys
 
@@ -120,3 +120,37 @@ def test_bad_arguments(tmp_path, capsys):
         replay_to_bag.main([str(dataset), "--out", str(tmp_path / "b2"), "--initial-pose", "-1"])
     (tmp_path / "exists").mkdir()
     assert replay_to_bag.main([str(dataset), "--out", str(tmp_path / "exists")]) == 2
+
+
+def test_wheel_odom_from_ground_truth(tmp_path):
+    dataset, stamps = make_dataset(tmp_path)
+    # Turn the ground truth: 1 m/s along x of the world with a yaw rate of 0.5 rad/s
+    with open(dataset / "traj_gt.txt", "w") as f:
+        for i, ns in enumerate(stamps):
+            t = i * 0.1
+            yaw = 0.5 * t
+            f.write(f"{ns // 10**9}.{ns % 10**9:09d} {t} 0 0.5 0 0 {np.sin(yaw / 2)} {np.cos(yaw / 2)}\n")
+    bag = tmp_path / "bag"
+    assert replay_to_bag.main([str(dataset), "--out", str(bag), "--wheel-odom"]) == 0
+    messages = read_messages(bag)
+    assert sorted(messages) == ["/imu", "/points", "/wheel_odom"]
+    wheel = messages["/wheel_odom"]
+    assert [ns for ns, _ in wheel] == stamps
+    for i, (ns, msg) in enumerate(wheel):
+        assert msg.child_frame_id == "base_link"
+        assert msg.header.stamp.sec * 10**9 + msg.header.stamp.nanosec == ns
+        yaw = 0.5 * i * 0.1
+        v, w = msg.twist.twist.linear, msg.twist.twist.angular
+        # The world velocity (1, 0, 0) seen from a body turned by yaw
+        assert (v.x, v.y, v.z) == pytest.approx((np.cos(yaw), -np.sin(yaw), 0.0), abs=1e-4)  # epoch stamps in float s
+        assert (w.x, w.y, w.z) == pytest.approx((0.0, 0.0, 0.5), abs=1e-4)
+        assert msg.pose.pose.position.x == pytest.approx(i * 0.1)
+
+
+def test_wheel_odom_needs_ground_truth(tmp_path, capsys):
+    dataset, _ = make_dataset(tmp_path, frames=1)
+    assert replay_to_bag.main([str(dataset), "--out", str(tmp_path / "b"), "--wheel-odom"]) == 1
+    assert "at least two ground-truth poses" in capsys.readouterr().err
+    os.remove(dataset / "traj_gt.txt")
+    assert replay_to_bag.main([str(dataset), "--out", str(tmp_path / "b"), "--wheel-odom"]) == 1
+    assert "--wheel-odom" in capsys.readouterr().err

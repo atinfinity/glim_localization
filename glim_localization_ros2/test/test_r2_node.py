@@ -11,7 +11,7 @@ Headless; no display.
 
 Inputs come from scripts/test_colcon.sh (see there), through environment variables:
   GLIM_R1_BAG   the bag made by scripts/replay_to_bag.py (with two /initialpose messages); R2 uses
-                the R1 bag
+                the R1 bag, without its /wheel_odom
   GLIM_R1_DATA  the replay dataset the bag was made from (traj_gt.txt is the ground truth)
   GLIM_R1_MAP   the map dump of the same scene
 
