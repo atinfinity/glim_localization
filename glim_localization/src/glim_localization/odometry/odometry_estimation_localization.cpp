@@ -112,6 +112,9 @@ bool is_valid_reset(const Eigen::Isometry3d& T, const Eigen::Vector3d& v, double
   if (!T.matrix().allFinite() || !v.allFinite() || !std::isfinite(min_stamp)) {
     return false;
   }
+  if (!(v.norm() <= OdometryEstimationLocalization::kMaxResetSpeed)) {
+    return false;
+  }
   const Eigen::Matrix3d R = T.linear();
   return (R.transpose() * R - Eigen::Matrix3d::Identity()).norm() < 1e-3 && R.determinant() > 0.0;
 }
@@ -160,6 +163,7 @@ OdometryEstimationLocalizationParams::OdometryEstimationLocalizationParams() {
   imu_gap_reset_max = config.param<double>(section, "imu_gap_reset_max", 0.5);
 
   use_keyframes = config.param<bool>(section, "use_keyframes", false);
+  init_v_without_pose = config.param<Eigen::Vector3d>(section, "init_v_world_imu") && !config.param<Eigen::Isometry3d>(section, "init_T_world_imu");
 
   init_yaw_search.enabled = config.param<bool>(section, "init_yaw_search", false);
   init_yaw_search.range = config.param<double>(section, "init_yaw_search_range_deg", 180.0) * M_PI / 180.0;
@@ -189,8 +193,14 @@ OdometryEstimationLocalizationParams::~OdometryEstimationLocalizationParams() {}
 
 OdometryEstimationLocalization::OdometryEstimationLocalization(std::unique_ptr<Params>&& params_ptr, std::shared_ptr<const MapManager> map)
 : glim::OdometryEstimationIMU(std::move(params_ptr)), map_(require_map(std::move(map))), quality_(localization_params().quality),
-  wheel_(localization_params().wheel_odom) {
+  wheel_(localization_params().wheel_odom), start_imu_bias_(localization_params().imu_bias) {
   const auto& p = localization_params();
+  if (p.init_v_without_pose) {
+    throw std::invalid_argument("init_v_world_imu is set without init_T_world_imu: set both, or neither to wait for a pose");
+  }
+  if (!p.estimate_init_state && !is_valid_reset(p.init_T_world_imu, p.init_v_world_imu, 0.0)) {
+    throw std::invalid_argument("init_T_world_imu must be a finite rigid transform and init_v_world_imu finite and at most 100 m/s");
+  }
   // Upstream estimators cannot produce a pose in the map frame, so wait for a given one.
   auto init = std::make_unique<MapInitialStateEstimation>(p.T_lidar_imu, p.imu_bias);
   if (!p.estimate_init_state) {
@@ -656,8 +666,12 @@ void OdometryEstimationLocalization::apply_pending_reset(double frame_stamp) {
   }
 
   const auto& p = localization_params();
-  // The sensor is the same, so the latest bias estimate beats the configured one.
-  const Eigen::Matrix<double, 6, 1> imu_bias = frames.empty() ? Eigen::Matrix<double, 6, 1>(p.imu_bias) : Eigen::Matrix<double, 6, 1>(frames.back()->imu_bias);
+  // The sensor is the same, so the latest bias estimate beats the configured one. Without a frame in this run (two
+  // resets in a row), keep the bias this run started from.
+  if (!frames.empty()) {
+    start_imu_bias_ = frames.back()->imu_bias;
+  }
+  const Eigen::Matrix<double, 6, 1> imu_bias = start_imu_bias_;
   frames.clear();
   marginalized_cursor = 0;
 

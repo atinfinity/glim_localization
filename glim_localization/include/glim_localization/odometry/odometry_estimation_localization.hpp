@@ -119,6 +119,10 @@ struct OdometryEstimationLocalizationParams : public glim::OdometryEstimationIMU
   double max_imu_gap;        ///< Largest allowed gap between consecutive IMU samples [s]
   double imu_gap_reset_max;  ///< Longest gap that is recovered by a self-reset [s]
 
+  /// init_v_world_imu was configured without init_T_world_imu. Upstream then starts at the identity pose in the map,
+  /// so the constructor rejects it.
+  bool init_v_without_pose = false;
+
   /// Also match each scan to earlier scans, for estimation outside the map. The CPU module matches a local model and
   /// adds a relative pose factor; the GPU module adds upstream's keyframe factors.
   bool use_keyframes;
@@ -205,6 +209,14 @@ public:
   /// @return an empty string if queued, otherwise why it was refused
   std::string relocalize(double max_age);
 
+  /// Largest speed accepted by reset() and the configured init_v_world_imu [m/s]. A finite but huge velocity makes
+  /// the smoother throw IndeterminantLinearSystemException and abort the process.
+  static constexpr double kMaxResetSpeed = 100.0;
+
+  /// IMU bias the current run started from: the configured imu_bias, then at every reset the newest estimate of the
+  /// run before, or the bias that run started from if it estimated no frame. Not thread-safe (for tests and logs).
+  const Eigen::Matrix<double, 6, 1>& start_imu_bias() const { return start_imu_bias_; }
+
   /// Number of IMU stamps kept for the gap check. Bounded: trimmed after every frame, also while LOST (for tests, not thread-safe).
   size_t imu_stamp_history_size() const { return imu_stamps_.size(); }
   const std::deque<double>& imu_stamp_history() const { return imu_stamps_; }
@@ -287,6 +299,7 @@ private:
   double gap_longest_ = 0.0;  ///< Longest gap seen in this episode [s]
   size_t hold_check_trips_ = 0;  ///< Frames dropped as LOST by the hold check
   bool imu_lost_ = false;     ///< The gap was too long to recover; frames are dropped until reset()
+  Eigen::Matrix<double, 6, 1> start_imu_bias_;  ///< See start_imu_bias()
 
   // Initial pose search (init_yaw_search)
   std::unique_ptr<PoseCandidateGenerator> candidate_generator_;
