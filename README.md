@@ -55,6 +55,8 @@ The step-by-step guide, including real bags and setting the initial pose, is [do
 
 ## Documentation
 
+The pages below are also published as a project site: <https://atinfinity.github.io/glim_localization/>.
+
 | Page | Content |
 | --- | --- |
 | [Getting started](docs/getting_started.md) | Step-by-step first run: build, tests, synthetic replay, your own map and bag, live ROS 2 |

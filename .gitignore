@@ -13,3 +13,6 @@ compile_commands.json
 out/
 __pycache__/
 .pytest_cache/
+# Project site: build output and the home page generated from README.md
+/site/
+/docs/index.md
