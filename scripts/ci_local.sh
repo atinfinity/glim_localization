@@ -11,7 +11,8 @@
 #   only on a clean tree. Skip-worktree and assume-unchanged files count as dirty.
 # A dirty tree runs the working tree as scripts/docker_run.sh does, reusing and recording nothing.
 # A docs-only change against origin/main (scripts/is_docs_only.sh: Markdown, docs/, LICENSE, the docs
-#   site inputs) skips build and tests and records nothing; the docs site itself is not built here.
+#   site inputs) skips build and tests and records nothing. The docs site, its generator tests and the
+#   detector tests are not run here either; the Docs workflow (docs.yml) runs them.
 # --force wipes the build volume and ignores every recorded pass.
 # GitHub Actions runs scripts/ci.sh directly and always does a full run.
 #
