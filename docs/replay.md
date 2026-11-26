@@ -43,7 +43,7 @@ Generates a 12 s synthetic map and dataset, localizes from an offset initial pos
   All of them are far from the measured boundary.
 
 > [!WARNING]
-> A wrong convergence is not detected online. A given pose 45 deg or 4 m off without the search, or 4 m off with the search, can converge to a wrong pose: the replay exits 0 with a high tracking ratio and a pose up to 36 m off; only `evaluate.py` against the ground truth shows it. No threshold on the inlier ratio, the residual or the map correction separates these cases from passing ones across the sweep ([measurement](progress/2026-11-26-wrong-convergence-signals.md)). Keep the initial pose within about 2 m, and enable `init_yaw_search` when the yaw is uncertain.
+> A wrong convergence is not detected online. A given pose 45 deg or 4 m off without the search, or 4 m off with the search, can converge to a wrong pose: the replay exits 0 with a high tracking ratio and a pose up to 36 m off; only `evaluate.py` against the ground truth shows it. No threshold on the inlier ratio, the residual or the map correction separates these cases from passing ones across the sweep ([measurement](progress/2026-11-26-wrong-convergence-signals.md)), and neither does a challenger search around the estimate ([spike](progress/2026-11-27-challenger-spike.md)). Keep the initial pose within about 2 m, and enable `init_yaw_search` when the yaw is uncertain.
 
 ```bash
 # quick: the cases above; test_replay_e2e.sh runs it, so CI does too (about 15 s)
