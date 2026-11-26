@@ -77,7 +77,7 @@ The pages below are also published as a project site: <https://atinfinity.github
 - Real-time capability and accuracy on real data are not established; the GPU module is tested on synthetic data only.
 - No global relocalization ([#3](https://github.com/atinfinity/glim_localization/issues/3)). The [initial pose yaw search](docs/ros2.md#initial-pose-yaw-search) is off by default, needs a position close to the true one and is verified on synthetic data only.
 - `~/aligned_points` ([#18](https://github.com/atinfinity/glim_localization/issues/18)) and an IMU-rate odometry are not published; pose covariance is not estimated.
-- Map input: no compressed PCD ([#12](https://github.com/atinfinity/glim_localization/issues/12)). The 2D occupancy grid uses one height band for the whole map, so it suits roughly flat sites; it is checked against map_server's loading rules in a test, but not with a running Nav2 stack.
+- Map input: `map_compiler` holds the whole cloud in memory and rejects more than 2^31 - 1 points after downsampling ([#12](https://github.com/atinfinity/glim_localization/issues/12)). The 2D occupancy grid uses one height band for the whole map, so it suits roughly flat sites; it is checked against map_server's loading rules in a test, but not with a running Nav2 stack.
 - A LiDAR with an IMU is required; LiDAR-only input is not supported.
 
 The full list is in [Status and limitations](docs/status.md#limitations).
