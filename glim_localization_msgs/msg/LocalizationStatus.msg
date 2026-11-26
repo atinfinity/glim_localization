@@ -51,7 +51,8 @@ uint8 INIT_SEARCH_NONE=0
 # the minimum score gap; the estimation started from its registered pose.
 uint8 INIT_SEARCH_ACCEPTED=1
 # The time budget ran out before every candidate was scored (init_search_candidates < init_search_candidates_total),
-# the best is below the minimum inlier ratio, or the runner-up is within the minimum score gap (ambiguous).
+# the best is below the minimum inlier ratio, the runner-up is within the minimum score gap (ambiguous), or a better
+# match lies beyond the maximum translation (out of range).
 # The state is LOST until a new pose is given.
 uint8 INIT_SEARCH_REJECTED=2
 uint8 init_search
@@ -66,6 +67,9 @@ uint8 INIT_SEARCH_REASON_LOW_SCORE=2
 uint8 INIT_SEARCH_REASON_AMBIGUOUS=3
 # There was no candidate to score.
 uint8 INIT_SEARCH_REASON_NO_CANDIDATE=4
+# A registered pose further from the given pose than init_yaw_search_max_translation reaches the minimum inlier ratio
+# and scores at least as high as the best within it: the given pose is further off than stated.
+uint8 INIT_SEARCH_REASON_OUT_OF_RANGE=5
 uint8 init_search_reason
 
 # Number of candidates scored before the time budget ran out.
@@ -74,10 +78,12 @@ int32 init_search_candidates
 # Number of candidates generated. A search with init_search_candidates below it was cut short and is rejected.
 int32 init_search_candidates_total
 
-# Inlier ratio of the best candidate after registration, in [0, 1], also when rejected.
+# Inlier ratio of the best candidate after registration, in [0, 1], also when rejected. For OUT_OF_RANGE, that of the
+# match beyond the maximum translation, which scores at least as high as the best within it.
 float64 init_search_score
 
-# Yaw of the best candidate's registered pose relative to the given pose [rad], in [-pi, pi].
+# Yaw of the best candidate's registered pose relative to the given pose [rad], in [-pi, pi] (for OUT_OF_RANGE, of the
+# match beyond the maximum translation).
 float64 init_search_yaw_offset
 
 # Inlier ratio of the best candidate more than two search steps (at most 90 deg) away in yaw from the best, in [0, 1];

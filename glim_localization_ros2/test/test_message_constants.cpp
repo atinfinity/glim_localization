@@ -38,6 +38,7 @@ TEST(MessageConstants, InitSearchReasonMatchesMessage) {
   EXPECT_EQ(static_cast<int>(InitSearchReason::LOW_SCORE), Msg::INIT_SEARCH_REASON_LOW_SCORE);
   EXPECT_EQ(static_cast<int>(InitSearchReason::AMBIGUOUS), Msg::INIT_SEARCH_REASON_AMBIGUOUS);
   EXPECT_EQ(static_cast<int>(InitSearchReason::NO_CANDIDATE), Msg::INIT_SEARCH_REASON_NO_CANDIDATE);
+  EXPECT_EQ(static_cast<int>(InitSearchReason::OUT_OF_RANGE), Msg::INIT_SEARCH_REASON_OUT_OF_RANGE);
 }
 
 TEST(MessageConstants, StateMatchesMessage) {
