@@ -36,6 +36,24 @@ def test_urls_anchors_and_code_blocks_are_kept():
     assert body(text) == text
 
 
+def test_tilde_fences_and_inline_code_are_kept():
+    text = (
+        "~~~\n"
+        "[x](docs/build.md)\n"
+        "```\n"  # A backtick line inside a ~~~ fence does not close it
+        "[y](docs/build.md)\n"
+        "~~~\n"
+    )
+    assert body(text) == text
+    assert body("see `[e](docs/build.md)` and [f](docs/build.md)\n") == "see `[e](docs/build.md)` and [f](build.md)\n"
+    assert body("``a ` [e](docs/x.md)`` [f](docs/x.md)\n") == "``a ` [e](docs/x.md)`` [f](x.md)\n"
+
+
+def test_root_absolute_paths_are_repository_paths():
+    assert body("[C](/CONTRIBUTING.md)\n") == f"[C]({BLOB}CONTRIBUTING.md)\n"
+    assert body("[B](/docs/build.md)\n") == "[B](build.md)\n"
+
+
 def test_repository_readme_converts():
     readme = os.path.join(os.path.dirname(__file__), "..", "..", "README.md")
     with open(readme, encoding="utf-8") as handle:

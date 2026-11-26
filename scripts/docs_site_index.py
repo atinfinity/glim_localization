@@ -5,7 +5,8 @@ The site is built from docs/ (zensical.toml), but its home page is the README at
 root, whose links are relative to the root. This copies the README and rewrites its relative links
 for docs/: "docs/<path>" becomes "<path>", and any other repository path becomes an absolute GitHub
 URL, since the site has only the files under docs/. URLs and in-page anchors stay as they are, and
-so does everything inside fenced code blocks.
+so does everything inside fenced code blocks (``` and ~~~) and inline code spans. A root-absolute
+path ("/CONTRIBUTING.md") is a repository path too.
 
 docs/index.md is generated (ignored by git); edit README.md instead.
 Usage: scripts/docs_site_index.py [--readme README.md] [--out docs/index.md]
@@ -22,12 +23,15 @@ HEADER = "<!-- Generated from README.md by scripts/docs_site_index.py; edit READ
 _MD_LINK = re.compile(r"(\]\()([^)\s]+)(\))")
 _HTML_ATTR = re.compile(r"""(\b(?:src|href)=")([^"]+)(")""")
 _SCHEME = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.-]*:")
+# Inline code spans: a run of backticks up to the same run (CommonMark); their text is not rewritten.
+_CODE_SPAN = re.compile(r"(?<!`)(`+)(?!`).*?(?<!`)\1(?!`)")
+_FENCE = re.compile(r"^\s*(```|~~~)")
 
 
 def rewrite_target(target: str) -> str:
     if target.startswith("#") or _SCHEME.match(target):
         return target  # in-page anchor, or a URL with a scheme (https:, mailto:, ...)
-    target = target.removeprefix("./")
+    target = target.removeprefix("./").lstrip("/")
     if target.startswith("docs/"):
         return target.removeprefix("docs/")
     return f"{REPO_URL}/blob/main/{target}"
@@ -37,13 +41,25 @@ def convert(readme: str) -> str:
     def sub(match: re.Match) -> str:
         return match.group(1) + rewrite_target(match.group(2)) + match.group(3)
 
+    def rewrite_line(line: str) -> str:
+        # Rewrite only the text between inline code spans
+        parts = []
+        start = 0
+        for span in _CODE_SPAN.finditer(line):
+            parts.append(_HTML_ATTR.sub(sub, _MD_LINK.sub(sub, line[start:span.start()])))
+            parts.append(span.group(0))
+            start = span.end()
+        parts.append(_HTML_ATTR.sub(sub, _MD_LINK.sub(sub, line[start:])))
+        return "".join(parts)
+
     lines = []
-    in_fence = False
+    fence = None  # The marker of the open fenced block; it closes only with the same marker
     for line in readme.splitlines(keepends=True):
-        if line.lstrip().startswith("```"):
-            in_fence = not in_fence
-        elif not in_fence:
-            line = _HTML_ATTR.sub(sub, _MD_LINK.sub(sub, line))
+        marker = _FENCE.match(line)
+        if marker and (fence is None or marker.group(1) == fence):
+            fence = None if fence else marker.group(1)
+        elif fence is None:
+            line = rewrite_line(line)
         lines.append(line)
     return HEADER + "".join(lines)
 
