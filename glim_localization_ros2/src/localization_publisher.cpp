@@ -154,6 +154,11 @@ std::string init_search_rejection_reason(
     case LocalizationStatus::INIT_SEARCH_REASON_NO_CANDIDATE:
       std::snprintf(text, sizeof(text), "no candidate to score");
       break;
+    case LocalizationStatus::INIT_SEARCH_REASON_OUT_OF_RANGE:
+      std::snprintf(text, sizeof(text),
+          "out of range: inlier ratio %.3f beyond the maximum translation, best within %.3f",
+          msg.init_search_score, msg.init_search_runner_up_score);
+      break;
     default:
       std::snprintf(text, sizeof(text), "reason %d", static_cast<int>(msg.init_search_reason));
       break;

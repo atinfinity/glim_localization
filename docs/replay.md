@@ -27,7 +27,7 @@ Generates a 12 s synthetic map and dataset, localizes from an offset initial pos
   - `pass`;
   - `inaccurate`: exit 0 but outside the limits, which is a wrong convergence;
   - `lost`;
-  - `rejected_<reason>`: the yaw search rejected the pose, as `ambiguous`, `low_score`, `truncated` or `no_candidate`;
+  - `rejected_<reason>`: the yaw search rejected the pose, as `ambiguous`, `low_score`, `truncated`, `no_candidate` or `out_of_range`;
   - `low_tracking`;
   - `timeout`: each replay and each evaluation gets `--timeout`, 120 s by default;
   - `error`: an exception in the script, recorded for that case only;
@@ -37,13 +37,14 @@ Generates a 12 s synthetic map and dataset, localizes from an offset initial pos
   - 0 m and 90 deg without the search: lost or inaccurate;
   - 0.5 m and 90 deg with the search: pass;
   - 8 m with the search: `rejected_low_score`;
+  - 4 m with the search and `init_yaw_search_max_translation` 2.5 m: `rejected_out_of_range` (a wrong convergence without the bound);
   - 50 % of the points removed: pass;
   - 12 boxes added: pass.
 
   All of them are far from the measured boundary.
 
 > [!WARNING]
-> A wrong convergence is not detected online. A given pose 45 deg or 4 m off without the search, or 4 m off with the search, can converge to a wrong pose: the replay exits 0 with a high tracking ratio and a pose up to 36 m off; only `evaluate.py` against the ground truth shows it. No threshold on the inlier ratio, the residual or the map correction separates these cases from passing ones across the sweep ([measurement](progress/2026-11-26-wrong-convergence-signals.md)), and neither does a challenger search around the estimate ([spike](progress/2026-11-27-challenger-spike.md)). Keep the initial pose within about 2 m, and enable `init_yaw_search` when the yaw is uncertain.
+> A wrong convergence is not detected online. A given pose 45 deg or 4 m off without the search, or 4 m off with the search, can converge to a wrong pose: the replay exits 0 with a high tracking ratio and a pose up to 36 m off; only `evaluate.py` against the ground truth shows it. No threshold on the inlier ratio, the residual or the map correction separates these cases from passing ones across the sweep ([measurement](progress/2026-11-26-wrong-convergence-signals.md)), and neither does a challenger search around the estimate ([spike](progress/2026-11-27-challenger-spike.md)). Keep the initial pose within about 2 m, and enable `init_yaw_search` when the yaw is uncertain. With the search, `init_yaw_search_max_translation` (2.5 m on this corridor) rejects the 4 m cases as `rejected_out_of_range` instead ([measurement](progress/2026-11-27-init-search-max-translation.md)); the cases without the search are not covered.
 
 ```bash
 # quick: the cases above; test_replay_e2e.sh runs it, so CI does too (about 15 s)
@@ -52,7 +53,7 @@ scripts/docker_run.sh bash -c 'env -u PYTHONPATH $GLIM_LOC_PYTHON scripts/replay
 scripts/docker_run.sh bash -c 'env -u PYTHONPATH $GLIM_LOC_PYTHON scripts/replay_robustness.py --suite full --jobs 3 --out /ws/out/robustness_full'
 ```
 
-The results are in `<out>/results.md` and `<out>/results.json`, written even when a case fails. Other options: `--input` (reuse a `synthetic_replay_dataset` output), `--keep-runs`, `--settle`, `--max-trans`, `--max-rot-deg`, `--timeout`. The measured boundary is in [the progress entry](progress/2026-11-25-real-data-prep.md).
+The results are in `<out>/results.md` and `<out>/results.json`, written even when a case fails. Other options: `--input` (reuse a `synthetic_replay_dataset` output), `--search-max-translation` (`init_yaw_search_max_translation` of the cases with the search, 0 by default), `--keep-runs`, `--settle`, `--max-trans`, `--max-rot-deg`, `--timeout`. The measured boundary is in [the progress entry](progress/2026-11-25-real-data-prep.md).
 
 > [!NOTE]
 > The numbers in the progress entry are from arm64. amd64 gives slightly different errors for the same case. For example, the combined map change has an ATE max of 0.072 m on arm64 and 0.086 m on amd64. For this reason the quick suite uses only cases with a wide margin.

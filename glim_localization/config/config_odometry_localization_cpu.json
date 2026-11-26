@@ -26,6 +26,7 @@
     "init_yaw_search_time_budget": 10.0,
     "init_yaw_search_max_iterations": 10,
     "init_yaw_search_min_points": 100,
+    "init_yaw_search_max_translation": 0.0,
     "wheel_odom_enabled": false,
     "wheel_odom_T_imu_base": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0],
     "wheel_odom_nonholonomic": false,

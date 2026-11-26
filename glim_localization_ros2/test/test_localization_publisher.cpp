@@ -539,8 +539,14 @@ TEST(LocalizationPublisher, InitSearchResultIsReported) {
   no_candidate.init_search = glim_localization::InitSearchResult::REJECTED;
   no_candidate.init_search_reason = glim_localization::InitSearchReason::NO_CANDIDATE;
   fixture.publisher->on_status(no_candidate);
+  auto out_of_range = frame_status(5, LocalizationState::LOST, 6);
+  out_of_range.init_search = glim_localization::InitSearchResult::REJECTED;
+  out_of_range.init_search_reason = glim_localization::InitSearchReason::OUT_OF_RANGE;
+  out_of_range.init_search_score = 0.959;
+  out_of_range.init_search_runner_up_score = 0.63;
+  fixture.publisher->on_status(out_of_range);
   ASSERT_TRUE(fixture.spin_until([&] {
-      return fixture.statuses.size() >= 5 && fixture.diagnostics.size() >= 5;
+      return fixture.statuses.size() >= 6 && fixture.diagnostics.size() >= 6;
     }));
 
   const auto & msg = fixture.statuses[0];
@@ -559,6 +565,7 @@ TEST(LocalizationPublisher, InitSearchResultIsReported) {
   EXPECT_EQ(fixture.statuses[2].init_search_reason, StatusMsg::INIT_SEARCH_REASON_AMBIGUOUS);
   EXPECT_EQ(fixture.statuses[3].init_search_reason, StatusMsg::INIT_SEARCH_REASON_LOW_SCORE);
   EXPECT_EQ(fixture.statuses[4].init_search_reason, StatusMsg::INIT_SEARCH_REASON_NO_CANDIDATE);
+  EXPECT_EQ(fixture.statuses[5].init_search_reason, StatusMsg::INIT_SEARCH_REASON_OUT_OF_RANGE);
   EXPECT_EQ(fixture.statuses[1].init_search_candidates_total, 24);
 
   const auto value_of = [](const diagnostic_msgs::msg::DiagnosticStatus & status,
@@ -599,6 +606,11 @@ TEST(LocalizationPublisher, InitSearchResultIsReported) {
   EXPECT_EQ(fifth.message.find("0.000"), std::string::npos) << fifth.message;
   EXPECT_EQ(fifth.message.find("runner-up"), std::string::npos) << fifth.message;
   EXPECT_EQ(value_of(fifth, "init_search_reason"), "NO_CANDIDATE");
+  const auto & sixth = fixture.diagnostics[5].status.at(0);
+  EXPECT_NE(sixth.message.find(
+    "out of range: inlier ratio 0.959 beyond the maximum translation, best within 0.630"),
+    std::string::npos) << sixth.message;
+  EXPECT_EQ(value_of(sixth, "init_search_reason"), "OUT_OF_RANGE");
 }
 
 // The wheel odometry counters reach the status message and the diagnostics.

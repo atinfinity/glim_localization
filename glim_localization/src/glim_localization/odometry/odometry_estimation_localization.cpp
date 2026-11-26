@@ -67,6 +67,8 @@ const char* to_string(InitSearchReason reason) {
       return "AMBIGUOUS";
     case InitSearchReason::NO_CANDIDATE:
       return "NO_CANDIDATE";
+    case InitSearchReason::OUT_OF_RANGE:
+      return "OUT_OF_RANGE";
   }
   return "UNKNOWN";
 }
@@ -85,6 +87,8 @@ InitSearchReason to_init_search_reason(CandidateSearchOutcome outcome) {
       return InitSearchReason::LOW_SCORE;
     case CandidateSearchOutcome::AMBIGUOUS:
       return InitSearchReason::AMBIGUOUS;
+    case CandidateSearchOutcome::OUT_OF_RANGE:
+      return InitSearchReason::OUT_OF_RANGE;
   }
   return InitSearchReason::NONE;
 }
@@ -173,6 +177,7 @@ OdometryEstimationLocalizationParams::OdometryEstimationLocalizationParams() {
   init_yaw_search.time_budget = config.param<double>(section, "init_yaw_search_time_budget", 10.0);
   init_yaw_search.max_iterations = config.param<int>(section, "init_yaw_search_max_iterations", 10);
   init_yaw_search.min_points = config.param<int>(section, "init_yaw_search_min_points", 100);
+  init_yaw_search.max_translation = config.param<double>(section, "init_yaw_search_max_translation", 0.0);
 
   wheel_odom.enabled = config.param<bool>(section, "wheel_odom_enabled", false);
   wheel_odom.T_imu_base = config.param<Eigen::Isometry3d>(section, "wheel_odom_T_imu_base", Eigen::Isometry3d::Identity());
@@ -224,10 +229,10 @@ OdometryEstimationLocalization::OdometryEstimationLocalization(std::unique_ptr<P
   }
   const auto& search = p.init_yaw_search;
   if (!(search.min_inlier_ratio >= 0.0 && search.min_inlier_ratio <= 1.0) || !(search.min_score_gap >= 0.0 && search.min_score_gap <= 1.0) || !(search.time_budget >= 0.0) ||
-      !std::isfinite(search.time_budget) || search.max_iterations < 1 || search.min_points < 1) {
+      !std::isfinite(search.time_budget) || search.max_iterations < 1 || search.min_points < 1 || !(search.max_translation >= 0.0) || !std::isfinite(search.max_translation)) {
     throw std::invalid_argument(
-      "init_yaw_search_min_inlier_ratio and init_yaw_search_min_score_gap must be in [0, 1], init_yaw_search_time_budget finite and not negative, and "
-      "init_yaw_search_max_iterations and init_yaw_search_min_points positive");
+      "init_yaw_search_min_inlier_ratio and init_yaw_search_min_score_gap must be in [0, 1], init_yaw_search_time_budget and "
+      "init_yaw_search_max_translation finite and not negative, and init_yaw_search_max_iterations and init_yaw_search_min_points positive");
   }
   candidate_generator_ = std::make_unique<YawCandidateGenerator>(search.range, search.step);  // Validates the range and step
   if (p.wheel_odom.enabled) {
@@ -513,6 +518,8 @@ bool OdometryEstimationLocalization::run_init_search(const glim::PreprocessedFra
   search_params.min_score_gap = p.init_yaw_search.min_score_gap;
   search_params.distinct_yaw = distinct_yaw_for_step(p.init_yaw_search.step);
   search_params.time_budget = p.init_yaw_search.time_budget;
+  search_params.hint_position = init_hint_T_world_imu_.translation();
+  search_params.max_translation = p.init_yaw_search.max_translation;
   const CandidateSearchResult result = search_candidates(*map_, cloud, candidates, search_params);
 
   {
@@ -521,10 +528,15 @@ bool OdometryEstimationLocalization::run_init_search(const glim::PreprocessedFra
     status_.init_search_reason = to_init_search_reason(result.outcome);
     status_.init_search_candidates = result.num_evaluated;
     status_.init_search_candidates_total = result.num_candidates;
-    status_.init_search_score = result.best ? result.best->score : 0.0;
-    status_.init_search_yaw_offset = result.best ? result.best->yaw_offset : 0.0;
-    status_.init_search_runner_up_score = result.runner_up ? result.runner_up->score : 0.0;
-    status_.init_search_runner_up_yaw_offset = result.runner_up ? result.runner_up->yaw_offset : 0.0;
+    // For OUT_OF_RANGE the score is that of the match beyond the bound, the one that caused the rejection, and the
+    // runner-up is the best within the bound, the one it outscored
+    const bool out_of_range = result.outcome == CandidateSearchOutcome::OUT_OF_RANGE;
+    const auto& reported = out_of_range ? result.out_of_range : result.best;
+    const auto& second = out_of_range ? result.best : result.runner_up;
+    status_.init_search_score = reported ? reported->score : 0.0;
+    status_.init_search_yaw_offset = reported ? reported->yaw_offset : 0.0;
+    status_.init_search_runner_up_score = second ? second->score : 0.0;
+    status_.init_search_runner_up_yaw_offset = second ? second->yaw_offset : 0.0;
     status_.init_search_time = result.elapsed;
   }
 

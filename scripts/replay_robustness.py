@@ -57,9 +57,12 @@ EXPECTATIONS = {
     "pass": ("pass",),
     "lost_or_wrong": ("lost", "inaccurate"),  # Without the search: LOST, or a wrong convergence caught by evaluate.py
     "low_score": ("rejected_low_score",),  # The search rejects the pose: no yaw reaches the minimum inlier ratio
+    # The search rejects the pose: the best match moved further from the given pose than init_yaw_search_max_translation
+    "out_of_range": ("rejected_out_of_range",),
 }
 
-# quick: (translation m, yaw deg, yaw search, expectation). The cases sit well inside or outside the boundary
+# quick: (translation m, yaw deg, yaw search, expectation[, init_yaw_search_max_translation m]). The cases sit well
+# inside or outside the boundary
 # measured by the full suite (docs/progress/2026-11-25-real-data-prep.md), so noise between platforms does not
 # flip them.
 QUICK_POSES = (
@@ -69,6 +72,9 @@ QUICK_POSES = (
     # Best inlier ratio about 0.43 against the minimum 0.7. The ambiguous rejection (2.25 to 3 m) is in the full
     # suite only: its score gap is about 0.012 from the threshold.
     (8.0, 0.0, True, "low_score"),
+    # Without the bound a wrong convergence: the match moves 2.98 m (0.5 m beyond the bound) and scores 0.96 against
+    # the minimum 0.7 (docs/progress/2026-11-27-init-search-max-translation.md)
+    (4.0, 0.0, True, "out_of_range", 2.5),
 )
 # Mild changes: ATE max about 0.03 m on amd64 and arm64 against the 0.1 m limit. The combined change (0.07 to
 # 0.09 m) is in the full suite only.
@@ -200,6 +206,7 @@ def run_logged(cmd, log_path, timeout):
 
 REJECTION_REASONS = (
     ("ambiguous:", "ambiguous"),
+    ("out of range:", "out_of_range"),
     ("best inlier ratio", "low_score"),
     ("the time budget", "truncated"),
     ("no candidate", "no_candidate"),
@@ -250,7 +257,7 @@ def run_case_into(record, case, ctx):
     dest = os.path.join(ctx["out"], "runs", case["name"])
     shutil.rmtree(dest, ignore_errors=True)
     os.makedirs(os.path.dirname(dest), exist_ok=True)
-    config = ctx["config_search"] if case.get("yaw_search") else CONFIG
+    config = ctx["config_search"][case["max_translation"]] if case.get("yaw_search") else CONFIG
     cmd = [ctx["replay"], "--data", ctx["data"], "--config", config, "--map", case["map"], "--out", dest]
     cmd += ["--init-pose", *(f"{v:.17g}" for v in case["init_pose"])]
     replay_rc = run_logged(cmd, dest + ".log", ctx["timeout"])
@@ -295,6 +302,22 @@ def run_case_into(record, case, ctx):
         shutil.rmtree(dest, ignore_errors=True)
 
 
+def make_search_config(out, max_translation):
+    name = "config_yaw_search" + (f"_mt{max_translation:g}" if max_translation else "")
+    config = os.path.join(out, name)
+    shutil.rmtree(config, ignore_errors=True)
+    shutil.copytree(CONFIG, config, ignore=shutil.ignore_patterns("gpu", "mapping_cpu"))
+    odometry = os.path.join(config, "config_odometry_localization_cpu.json")
+    text = open(odometry).read()
+    for key, value in (("init_yaw_search", "true"), ("init_yaw_search_max_translation", repr(float(max_translation)))):
+        shipped = {"init_yaw_search": "false", "init_yaw_search_max_translation": "0.0"}[key]
+        if f'"{key}": {shipped}' not in text:
+            raise RuntimeError(f'{odometry}: "{key}": {shipped} not found')
+        text = text.replace(f'"{key}": {shipped}', f'"{key}": {value}')
+    open(odometry, "w").write(text)
+    return config
+
+
 def prepare(args):
     out = args.out
     os.makedirs(out, exist_ok=True)
@@ -315,15 +338,11 @@ def prepare(args):
         shutil.rmtree(synthetic, ignore_errors=True)
         subprocess.run([generator, synthetic, str(args.duration)], check=True, stdout=subprocess.DEVNULL)
 
-    # A copy of the shipped config with the initial yaw search on
-    config_search = os.path.join(out, "config_yaw_search")
-    shutil.rmtree(config_search, ignore_errors=True)
-    shutil.copytree(CONFIG, config_search, ignore=shutil.ignore_patterns("gpu", "mapping_cpu"))
-    odometry = os.path.join(config_search, "config_odometry_localization_cpu.json")
-    text = open(odometry).read()
-    if '"init_yaw_search": false' not in text:
-        raise RuntimeError(f"{odometry}: init_yaw_search not found")
-    open(odometry, "w").write(text.replace('"init_yaw_search": false', '"init_yaw_search": true'))
+    # Copies of the shipped config with the initial yaw search on, one per translation bound in use
+    bounds = {args.search_max_translation}
+    if args.suite == "quick":
+        bounds |= {pose[4] for pose in QUICK_POSES if len(pose) > 4}
+    config_search = {bound: make_search_config(out, bound) for bound in sorted(bounds)}
 
     return {
         "out": out,
@@ -428,12 +447,16 @@ def main(argv=None):
     parser.add_argument("--max-rot-deg", type=float, default=1.0)
     parser.add_argument("--keep-runs", action="store_true", help="keep the replay outputs under <out>/runs")
     parser.add_argument(
+        "--search-max-translation", type=float, default=0.0,
+        help="init_yaw_search_max_translation [m] of the cases with the yaw search (default 0, unbounded as shipped)",
+    )
+    parser.add_argument(
         "--timeout", type=float, default=CASE_TIMEOUT_S,
         help=f"seconds for each replay and each evaluation; past it the process is killed and the case is a timeout (default {CASE_TIMEOUT_S:g})",
     )
     args = parser.parse_args(sys.argv[1:] if argv is None else argv)
-    if args.jobs < 1 or not args.duration > 0 or not args.timeout > 0:
-        parser.error("--jobs must be at least 1, and --duration and --timeout positive")
+    if args.jobs < 1 or not args.duration > 0 or not args.timeout > 0 or not (math.isfinite(args.search_max_translation) and args.search_max_translation >= 0):
+        parser.error("--jobs must be at least 1, --duration and --timeout positive, and --search-max-translation finite and not negative")
 
     try:
         ctx = prepare(args)
@@ -448,14 +471,18 @@ def main(argv=None):
     else:
         pose_grid = list(QUICK_POSES)
         map_changes = list(QUICK_MAP_CHANGES)
-    for t, y, search, expected in pose_grid:
+    for t, y, search, expected, *rest in pose_grid:
+        bound = rest[0] if rest else args.search_max_translation
+        # The suffix only for a case that sets its own bound, so the names of a run stay those of the baseline
+        suffix = f"_mt{bound:g}" if search and rest else ""
         cases.append(
             {
                 "group": "pose",
-                "name": f"pose_t{t:g}_yaw{y:g}_{'search' if search else 'nosearch'}",
+                "name": f"pose_t{t:g}_yaw{y:g}_{'search' if search else 'nosearch'}{suffix}",
                 "translation_m": t,
                 "yaw_deg": y,
                 "yaw_search": search,
+                "max_translation": bound if search else 0.0,
                 "expected": expected,
                 "map": ctx["map_dump"],
                 "init_pose": perturbed_pose(ctx["data"], t, y),
@@ -503,6 +530,7 @@ def main(argv=None):
         "machine": platform.machine(),
         "criteria": {"settle_s": args.settle, "max_trans_m": args.max_trans, "max_rot_deg": args.max_rot_deg, "replay_exit": 0},
         "timeout_s": args.timeout,
+        "search_max_translation_m": args.search_max_translation,
         "offset_direction": OFFSET_DIRECTION.tolist(),
         "results": records,
         "failures": failures,
@@ -510,7 +538,7 @@ def main(argv=None):
     with open(os.path.join(args.out, "results.json"), "w") as handle:
         json.dump(report, handle, indent=2)
         handle.write("\n")
-    lines = [f"# Replay robustness ({args.suite})", ""] + pose_table(records) + map_table(records)
+    lines = [f"# Replay robustness ({args.suite})", "", f"Search translation bound: {args.search_max_translation:g} m (0 = off)", ""] + pose_table(records) + map_table(records)
     with open(os.path.join(args.out, "results.md"), "w") as handle:
         handle.write("\n".join(lines))
     print("\n".join(lines))

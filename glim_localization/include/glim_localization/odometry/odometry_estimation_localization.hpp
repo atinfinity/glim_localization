@@ -48,7 +48,8 @@ enum class InitSearchReason : uint8_t {
   TRUNCATED = 1,     ///< The time budget ran out before every candidate was scored
   LOW_SCORE = 2,     ///< The best inlier ratio is below init_yaw_search_min_inlier_ratio
   AMBIGUOUS = 3,     ///< The runner-up is within init_yaw_search_min_score_gap of the best
-  NO_CANDIDATE = 4   ///< The candidate generator returned nothing to score
+  NO_CANDIDATE = 4,  ///< The candidate generator returned nothing to score
+  OUT_OF_RANGE = 5   ///< A registered pose beyond init_yaw_search_max_translation scores at least the best within it
 };
 
 const char* to_string(InitSearchReason reason);
@@ -138,7 +139,9 @@ struct OdometryEstimationLocalizationParams : public glim::OdometryEstimationIMU
   /// relocalize() or an IMU gap self-reset, which start from the estimate. The pose is rejected (LOST) if the time
   /// budget runs out before every candidate is scored, if the best inlier ratio is below min_inlier_ratio, or if a
   /// candidate more than two steps (at most 90 deg) away in yaw scores within min_score_gap of the best. With a range
-  /// of 0 or one too small to reach that far, only the inlier ratio threshold applies.
+  /// of 0 or one too small to reach that far, only the inlier ratio threshold applies. With max_translation, only
+  /// registered poses within that distance of the given pose (xy) are accepted, and the pose is rejected if one beyond
+  /// it reaches min_inlier_ratio and scores at least as high as the best within it.
   struct InitYawSearch {
     bool enabled = false;
     double range = M_PI;                ///< Half width [rad] (config: init_yaw_search_range_deg)
@@ -148,6 +151,7 @@ struct OdometryEstimationLocalizationParams : public glim::OdometryEstimationIMU
     double time_budget = 10.0;          ///< Every candidate must be scored within this many seconds [s]
     int max_iterations = 10;            ///< Registration iterations per candidate
     int min_points = 100;               ///< Smaller frames are dropped while the search waits for its first frame
+    double max_translation = 0.0;       ///< Position uncertainty of the given pose [m] in xy; 0 is unbounded
   } init_yaw_search;
 
   /// Optional wheel odometry: a relative pose factor between consecutive frames from the twists given to

@@ -37,6 +37,9 @@ struct CandidateScore {
   double residual = 0.0;  ///< Finest-level error per inlier point at the registered pose. Reported only
   int num_tiles = 0;      ///< Tiles selected again at the registered pose and scored against
   bool completed = true;  ///< False if the deadline stopped the registration (the score is then 0)
+  /// Distance in the xy plane from the registered pose to the hint [m]. Set by the search when it has a hint
+  /// (CandidateSearchParams::hint_position), otherwise 0
+  double translation = 0.0;
 };
 
 /// Register the frame to the map from the candidate with unary VGICP factors on every voxel level of the tiles that
@@ -77,6 +80,13 @@ struct CandidateSearchParams {
   /// Seconds. Every candidate must be scored within it, or the search is rejected as truncated. It is checked before
   /// each candidate and at each registration iteration. The first candidate is always started.
   double time_budget = 10.0;
+  /// The position of the given pose. With it and a positive max_translation, a candidate whose registered pose ends
+  /// more than max_translation [m] from it in the xy plane cannot be accepted, nor be the runner-up.
+  std::optional<Eigen::Vector3d> hint_position;
+  /// The position uncertainty of the given pose [m]; 0 (or less) turns the bound off. A registered pose beyond it that
+  /// reaches min_score and scores at least as high as the best one within it rejects the search (OUT_OF_RANGE): the
+  /// given pose is further off than stated. One below either is ignored. z is not bounded.
+  double max_translation = 0.0;
 };
 
 /// Why a search accepted or rejected the given pose.
@@ -85,7 +95,8 @@ enum class CandidateSearchOutcome {
   NO_CANDIDATE,  ///< The generator returned nothing to score
   TRUNCATED,     ///< The time budget ran out before every candidate was scored: an unscored one could be better
   LOW_SCORE,     ///< The best score is below min_score
-  AMBIGUOUS      ///< A candidate at a clearly different yaw scores within min_score_gap of the best
+  AMBIGUOUS,     ///< A candidate at a clearly different yaw scores within min_score_gap of the best
+  OUT_OF_RANGE   ///< A registered pose beyond max_translation reaches min_score and the best score within it
 };
 
 const char* to_string(CandidateSearchOutcome outcome);
@@ -97,6 +108,9 @@ struct CandidateSearchResult {
   CandidateSearchOutcome outcome = CandidateSearchOutcome::NO_CANDIDATE;
   std::optional<CandidateScore> best;       ///< The highest score among the scored candidates, also when rejected
   std::optional<CandidateScore> runner_up;  ///< The highest score at a yaw more than distinct_yaw from the best
+  /// The highest score among the registered poses beyond max_translation; empty without the bound. best and
+  /// runner_up come only from the poses within it
+  std::optional<CandidateScore> out_of_range;
   int num_candidates = 0;                   ///< Generated
   int num_evaluated = 0;                    ///< Completely scored before the time budget ran out
   double elapsed = 0.0;                     ///< Seconds
@@ -105,8 +119,18 @@ struct CandidateSearchResult {
   bool truncated() const { return num_evaluated < num_candidates; }
 };
 
+/// The decision over scored candidates (no registration), in this order: NO_CANDIDATE if num_candidates is 0,
+/// TRUNCATED if fewer than num_candidates were scored, OUT_OF_RANGE, LOW_SCORE, AMBIGUOUS, else ACCEPTED. elapsed is
+/// only reported.
+CandidateSearchResult decide_candidates(
+  const std::vector<CandidateScore, Eigen::aligned_allocator<CandidateScore>>& scores,
+  int num_candidates,
+  const CandidateSearchParams& params,
+  double elapsed = 0.0);
+
 /// Score the candidates in order and accept the best one only if every candidate was scored within the time budget,
-/// the best reaches min_score, and no candidate at a clearly different yaw comes within min_score_gap of it.
+/// no registered pose beyond max_translation competes with it, the best reaches min_score, and no candidate at a
+/// clearly different yaw comes within min_score_gap of it (decide_candidates).
 CandidateSearchResult search_candidates(
   const MapManager& map,
   const gtsam_points::PointCloud::ConstPtr& frame,

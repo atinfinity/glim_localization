@@ -139,6 +139,100 @@ TEST(SelectBestCandidate, HighestPassingScoreEarliestOnTies) {
   EXPECT_FALSE(select_best_candidate({scored(std::nan(""), 0.0)}, -1.0));
 }
 
+// A score whose registered pose ended at (x, 0, z), against a hint at the origin
+CandidateScore scored_at(double score, double yaw_offset, double x, double z = 0.0) {
+  CandidateScore result = scored(score, yaw_offset);
+  result.yaw_offset = yaw_offset;
+  result.T_world_imu.translation() = Eigen::Vector3d(x, 0.0, z);
+  return result;
+}
+
+CandidateSearchParams bounded_params(double max_translation) {
+  CandidateSearchParams params;
+  params.distinct_yaw = 30.0 * kDeg;
+  params.hint_position = Eigen::Vector3d::Zero();
+  params.max_translation = max_translation;
+  return params;
+}
+
+TEST(DecideCandidates, ZeroBoundKeepsTheUnboundedDecision) {
+  // A match far from the hint is accepted as before; the distance is still reported
+  const Scores scores = {scored_at(0.5, 0.0, 0.0), scored_at(0.95, 90.0 * kDeg, 3.0), scored_at(0.6, 180.0 * kDeg, 0.0)};
+  for (const bool with_hint : {false, true}) {
+    auto params = bounded_params(0.0);
+    if (!with_hint) {
+      params.hint_position.reset();
+    }
+    const auto result = decide_candidates(scores, 3, params);
+    EXPECT_EQ(result.outcome, CandidateSearchOutcome::ACCEPTED) << to_string(result.outcome);
+    ASSERT_TRUE(result.best);
+    EXPECT_EQ(result.best->score, 0.95);
+    EXPECT_NEAR(result.best->translation, with_hint ? 3.0 : 0.0, 1e-12);
+    EXPECT_FALSE(result.out_of_range);
+  }
+  // A bound without a hint position does nothing
+  auto params = bounded_params(1.0);
+  params.hint_position.reset();
+  EXPECT_EQ(decide_candidates(scores, 3, params).outcome, CandidateSearchOutcome::ACCEPTED);
+}
+
+TEST(DecideCandidates, LowerMatchBeyondTheBoundIsIgnored) {
+  const Scores scores = {scored_at(0.95, 0.0, 0.4), scored_at(0.8, 180.0 * kDeg, 3.0)};
+  const auto result = decide_candidates(scores, 2, bounded_params(2.5));
+  EXPECT_EQ(result.outcome, CandidateSearchOutcome::ACCEPTED) << result.message;
+  ASSERT_TRUE(result.out_of_range);
+  EXPECT_EQ(result.out_of_range->score, 0.8);
+  EXPECT_FALSE(result.runner_up) << "a pose beyond the bound is never the runner-up";
+}
+
+TEST(DecideCandidates, BetterMatchBeyondTheBoundRejects) {
+  // At or above both the minimum and the best within the bound, including a tie
+  for (const double within : {0.9, 0.959, 0.3}) {
+    const Scores scores = {scored_at(within, 0.0, 1.0), scored_at(0.959, 180.0 * kDeg, 2.98)};
+    const auto result = decide_candidates(scores, 2, bounded_params(2.5));
+    EXPECT_EQ(result.outcome, CandidateSearchOutcome::OUT_OF_RANGE) << within << ": " << result.message;
+    EXPECT_FALSE(result.accepted);
+    ASSERT_TRUE(result.out_of_range);
+    EXPECT_NEAR(result.out_of_range->translation, 2.98, 1e-12);
+    EXPECT_EQ(result.message.rfind("out of range:", 0), 0u) << result.message;
+  }
+  // Nothing within the bound at all
+  const auto result = decide_candidates({scored_at(0.9, 0.0, 4.0)}, 1, bounded_params(2.5));
+  EXPECT_EQ(result.outcome, CandidateSearchOutcome::OUT_OF_RANGE) << result.message;
+  EXPECT_FALSE(result.best);
+}
+
+TEST(DecideCandidates, MatchBeyondTheBoundBelowTheMinimumFallsThroughToLowScore) {
+  const Scores scores = {scored_at(0.3, 0.0, 0.0), scored_at(0.6, 90.0 * kDeg, 5.0)};
+  const auto result = decide_candidates(scores, 2, bounded_params(2.5));
+  EXPECT_EQ(result.outcome, CandidateSearchOutcome::LOW_SCORE) << result.message;
+  // The message names the excluded match, so that it is not hidden behind the low score within the bound
+  EXPECT_NE(result.message.find("best inlier ratio 0.300 (yaw correction 0.0 deg) is below 0.700 (beyond 2.50 m: 0.600 at 5.00 m;"), std::string::npos) << result.message;
+  const auto nothing_within = decide_candidates({scored_at(0.6, 0.0, 5.0)}, 1, bounded_params(2.5));
+  EXPECT_EQ(nothing_within.outcome, CandidateSearchOutcome::LOW_SCORE);
+  EXPECT_NE(nothing_within.message.find("(beyond 2.50 m: 0.600 at 5.00 m;"), std::string::npos) << nothing_within.message;
+}
+
+TEST(DecideCandidates, AmbiguityOnlyAmongPosesWithinTheBound) {
+  auto result = decide_candidates({scored_at(0.95, 0.0, 0.0), scored_at(0.93, 180.0 * kDeg, 1.0)}, 2, bounded_params(2.5));
+  EXPECT_EQ(result.outcome, CandidateSearchOutcome::AMBIGUOUS) << result.message;
+  // The same runner-up beyond the bound: lower than the best, so ignored
+  result = decide_candidates({scored_at(0.95, 0.0, 0.0), scored_at(0.93, 180.0 * kDeg, 3.0)}, 2, bounded_params(2.5));
+  EXPECT_EQ(result.outcome, CandidateSearchOutcome::ACCEPTED) << result.message;
+}
+
+TEST(DecideCandidates, BoundIsInclusiveAndIgnoresZ) {
+  const auto result = decide_candidates({scored_at(0.95, 0.0, 2.5, 10.0)}, 1, bounded_params(2.5));
+  EXPECT_EQ(result.outcome, CandidateSearchOutcome::ACCEPTED) << result.message;
+  EXPECT_NEAR(result.best->translation, 2.5, 1e-12);
+}
+
+TEST(DecideCandidates, TruncationAndNoCandidateComeFirst) {
+  const Scores scores = {scored_at(0.9, 0.0, 4.0)};
+  EXPECT_EQ(decide_candidates(scores, 24, bounded_params(2.5)).outcome, CandidateSearchOutcome::TRUNCATED);
+  EXPECT_EQ(decide_candidates({}, 0, bounded_params(2.5)).outcome, CandidateSearchOutcome::NO_CANDIDATE);
+}
+
 // Scoring against the corridor of the localization tests, with one synthetic scan at rest
 class CandidateScoringTest : public testing::Test {
 protected:
@@ -493,4 +587,23 @@ TEST_F(SymmetricSceneTest, HalfTurnAmbiguityIsRejected) {
   EXPECT_GT(result.best->score, params.min_score) << "each of the two yaws alone would pass";
   EXPECT_GT(result.runner_up->score, params.min_score);
   EXPECT_NEAR(std::abs(wrap(result.runner_up->yaw_offset - result.best->yaw_offset)) / kDeg, 180.0, 2.0);
+}
+
+TEST_F(SymmetricSceneTest, MatchBeyondTheBoundIsRejected) {
+  // The given pose 1 m off: both half-turn matches register back to the truth, beyond a 0.5 m bound
+  CandidateSearchParams params;
+  params.scorer.map_factors.num_threads = 2;
+  params.time_budget = 1e6;
+  CandidateQuery query;
+  Eigen::Isometry3d hint = with_yaw_error(*truth_, 20.0 * kDeg);
+  hint.translation() += Eigen::Vector3d(1.0, 0.0, 0.0);
+  query.hint = hint;
+  params.hint_position = hint.translation();
+  params.max_translation = 0.5;
+  const auto result = search_candidates(**map_, *frame_, YawCandidateGenerator(M_PI, 15.0 * kDeg).generate(query), params);
+  std::cout << "symmetric room, bound 0.5 m: " << result.message << std::endl;
+  EXPECT_EQ(result.outcome, CandidateSearchOutcome::OUT_OF_RANGE) << result.message;
+  ASSERT_TRUE(result.out_of_range);
+  EXPECT_GT(result.out_of_range->score, params.min_score);
+  EXPECT_NEAR(result.out_of_range->translation, 1.0, 0.2);
 }

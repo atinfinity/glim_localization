@@ -154,6 +154,8 @@ const char* to_string(CandidateSearchOutcome outcome) {
       return "low score";
     case CandidateSearchOutcome::AMBIGUOUS:
       return "ambiguous";
+    case CandidateSearchOutcome::OUT_OF_RANGE:
+      return "out of range";
   }
   return "unknown";
 }
@@ -170,8 +172,6 @@ CandidateSearchResult search_candidates(
   const auto deadline = begin + std::chrono::duration_cast<std::chrono::steady_clock::duration>(std::chrono::duration<double>(budget));
   const auto elapsed = [&]() { return std::chrono::duration<double>(std::chrono::steady_clock::now() - begin).count(); };
 
-  CandidateSearchResult result;
-  result.num_candidates = static_cast<int>(candidates.size());
   std::vector<CandidateScore, Eigen::aligned_allocator<CandidateScore>> scores;
   for (const auto& candidate : candidates) {
     if (!scores.empty() && std::chrono::steady_clock::now() >= deadline) {
@@ -185,27 +185,57 @@ CandidateSearchResult search_candidates(
     }
     scores.push_back(std::move(score));
   }
+  return decide_candidates(scores, static_cast<int>(candidates.size()), params, elapsed());
+}
+
+CandidateSearchResult decide_candidates(
+  const std::vector<CandidateScore, Eigen::aligned_allocator<CandidateScore>>& scores,
+  const int num_candidates,
+  const CandidateSearchParams& params,
+  const double elapsed) {
+  CandidateSearchResult result;
+  result.num_candidates = num_candidates;
   result.num_evaluated = static_cast<int>(scores.size());
-  result.elapsed = elapsed();
+  result.elapsed = elapsed;
+
+  // Split by the translation bound; without it every candidate is within. The order is kept, so ties still go to
+  // the candidate nearest in yaw to the hint.
+  const bool bounded = params.hint_position && params.max_translation > 0.0;
+  std::vector<CandidateScore, Eigen::aligned_allocator<CandidateScore>> within;
+  std::vector<CandidateScore, Eigen::aligned_allocator<CandidateScore>> beyond;
+  for (CandidateScore score : scores) {
+    if (params.hint_position) {
+      score.translation = (score.T_world_imu.translation() - *params.hint_position).head<2>().norm();
+    }
+    (bounded && !(score.translation <= params.max_translation) ? beyond : within).push_back(std::move(score));
+  }
 
   // The best score and its runner-up, whether or not they pass, for the report
-  const auto best = select_best_candidate(scores, -std::numeric_limits<double>::infinity());
+  const auto best = select_best_candidate(within, -std::numeric_limits<double>::infinity());
   if (best) {
-    result.best = scores[*best];
-    const auto runner_up = select_runner_up(scores, *best, params.distinct_yaw);
+    result.best = within[*best];
+    const auto runner_up = select_runner_up(within, *best, params.distinct_yaw);
     if (runner_up) {
-      result.runner_up = scores[*runner_up];
+      result.runner_up = within[*runner_up];
     }
+  }
+  const auto out_of_range = select_best_candidate(beyond, -std::numeric_limits<double>::infinity());
+  if (out_of_range) {
+    result.out_of_range = beyond[*out_of_range];
   }
   const double runner_up_score = result.runner_up ? result.runner_up->score : 0.0;
 
   // A truncated search is rejected even if its best candidate passes: the unscored candidates may score higher, and
   // the runner-up is only known over the whole set (a wrong yaw near the hint often reaches 0.5 on its own).
-  if (candidates.empty()) {
+  // A match beyond the bound is checked before the score: when it is the best match, the given pose is further off
+  // than stated, which is the reason to report, not the low score of what is left within the bound.
+  if (num_candidates <= 0) {
     result.outcome = CandidateSearchOutcome::NO_CANDIDATE;
   } else if (result.truncated()) {
     result.outcome = CandidateSearchOutcome::TRUNCATED;
-  } else if (!best || !(result.best->score >= params.min_score)) {
+  } else if (result.out_of_range && result.out_of_range->score >= params.min_score && (!result.best || !(result.best->score > result.out_of_range->score))) {
+    result.outcome = CandidateSearchOutcome::OUT_OF_RANGE;
+  } else if (!result.best || !(result.best->score >= params.min_score)) {
     result.outcome = CandidateSearchOutcome::LOW_SCORE;
   } else if (params.min_score_gap >= 0.0 && result.runner_up && !(result.best->score - runner_up_score > params.min_score_gap)) {
     result.outcome = CandidateSearchOutcome::AMBIGUOUS;
@@ -229,12 +259,24 @@ CandidateSearchResult search_candidates(
       std::snprintf(text, sizeof(text), "the time budget of %.3f s ran out after %s (best inlier ratio %.3f at a yaw correction of %.1f deg)", params.time_budget, counts, best_score, best_yaw);
       break;
     case CandidateSearchOutcome::LOW_SCORE:
-      std::snprintf(text, sizeof(text), "best inlier ratio %.3f (yaw correction %.1f deg) is below %.3f (%s)", best_score, best_yaw, params.min_score, counts);
+      if (result.out_of_range) {
+        // Say what the bound excluded, so that a higher match beyond it is not hidden behind the low score
+        std::snprintf(
+          text, sizeof(text), "best inlier ratio %.3f (yaw correction %.1f deg) is below %.3f (beyond %.2f m: %.3f at %.2f m; %s)", best_score, best_yaw, params.min_score,
+          params.max_translation, result.out_of_range->score, result.out_of_range->translation, counts);
+      } else {
+        std::snprintf(text, sizeof(text), "best inlier ratio %.3f (yaw correction %.1f deg) is below %.3f (%s)", best_score, best_yaw, params.min_score, counts);
+      }
       break;
     case CandidateSearchOutcome::AMBIGUOUS:
       std::snprintf(
         text, sizeof(text), "ambiguous: inlier ratio %.3f at a yaw correction of %.1f deg and %.3f at %.1f deg differ by no more than %.3f (%s)", best_score, best_yaw, runner_up_score,
         runner_up_yaw, params.min_score_gap, counts);
+      break;
+    case CandidateSearchOutcome::OUT_OF_RANGE:
+      std::snprintf(
+        text, sizeof(text), "out of range: inlier ratio %.3f at a yaw correction of %.1f deg lies %.2f m from the given pose, beyond %.2f m (best within %.3f; %s)",
+        result.out_of_range->score, result.out_of_range->yaw_offset * kToDeg, result.out_of_range->translation, params.max_translation, best_score, counts);
       break;
     case CandidateSearchOutcome::ACCEPTED:
       std::snprintf(
