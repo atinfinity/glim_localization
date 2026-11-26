@@ -514,10 +514,11 @@ TEST(LocalizationPublisher, DiagnosticsAreRateLimitedAndRestartWhenTheClockSteps
       rosgraph_msgs::msg::Clock msg;
       msg.clock = to_msg(seconds);
       const rclcpp::Time expected(msg.clock, RCL_ROS_TIME);
-      return fixture.spin_until([&] {
+      const auto publish_and_check = [&] {
           clock_pub->publish(msg);
           return fixture.node_->now() == expected;
-        });
+        };
+      return fixture.spin_until(publish_and_check);
     };
   const auto settle = [&](size_t expected) {
       fixture.spin_until([&] {return fixture.diagnostics.size() >= expected;}, 2s);
