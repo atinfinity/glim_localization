@@ -37,6 +37,39 @@ TEST_F(SyntheticSensorTest, TrajectoryStartsAtRest) {
   EXPECT_NEAR(synthetic_T_world_imu(12.0).translation().x() - synthetic_T_world_imu(0.0).translation().x(), 20.0, 1e-9);
 }
 
+TEST_F(SyntheticSensorTest, NoiselessWheelTwistIntegratesToTruth) {
+  // Integrating the twist of the base frame (constant over each 1 ms step) must reproduce its motion
+  SyntheticWheelParams params;
+  params.rate = 1000.0;
+  params.T_imu_base.translation() = Eigen::Vector3d(-0.3, 0.1, -0.5);
+  params.T_imu_base.linear() = Eigen::AngleAxisd(0.2, Eigen::Vector3d::UnitZ()).toRotationMatrix();
+  const auto samples = make_synthetic_wheel(4.0, 5.0, params);
+  ASSERT_EQ(samples.size(), 1001u);
+  Eigen::Isometry3d T = Eigen::Isometry3d::Identity();
+  for (size_t i = 0; i + 1 < samples.size(); i++) {
+    const double dt = samples[i + 1].stamp - samples[i].stamp;
+    const Eigen::Vector3d w = 0.5 * (samples[i].angular + samples[i + 1].angular);
+    const Eigen::Vector3d v = 0.5 * (samples[i].linear + samples[i + 1].linear);
+    Eigen::Isometry3d step = Eigen::Isometry3d::Identity();
+    step.linear() = Eigen::AngleAxisd(w.norm() * dt, w.norm() > 0.0 ? Eigen::Vector3d(w.normalized()) : Eigen::Vector3d::UnitZ()).toRotationMatrix();
+    step.translation() = v * dt;
+    T = T * step;
+  }
+  const Eigen::Isometry3d truth = (synthetic_T_world_imu(4.0) * params.T_imu_base).inverse() * (synthetic_T_world_imu(5.0) * params.T_imu_base);
+  EXPECT_LT((T.translation() - truth.translation()).norm(), 1e-3);
+  EXPECT_LT(Eigen::AngleAxisd(T.linear().transpose() * truth.linear()).angle(), 1e-4);
+
+  // Noise is added only when configured, and is repeatable
+  params.linear_noise = 0.01;
+  params.angular_noise = 0.002;
+  const auto noisy = make_synthetic_wheel(4.0, 5.0, params);
+  const auto again = make_synthetic_wheel(4.0, 5.0, params);
+  ASSERT_EQ(noisy.size(), samples.size());
+  EXPECT_NE(noisy[10].linear, samples[10].linear);
+  EXPECT_EQ(noisy[10].linear, again[10].linear);
+  EXPECT_LT((noisy[10].linear - samples[10].linear).norm(), 0.06);
+}
+
 TEST_F(SyntheticSensorTest, NoiselessImuIntegratesToTruth) {
   // IMUIntegration holds each sample over the preceding interval, which costs about
   // 0.2 deg per second at 100 Hz on this trajectory. Use 1 kHz to check the generator itself.

@@ -25,6 +25,7 @@ namespace fs = std::filesystem;
 
 constexpr char kMagic[4] = {'G', 'L', 'R', 'P'};
 constexpr const char* kImuHeader = "stamp_ns,acc_x,acc_y,acc_z,gyro_x,gyro_y,gyro_z";
+constexpr const char* kWheelOdomHeader = "stamp_ns,vx,vy,vz,wx,wy,wz";
 constexpr size_t kStampDigits = 19;
 
 [[noreturn]] void fail(const fs::path& path, const std::string& message) {
@@ -139,6 +140,14 @@ ReplayMeta read_meta(const fs::path& path) {
     }
     meta.num_frames = num_frames;
     meta.num_imu = num_imu;
+    if (json.contains("num_wheel_odom")) {
+      const int64_t num_wheel_odom = json["num_wheel_odom"].get<int64_t>();
+      if (num_wheel_odom < 0) {
+        fail(path, "negative count");
+      }
+      meta.has_num_wheel_odom = true;
+      meta.num_wheel_odom = num_wheel_odom;
+    }
     if (json.contains("conversion")) {
       if (!json["conversion"].is_object()) {
         fail(path, "conversion must be an object");
@@ -151,10 +160,16 @@ ReplayMeta read_meta(const fs::path& path) {
   }
 }
 
-std::vector<ReplayImu> read_imu(const fs::path& path) {
+struct StampedRow {
+  int64_t stamp_ns = 0;
+  double values[6] = {};
+};
+
+/// Read a CSV of a stamp and six finite values with the given header; stamps strictly increasing.
+std::vector<StampedRow> read_stamped_csv(const fs::path& path, const char* header) {
   std::ifstream ifs(path);
   if (!ifs) {
-    fail(path, "cannot open (imu.csv is required)");
+    fail(path, "cannot open");
   }
   std::string line;
   if (!std::getline(ifs, line)) {
@@ -163,11 +178,11 @@ std::vector<ReplayImu> read_imu(const fs::path& path) {
   if (!line.empty() && line.back() == '\r') {
     line.pop_back();
   }
-  if (line != kImuHeader) {
-    fail_line(path, 1, std::string("header must be '") + kImuHeader + "'");
+  if (line != header) {
+    fail_line(path, 1, std::string("header must be '") + header + "'");
   }
 
-  std::vector<ReplayImu> imu;
+  std::vector<StampedRow> rows;
   size_t line_number = 1;
   while (std::getline(ifs, line)) {
     line_number++;
@@ -178,23 +193,48 @@ std::vector<ReplayImu> read_imu(const fs::path& path) {
     if (fields.size() != 7) {
       fail_line(path, line_number, "expected 7 columns, got " + std::to_string(fields.size()));
     }
-    ReplayImu sample;
-    if (!parse_int64(fields[0], sample.stamp_ns)) {
+    StampedRow row;
+    if (!parse_int64(fields[0], row.stamp_ns)) {
       fail_line(path, line_number, "invalid stamp_ns '" + fields[0] + "'");
     }
     for (int i = 0; i < 6; i++) {
-      double value;
-      if (!parse_finite_double(fields[i + 1], value)) {
+      if (!parse_finite_double(fields[i + 1], row.values[i])) {
         fail_line(path, line_number, "invalid or non-finite value '" + fields[i + 1] + "'");
       }
-      (i < 3 ? sample.acc[i] : sample.gyro[i - 3]) = value;
     }
-    if (!imu.empty() && sample.stamp_ns <= imu.back().stamp_ns) {
+    if (!rows.empty() && row.stamp_ns <= rows.back().stamp_ns) {
       fail_line(path, line_number, "stamp_ns is not strictly increasing");
     }
+    rows.push_back(row);
+  }
+  return rows;
+}
+
+std::vector<ReplayImu> read_imu(const fs::path& path) {
+  if (!fs::exists(path)) {
+    fail(path, "cannot open (imu.csv is required)");
+  }
+  std::vector<ReplayImu> imu;
+  for (const auto& row : read_stamped_csv(path, kImuHeader)) {
+    ReplayImu sample;
+    sample.stamp_ns = row.stamp_ns;
+    sample.acc = Eigen::Vector3d(row.values[0], row.values[1], row.values[2]);
+    sample.gyro = Eigen::Vector3d(row.values[3], row.values[4], row.values[5]);
     imu.push_back(sample);
   }
   return imu;
+}
+
+std::vector<ReplayWheelOdom> read_wheel_odom(const fs::path& path) {
+  std::vector<ReplayWheelOdom> wheel_odom;
+  for (const auto& row : read_stamped_csv(path, kWheelOdomHeader)) {
+    ReplayWheelOdom sample;
+    sample.stamp_ns = row.stamp_ns;
+    sample.linear = Eigen::Vector3d(row.values[0], row.values[1], row.values[2]);
+    sample.angular = Eigen::Vector3d(row.values[3], row.values[4], row.values[5]);
+    wheel_odom.push_back(sample);
+  }
+  return wheel_odom;
 }
 
 ReplayFrameInfo read_frame_header(const fs::path& path) {
@@ -326,6 +366,28 @@ void ReplayDatasetWriter::write_imu(const std::vector<ReplayImu>& imu) {
   num_imu_ = imu.size();
 }
 
+void ReplayDatasetWriter::write_wheel_odom(const std::vector<ReplayWheelOdom>& wheel_odom) {
+  const fs::path path = fs::path(dir_) / "wheel_odom.csv";
+  std::ofstream ofs(path, std::ios::trunc);
+  ofs << kWheelOdomHeader << "\n";
+  char line[256];
+  for (size_t i = 0; i < wheel_odom.size(); i++) {
+    if (i > 0 && wheel_odom[i].stamp_ns <= wheel_odom[i - 1].stamp_ns) {
+      throw std::invalid_argument("wheel odometry stamps must be strictly increasing");
+    }
+    const auto& w = wheel_odom[i];
+    std::snprintf(
+      line, sizeof(line), "%" PRId64 ",%.17g,%.17g,%.17g,%.17g,%.17g,%.17g\n", w.stamp_ns, w.linear.x(), w.linear.y(), w.linear.z(), w.angular.x(),
+      w.angular.y(), w.angular.z());
+    ofs << line;
+  }
+  if (!ofs) {
+    throw std::runtime_error("cannot write " + path.string());
+  }
+  wrote_wheel_odom_ = true;
+  num_wheel_odom_ = wheel_odom.size();
+}
+
 void ReplayDatasetWriter::finish(bool per_point_time, const std::string& conversion_json) {
   nlohmann::json meta;
   meta["format"] = "glim_localization_replay";
@@ -334,6 +396,9 @@ void ReplayDatasetWriter::finish(bool per_point_time, const std::string& convers
   meta["per_point_time"] = per_point_time;
   meta["num_frames"] = num_frames_;
   meta["num_imu"] = num_imu_;
+  if (wrote_wheel_odom_) {
+    meta["num_wheel_odom"] = num_wheel_odom_;
+  }
   meta["conversion"] = nlohmann::json::parse(conversion_json);
 
   const fs::path path = fs::path(dir_) / "meta.json";
@@ -353,6 +418,13 @@ ReplayDataset ReplayDataset::open(const std::string& dir) {
   dataset.dir_ = dir;
   dataset.meta_ = read_meta(root / "meta.json");
   dataset.imu_ = read_imu(root / "imu.csv");
+  const fs::path wheel_path = root / "wheel_odom.csv";
+  if (fs::exists(wheel_path)) {
+    dataset.wheel_odom_ = read_wheel_odom(wheel_path);
+    dataset.has_wheel_odom_ = true;
+  } else if (dataset.meta_.has_num_wheel_odom) {
+    fail(wheel_path, "cannot open (meta.json has num_wheel_odom)");
+  }
 
   const fs::path points_dir = root / "points";
   if (!fs::is_directory(points_dir)) {
@@ -375,6 +447,11 @@ ReplayDataset ReplayDataset::open(const std::string& dir) {
   }
   if (dataset.imu_.size() != dataset.meta_.num_imu) {
     fail(root / "meta.json", "num_imu is " + std::to_string(dataset.meta_.num_imu) + " but imu.csv holds " + std::to_string(dataset.imu_.size()));
+  }
+  if (dataset.meta_.has_num_wheel_odom && dataset.wheel_odom_.size() != dataset.meta_.num_wheel_odom) {
+    fail(
+      root / "meta.json",
+      "num_wheel_odom is " + std::to_string(dataset.meta_.num_wheel_odom) + " but wheel_odom.csv holds " + std::to_string(dataset.wheel_odom_.size()));
   }
   return dataset;
 }

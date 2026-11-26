@@ -57,16 +57,15 @@ WheelSamples make_wheel_samples(
   double t_end,
   const Eigen::Isometry3d& T_imu_base,
   const std::function<double(double)>& scale = [](double) { return 1.0; }) {
-  constexpr double h = 1e-3;
+  SyntheticWheelParams params;
+  params.rate = kWheelRate;
+  params.T_imu_base = T_imu_base;
   WheelSamples samples;
-  for (double t = t_begin; t <= t_end + 1e-9; t += 1.0 / kWheelRate) {
-    const Eigen::Isometry3d T0 = synthetic_T_world_imu(t - h) * T_imu_base;
-    const Eigen::Isometry3d T1 = synthetic_T_world_imu(t + h) * T_imu_base;
-    const gtsam::Vector6 xi = gtsam::Pose3::Logmap(gtsam::Pose3((T0.inverse() * T1).matrix())) / (2.0 * h);
+  for (const auto& s : make_synthetic_wheel(t_begin, t_end, params)) {
     WheelOdometrySample sample;
-    sample.stamp = t;
-    sample.angular = xi.head<3>();
-    sample.linear = xi.tail<3>() * scale(t);
+    sample.stamp = s.stamp;
+    sample.angular = s.angular;
+    sample.linear = s.linear * scale(s.stamp);
     samples.push_back(sample);
   }
   return samples;

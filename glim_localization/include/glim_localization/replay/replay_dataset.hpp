@@ -17,6 +17,8 @@ namespace glim_localization {
 ///   imu.csv                        required, header `stamp_ns,acc_x,acc_y,acc_z,gyro_x,gyro_y,gyro_z`
 ///   points/<stamp_ns, 19 digits>.bin   one file per LiDAR frame
 ///   traj_gt.txt                    optional, TUM format, T_world_imu
+///   wheel_odom.csv                 optional, header `stamp_ns,vx,vy,vz,wx,wy,wz`: the twist of the wheel base
+///                                  in the base frame (wheel_odom_T_imu_base). Required when meta.json has num_wheel_odom
 /// See docs/DESIGN.md for the full specification.
 
 constexpr uint32_t kReplayCloudVersion = 1;
@@ -44,10 +46,19 @@ struct ReplayImu {
   Eigen::Vector3d gyro = Eigen::Vector3d::Zero();
 };
 
+/// Twist of the wheel base [m/s, rad/s], in the base frame (the base of wheel_odom_T_imu_base).
+struct ReplayWheelOdom {
+  int64_t stamp_ns = 0;
+  Eigen::Vector3d linear = Eigen::Vector3d::Zero();
+  Eigen::Vector3d angular = Eigen::Vector3d::Zero();
+};
+
 struct ReplayMeta {
   bool per_point_time = false;
   size_t num_frames = 0;
   size_t num_imu = 0;
+  bool has_num_wheel_odom = false;  ///< meta.json has num_wheel_odom, so wheel_odom.csv is required
+  size_t num_wheel_odom = 0;
   std::string conversion_json = "{}";  ///< Free-form JSON object describing the conversion
 };
 
@@ -74,12 +85,17 @@ public:
   /// Replace imu.csv. Stamps must be strictly increasing.
   void write_imu(const std::vector<ReplayImu>& imu);
 
+  /// Write wheel_odom.csv; `finish` then records num_wheel_odom. Stamps must be strictly increasing.
+  void write_wheel_odom(const std::vector<ReplayWheelOdom>& wheel_odom);
+
   void finish(bool per_point_time, const std::string& conversion_json = "{}");
 
 private:
   std::string dir_;
   size_t num_frames_ = 0;
   size_t num_imu_ = 0;
+  bool wrote_wheel_odom_ = false;
+  size_t num_wheel_odom_ = 0;
 };
 
 /// A validated dataset. `open` checks meta.json, every imu.csv row, and every .bin header
@@ -93,6 +109,9 @@ public:
   const std::string& dir() const { return dir_; }
   const ReplayMeta& meta() const { return meta_; }
   const std::vector<ReplayImu>& imu() const { return imu_; }
+  /// Empty if the dataset has no wheel_odom.csv.
+  const std::vector<ReplayWheelOdom>& wheel_odom() const { return wheel_odom_; }
+  bool has_wheel_odom() const { return has_wheel_odom_; }
   /// Sorted by stamp.
   const std::vector<ReplayFrameInfo>& frames() const { return frames_; }
   bool has_ground_truth() const;
@@ -105,6 +124,8 @@ private:
   std::string dir_;
   ReplayMeta meta_;
   std::vector<ReplayImu> imu_;
+  bool has_wheel_odom_ = false;
+  std::vector<ReplayWheelOdom> wheel_odom_;
   std::vector<ReplayFrameInfo> frames_;
 };
 

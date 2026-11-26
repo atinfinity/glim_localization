@@ -27,6 +27,15 @@ TEST(SyntheticReplayTest, DatasetIsReadableAndConsistent) {
   EXPECT_FALSE(dataset.meta().per_point_time);
   EXPECT_EQ(dataset.frames()[10].stamp_ns, 1000000000);
   EXPECT_EQ(dataset.imu().back().stamp_ns, 2050000000);
+  ASSERT_TRUE(dataset.has_wheel_odom());
+  ASSERT_EQ(dataset.wheel_odom().size(), 103u);  // 0 s to 2.04 s at 50 Hz
+  EXPECT_EQ(dataset.wheel_odom()[50].stamp_ns, 1000000000);
+  for (const auto& sample : dataset.wheel_odom()) {
+    // The base is the IMU: its velocity in the body frame, with 0.01 m/s noise
+    const double t = sample.stamp_ns * 1e-9;
+    const Eigen::Vector3d v = synthetic_T_world_imu(t).linear().transpose() * synthetic_v_world_imu(t);
+    EXPECT_LT((sample.linear - v).norm(), 0.06) << t;
+  }
 
   const auto cloud = dataset.load_cloud(10);
   EXPECT_GT(cloud->size(), 1000);

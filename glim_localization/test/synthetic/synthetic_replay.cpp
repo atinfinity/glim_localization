@@ -69,6 +69,16 @@ int write_synthetic_replay(const std::string& dir, double t_end, const Synthetic
     imu.push_back({to_ns(sample.stamp), sample.linear_acc, sample.angular_vel});
   }
   writer.write_imu(imu);
+
+  // Wheel odometry at 50 Hz with the base at the IMU (identity extrinsic, the default of wheel_odom_T_imu_base)
+  SyntheticWheelParams wheel_params;
+  wheel_params.linear_noise = 0.01;
+  wheel_params.angular_noise = 0.002;
+  std::vector<ReplayWheelOdom> wheel;
+  for (const auto& sample : make_synthetic_wheel(0.0, t_end + 0.05 + options.lidar.scan_duration, wheel_params)) {
+    wheel.push_back({to_ns(sample.stamp), sample.linear, sample.angular});
+  }
+  writer.write_wheel_odom(wheel);
   writer.finish(with_times, R"({"source":"synthetic"})");
   return count;
 }

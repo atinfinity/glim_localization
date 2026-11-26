@@ -27,6 +27,20 @@ struct SyntheticImuParams {
   unsigned int seed = 7;
 };
 
+struct SyntheticWheelSample {
+  double stamp = 0.0;
+  Eigen::Vector3d linear = Eigen::Vector3d::Zero();   // Velocity of the base frame in the base frame [m/s]
+  Eigen::Vector3d angular = Eigen::Vector3d::Zero();  // Body rate of the base frame in the base frame [rad/s]
+};
+
+struct SyntheticWheelParams {
+  double rate = 50.0;
+  Eigen::Isometry3d T_imu_base = Eigen::Isometry3d::Identity();  // The wheel base in the IMU frame
+  double linear_noise = 0.0;   // Gaussian noise on each axis [m/s]
+  double angular_noise = 0.0;  // Gaussian noise on each axis [rad/s]
+  unsigned int seed = 13;
+};
+
 struct SyntheticLidarParams {
   double rate = 10.0;
   int num_rings = 24;
@@ -49,6 +63,10 @@ Eigen::Vector3d synthetic_v_world_imu(double t);
 
 /// IMU samples in [t_begin, t_end]. Gravity is +9.81 along world z in the specific force.
 std::vector<SyntheticImuSample> make_synthetic_imu(double t_begin, double t_end, const SyntheticImuParams& params = SyntheticImuParams());
+
+/// Wheel odometry twists in [t_begin, t_end]: the twist of the base frame (T_world_imu * T_imu_base) along the analytic
+/// trajectory, in the base frame, plus the configured noise.
+std::vector<SyntheticWheelSample> make_synthetic_wheel(double t_begin, double t_end, const SyntheticWheelParams& params = SyntheticWheelParams());
 
 /// Scans at the sensor rate in [t_begin, t_end]. Each point is expressed in the IMU frame at its own observation time, as
 /// a real rolling-shutter sensor reports it (not deskewed), and `times` holds its offset from the scan stamp.
