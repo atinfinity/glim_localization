@@ -206,7 +206,11 @@ TEST(DecideCandidates, MatchBeyondTheBoundBelowTheMinimumFallsThroughToLowScore)
   const Scores scores = {scored_at(0.3, 0.0, 0.0), scored_at(0.6, 90.0 * kDeg, 5.0)};
   const auto result = decide_candidates(scores, 2, bounded_params(2.5));
   EXPECT_EQ(result.outcome, CandidateSearchOutcome::LOW_SCORE) << result.message;
-  EXPECT_EQ(decide_candidates({scored_at(0.6, 0.0, 5.0)}, 1, bounded_params(2.5)).outcome, CandidateSearchOutcome::LOW_SCORE);
+  // The message names the excluded match, so that it is not hidden behind the low score within the bound
+  EXPECT_NE(result.message.find("best inlier ratio 0.300 (yaw correction 0.0 deg) is below 0.700 (beyond 2.50 m: 0.600 at 5.00 m;"), std::string::npos) << result.message;
+  const auto nothing_within = decide_candidates({scored_at(0.6, 0.0, 5.0)}, 1, bounded_params(2.5));
+  EXPECT_EQ(nothing_within.outcome, CandidateSearchOutcome::LOW_SCORE);
+  EXPECT_NE(nothing_within.message.find("(beyond 2.50 m: 0.600 at 5.00 m;"), std::string::npos) << nothing_within.message;
 }
 
 TEST(DecideCandidates, AmbiguityOnlyAmongPosesWithinTheBound) {

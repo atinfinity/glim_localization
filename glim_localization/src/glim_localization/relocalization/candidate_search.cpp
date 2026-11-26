@@ -199,7 +199,7 @@ CandidateSearchResult decide_candidates(
   result.elapsed = elapsed;
 
   // Split by the translation bound; without it every candidate is within. The order is kept, so ties still go to
-  // the candidate closer to the hint.
+  // the candidate nearest in yaw to the hint.
   const bool bounded = params.hint_position && params.max_translation > 0.0;
   std::vector<CandidateScore, Eigen::aligned_allocator<CandidateScore>> within;
   std::vector<CandidateScore, Eigen::aligned_allocator<CandidateScore>> beyond;
@@ -259,7 +259,14 @@ CandidateSearchResult decide_candidates(
       std::snprintf(text, sizeof(text), "the time budget of %.3f s ran out after %s (best inlier ratio %.3f at a yaw correction of %.1f deg)", params.time_budget, counts, best_score, best_yaw);
       break;
     case CandidateSearchOutcome::LOW_SCORE:
-      std::snprintf(text, sizeof(text), "best inlier ratio %.3f (yaw correction %.1f deg) is below %.3f (%s)", best_score, best_yaw, params.min_score, counts);
+      if (result.out_of_range) {
+        // Say what the bound excluded, so that a higher match beyond it is not hidden behind the low score
+        std::snprintf(
+          text, sizeof(text), "best inlier ratio %.3f (yaw correction %.1f deg) is below %.3f (beyond %.2f m: %.3f at %.2f m; %s)", best_score, best_yaw, params.min_score,
+          params.max_translation, result.out_of_range->score, result.out_of_range->translation, counts);
+      } else {
+        std::snprintf(text, sizeof(text), "best inlier ratio %.3f (yaw correction %.1f deg) is below %.3f (%s)", best_score, best_yaw, params.min_score, counts);
+      }
       break;
     case CandidateSearchOutcome::AMBIGUOUS:
       std::snprintf(
