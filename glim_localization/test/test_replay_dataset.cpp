@@ -4,6 +4,7 @@
 #include <fstream>
 #include <functional>
 #include <limits>
+#include <optional>
 #include <string>
 
 #include <gtest/gtest.h>
@@ -280,4 +281,104 @@ TEST_F(ReplayDatasetTest, RejectsBadPointBodies) {
   set_float(2, 3, 1.0f);
   set_float(2, 3, -0.1f);
   set_float(0, 3, 0.01f);  // The minimum time is no longer 0
+}
+
+namespace {
+
+std::vector<ReplayWheelOdom> make_wheel_odom(int count) {
+  std::vector<ReplayWheelOdom> wheel;
+  for (int i = 0; i < count; i++) {
+    ReplayWheelOdom sample;
+    sample.stamp_ns = i == 0 ? 0 : kStamp + i * 20000000LL;  // A stamp of 0 is allowed
+    sample.linear = Eigen::Vector3d(1.0 / 3.0 + i, -1e-12, 0.0);
+    sample.angular = Eigen::Vector3d(0.0, 0.0, -M_PI / 7.0);
+    wheel.push_back(sample);
+  }
+  return wheel;
+}
+
+}  // namespace
+
+TEST_F(ReplayDatasetTest, WheelOdometryIsOptional) {
+  write_valid();
+  const auto dataset = ReplayDataset::open(dir_.string());
+  EXPECT_FALSE(dataset.has_wheel_odom());
+  EXPECT_TRUE(dataset.wheel_odom().empty());
+  EXPECT_FALSE(dataset.meta().has_num_wheel_odom);
+  EXPECT_FALSE(nlohmann::json::parse(std::ifstream(dir_ / "meta.json")).contains("num_wheel_odom"));
+}
+
+TEST_F(ReplayDatasetTest, WheelOdometryRoundTrip) {
+  fs::remove_all(dir_);
+  {
+    ReplayDatasetWriter writer(dir_.string());
+    writer.write_cloud(kStamp, make_points(5), kReplayFlagPointTime);
+    writer.write_imu(make_imu(4));
+    writer.write_wheel_odom(make_wheel_odom(3));
+    writer.finish(true, "{}");
+  }
+  EXPECT_EQ(nlohmann::json::parse(std::ifstream(dir_ / "meta.json")).at("num_wheel_odom"), 3);
+  const auto dataset = ReplayDataset::open(dir_.string());
+  ASSERT_TRUE(dataset.has_wheel_odom());
+  EXPECT_TRUE(dataset.meta().has_num_wheel_odom);
+  EXPECT_EQ(dataset.meta().num_wheel_odom, 3u);
+  const auto expected = make_wheel_odom(3);
+  ASSERT_EQ(dataset.wheel_odom().size(), expected.size());
+  for (size_t i = 0; i < expected.size(); i++) {
+    EXPECT_EQ(dataset.wheel_odom()[i].stamp_ns, expected[i].stamp_ns);
+    EXPECT_EQ(dataset.wheel_odom()[i].linear, expected[i].linear);  // 17 digits are exact
+    EXPECT_EQ(dataset.wheel_odom()[i].angular, expected[i].angular);
+  }
+
+  // An empty file is valid, and so is a file that meta.json does not count
+  {
+    ReplayDatasetWriter writer(dir_.string());
+    writer.write_cloud(kStamp, make_points(5), kReplayFlagPointTime);
+    writer.write_imu(make_imu(4));
+    writer.write_wheel_odom({});
+    writer.finish(true, "{}");
+  }
+  EXPECT_TRUE(ReplayDataset::open(dir_.string()).has_wheel_odom());
+  EXPECT_TRUE(ReplayDataset::open(dir_.string()).wheel_odom().empty());
+  write_valid();
+  std::ofstream(dir_ / "wheel_odom.csv", std::ios::trunc) << "stamp_ns,vx,vy,vz,wx,wy,wz\n5,1,0,0,0,0,0\n";
+  EXPECT_EQ(ReplayDataset::open(dir_.string()).wheel_odom().size(), 1u);
+
+  std::vector<ReplayWheelOdom> backwards = make_wheel_odom(2);
+  std::swap(backwards[0], backwards[1]);
+  ReplayDatasetWriter writer(dir_.string());
+  EXPECT_THROW(writer.write_wheel_odom(backwards), std::invalid_argument);
+}
+
+TEST_F(ReplayDatasetTest, RejectsBadWheelOdometry) {
+  const auto rewrite_wheel = [&](const std::string& text, std::optional<size_t> count) {
+    write_valid();
+    std::ofstream(dir_ / "wheel_odom.csv", std::ios::trunc) << text;
+    nlohmann::json meta = nlohmann::json::parse(std::ifstream(dir_ / "meta.json"));
+    if (count) {
+      meta["num_wheel_odom"] = *count;
+    }
+    std::ofstream(dir_ / "meta.json", std::ios::trunc) << meta.dump();
+  };
+  const std::string header = "stamp_ns,vx,vy,vz,wx,wy,wz\n";
+  rewrite_wheel(header + "10,0,0,0,0,0,0\n", 2);
+  expect_open_fails("num_wheel_odom is 2 but wheel_odom.csv holds 1");
+  rewrite_wheel(header + "10,0,0,0,0,0,0\n10,0,0,0,0,0,0\n", 2);
+  expect_open_fails("wheel_odom.csv:3: stamp_ns is not strictly increasing");
+  rewrite_wheel(header + "10,0,nan,0,0,0,0\n", 1);
+  expect_open_fails("wheel_odom.csv:2: invalid or non-finite");
+  rewrite_wheel(header + "10,0,0,0,0,0\n", 1);
+  expect_open_fails("wheel_odom.csv:2: expected 7 columns");
+  rewrite_wheel("stamp_ns,acc_x,acc_y,acc_z,gyro_x,gyro_y,gyro_z\n", std::nullopt);
+  expect_open_fails("wheel_odom.csv:1: header must be 'stamp_ns,vx,vy,vz,wx,wy,wz'");
+
+  // meta.json counts wheel samples: the file is required
+  rewrite_wheel(header, 0);
+  fs::remove(dir_ / "wheel_odom.csv");
+  expect_open_fails("wheel_odom.csv: cannot open (meta.json has num_wheel_odom)");
+  rewrite_wheel(header, std::nullopt);
+  nlohmann::json meta = nlohmann::json::parse(std::ifstream(dir_ / "meta.json"));
+  meta["num_wheel_odom"] = -1;
+  std::ofstream(dir_ / "meta.json", std::ios::trunc) << meta.dump();
+  expect_open_fails("negative count");
 }
