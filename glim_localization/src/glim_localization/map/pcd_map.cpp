@@ -239,6 +239,11 @@ double read_float(const char* bytes, size_t size) {
   return value;
 }
 
+/// gtsam_points::estimate_covariances takes the point count as an int.
+bool fits_covariance_estimation(size_t num_points) {
+  return num_points <= static_cast<size_t>(std::numeric_limits<int>::max());
+}
+
 bool read_binary(std::ifstream& ifs, const std::string& path, const PcdHeader& header, PcdPoints& points) {
   // point_bytes >= 12 (x, y and z). Compare with the file before allocating, so a huge POINTS cannot exhaust memory.
   const auto remaining = remaining_bytes(ifs);
@@ -562,6 +567,12 @@ bool build_pcd_submaps(const PcdPoints& points, const PcdMapParams& params, Load
     spdlog::error("{} points are fewer than k_neighbors {}", cloud->size(), params.k_neighbors);
     return false;
   }
+  if (!fits_covariance_estimation(cloud->size())) {
+    spdlog::error("{} points after downsampling exceed the {} points that covariance estimation takes at once; use a larger voxel size "
+                  "or split the cloud",
+                  cloud->size(), std::numeric_limits<int>::max());
+    return false;
+  }
 
   const auto covs = gtsam_points::estimate_covariances(cloud->points, cloud->size(), params.k_neighbors, params.num_threads);
 
@@ -621,6 +632,11 @@ bool recompute_covariances(LoadedSubmaps& submaps, int k_neighbors, int num_thre
   for (const auto& submap : submaps) {
     if (!submap.points || submap.points->size() < static_cast<size_t>(k_neighbors)) {
       spdlog::error("submap {} has {} points, fewer than k_neighbors {}", submap.id, submap.points ? submap.points->size() : 0, k_neighbors);
+      return false;
+    }
+    if (!fits_covariance_estimation(submap.points->size())) {
+      spdlog::error("submap {} has {} points, more than the {} that covariance estimation takes at once", submap.id, submap.points->size(),
+                    std::numeric_limits<int>::max());
       return false;
     }
     auto cloud = gtsam_points::PointCloudCPU::clone(*submap.points);

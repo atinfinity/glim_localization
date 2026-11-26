@@ -46,7 +46,8 @@ std::string check_pcd_map_params(const PcdMapParams& params);
 /// coordinates; it fails if the cloud is too wide for the voxel grid (about 2^21 voxels per axis).
 /// Covariances are estimated over the whole cloud first, so points near a tile edge use neighbours across it.
 /// Each non-empty tile becomes a submap with identity rotation, its origin at the centroid of its points,
-/// and ids 0, 1, ... in (x, y) cell order. Fails if the cloud has fewer than k_neighbors points.
+/// and ids 0, 1, ... in (x, y) cell order. Fails if the cloud has fewer than k_neighbors points,
+/// or more than INT_MAX after downsampling (`gtsam_points::estimate_covariances` takes an int count).
 /// On failure, `submaps` is unchanged.
 bool build_pcd_submaps(const PcdPoints& points, const PcdMapParams& params, LoadedSubmaps& submaps);
 
@@ -55,7 +56,8 @@ bool build_pcd_submaps(const PcdPoints& points, const PcdMapParams& params, Load
 /// in its origin frame; the result equals the world-frame estimate rotated into that frame.
 /// The clouds are copied, so clouds shared elsewhere are not changed. Points and the other attributes (normals,
 /// intensities, times) are kept as they are; normals are not re-estimated, and nothing in this package reads them.
-/// Fails if `k_neighbors` < kMinPcdKNeighbors, `num_threads` < 1, or a submap has fewer than `k_neighbors` points.
+/// Fails if `k_neighbors` < kMinPcdKNeighbors, `num_threads` < 1, or a submap has fewer than `k_neighbors` points
+/// or more than INT_MAX.
 /// On failure, `submaps` is unchanged.
 bool recompute_covariances(LoadedSubmaps& submaps, int k_neighbors, int num_threads);
 
