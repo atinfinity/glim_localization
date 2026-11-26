@@ -479,3 +479,113 @@ def test_clock_offset_with_relative_mode_is_refused(tmp_path, capsys):
     write_bag(bag3, [(BASE, msg)], imu_stream(), StoragePlugin.SQLITE3)
     assert bag_to_replay.main([str(bag3), "--out", str(tmp_path / "o3"), "--point-clock-offset", "0.5"]) == 1
     assert "no time field" in capsys.readouterr().err
+
+
+def make_odom(stamp_ns, v=(1.0, 0.0, 0.0), w=(0.0, 0.0, 0.5), child="base_link"):
+    Odometry = TS.types["nav_msgs/msg/Odometry"]
+    PoseCov = TS.types["geometry_msgs/msg/PoseWithCovariance"]
+    Pose = TS.types["geometry_msgs/msg/Pose"]
+    Point = TS.types["geometry_msgs/msg/Point"]
+    TwistCov = TS.types["geometry_msgs/msg/TwistWithCovariance"]
+    Twist = TS.types["geometry_msgs/msg/Twist"]
+    return Odometry(
+        header=Header(stamp=make_time(stamp_ns), frame_id="odom"),
+        child_frame_id=child,
+        pose=PoseCov(pose=Pose(position=Point(x=0.0, y=0.0, z=0.0), orientation=Quat(x=0.0, y=0.0, z=0.0, w=1.0)), covariance=np.zeros(36)),
+        twist=TwistCov(twist=Twist(linear=Vec3(x=v[0], y=v[1], z=v[2]), angular=Vec3(x=w[0], y=w[1], z=w[2])), covariance=np.zeros(36)),
+    )
+
+
+def wheel_bag(tmp_path, odoms, topic="/wheel_odom"):
+    msg, _, _ = layout("ouster", 0)
+    bag = tmp_path / "bag"
+    extra = [(topic, "nav_msgs/msg/Odometry", ns, m) for ns, m in odoms]
+    write_bag(bag, [(BASE, msg)], imu_stream(), StoragePlugin.SQLITE3, extra)
+    return bag
+
+
+def read_wheel(out):
+    rows = (out / "wheel_odom.csv").read_text().splitlines()
+    assert rows[0] == bag_to_replay.WHEEL_ODOM_HEADER
+    return [(int(r.split(",")[0]), [float(x) for x in r.split(",")[1:]]) for r in rows[1:]]
+
+
+def test_wheel_odom_is_optional(tmp_path):
+    bag = wheel_bag(tmp_path, [(BASE, make_odom(BASE))])
+    out = tmp_path / "out"
+    assert bag_to_replay.main([str(bag), "--out", str(out)]) == 0
+    meta = json.loads((out / "meta.json").read_text())
+    assert not (out / "wheel_odom.csv").exists()
+    assert "num_wheel_odom" not in meta
+    assert meta["conversion"]["wheel_odom"] is None
+
+
+def test_wheel_odom_is_written_as_the_ros_nodes_take_it(tmp_path):
+    ms = 1_000_000
+    odoms = [
+        (BASE + 20 * ms, make_odom(BASE + 20 * ms, v=(2.0, 0.1, 0.0))),  # out of order in the bag
+        (BASE, make_odom(BASE)),
+        (BASE + 10 * ms, make_odom(BASE + 10 * ms)),
+        (BASE + 10 * ms, make_odom(BASE + 10 * ms, v=(9.0, 0.0, 0.0))),  # repeated stamp: the first is kept
+        (BASE + 30 * ms, make_odom(BASE + 30 * ms, child="odom")),
+        (BASE + 40 * ms, make_odom(0)),
+        (BASE + 50 * ms, make_odom(BASE + 50 * ms, w=(0.0, float("nan"), 0.0))),
+    ]
+    bag = wheel_bag(tmp_path, odoms)
+    out = tmp_path / "out"
+    args = [str(bag), "--out", str(out), "--wheel-odom-topic", "/wheel_odom", "--wheel-odom-time-offset", "-0.002"]
+    assert bag_to_replay.main(args) == 0
+    rows = read_wheel(out)
+    assert [ns for ns, _ in rows] == [BASE - 2 * ms, BASE + 8 * ms, BASE + 18 * ms]
+    assert rows[1][1] == [1.0, 0.0, 0.0, 0.0, 0.0, 0.5]
+    assert rows[2][1] == [2.0, 0.1, 0.0, 0.0, 0.0, 0.5]
+    meta = json.loads((out / "meta.json").read_text())
+    assert meta["num_wheel_odom"] == 3
+    wheel = meta["conversion"]["wheel_odom"]
+    assert (wheel["topic"], wheel["child_frame_id"], wheel["time_offset_s"]) == ("/wheel_odom", "base_link", -0.002)
+    assert wheel["counts"] == {
+        "received": 7,
+        "child_frame_mismatch": 1,
+        "zero_stamp": 1,
+        "non_finite": 1,
+        "negative_stamp": 0,
+        "duplicate_stamp": 1,
+    }
+
+    # '' accepts any child_frame_id
+    out2 = tmp_path / "out2"
+    assert bag_to_replay.main([str(bag), "--out", str(out2), "--wheel-odom-topic", "/wheel_odom", "--wheel-odom-child-frame", ""]) == 0
+    assert len(read_wheel(out2)) == 4
+
+
+def test_wheel_odom_errors(tmp_path, capsys):
+    bag = wheel_bag(tmp_path, [(BASE, make_odom(BASE, child="odom"))])
+    # Nothing usable: the counts and a hint
+    assert bag_to_replay.main([str(bag), "--out", str(tmp_path / "a"), "--wheel-odom-topic", "/wheel_odom"]) == 1
+    err = capsys.readouterr().err
+    assert "no usable wheel odometry" in err and "child_frame_mismatch" in err and "--wheel-odom-child-frame" in err
+    # A missing topic and a topic of another type
+    assert bag_to_replay.main([str(bag), "--out", str(tmp_path / "b"), "--wheel-odom-topic", "/odom"]) == 1
+    assert "no topic /odom" in capsys.readouterr().err
+    assert bag_to_replay.main([str(bag), "--out", str(tmp_path / "c"), "--wheel-odom-topic", "/imu"]) == 1
+    assert "expected nav_msgs/msg/Odometry" in capsys.readouterr().err
+    # Bad arguments
+    assert bag_to_replay.main([str(bag), "--out", str(tmp_path / "d"), "--wheel-odom-child-frame", "base_link"]) == 2
+    assert bag_to_replay.main([str(bag), "--out", str(tmp_path / "e"), "--wheel-odom-time-offset", "0.1"]) == 2
+    assert "need --wheel-odom-topic" in capsys.readouterr().err
+    for bad in ("nan", "inf", "2e9"):
+        args = [str(bag), "--out", str(tmp_path / "f"), "--wheel-odom-topic", "/wheel_odom", f"--wheel-odom-time-offset={bad}"]
+        assert bag_to_replay.main(args) == 2
+    # A negative stamp after the offset is excluded (a stamp of 0.5 s, minus 1 s)
+    early = wheel_bag(tmp_path / "early", [(BASE, make_odom(500_000_000))])
+    args = [str(early), "--out", str(tmp_path / "g"), "--wheel-odom-topic", "/wheel_odom", "--wheel-odom-time-offset=-1"]
+    assert bag_to_replay.main(args) == 1
+    assert "negative_stamp" in capsys.readouterr().err
+    # A negative header stamp is counted, not a conversion error, and an offset can bring it above 0
+    negative = wheel_bag(tmp_path / "negative", [(BASE, make_odom(BASE)), (BASE, make_odom(-500_000_000))])
+    args = [str(negative), "--out", str(tmp_path / "h"), "--wheel-odom-topic", "/wheel_odom"]
+    assert bag_to_replay.main(args) == 0
+    assert json.loads((tmp_path / "h" / "meta.json").read_text())["conversion"]["wheel_odom"]["counts"]["negative_stamp"] == 1
+    assert bag_to_replay.main(args[:2] + [str(tmp_path / "i")] + args[3:] + ["--wheel-odom-time-offset", "1"]) == 0
+    assert [ns for ns, _ in read_wheel(tmp_path / "i")] == [500_000_000, BASE + 1_000_000_000]
+    assert bag_to_replay.main([str(bag), "--out", str(tmp_path / "j"), "--wheel-odom-topic", ""]) == 2

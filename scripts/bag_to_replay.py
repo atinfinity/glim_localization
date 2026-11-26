@@ -30,6 +30,14 @@ conversion.point_clock_offset. estimate assumes that the header stamps the first
 driver that stamps the end of the scan gives a constant error of up to one scan period,
 which the residual cannot show (it is near 0 by construction); only a known offset avoids it.
 
+Wheel odometry (optional, --wheel-odom-topic): the twist of nav_msgs/Odometry messages, in their
+child_frame_id, is written to wheel_odom.csv, as the ROS nodes take it (wheel_odom_input.hpp): a
+message with another child_frame_id than --wheel-odom-child-frame (default base_link; '' accepts any),
+a zero header stamp or a non-finite value is excluded and counted. The stamp is the header stamp plus
+--wheel-odom-time-offset; a stamp that is negative after the offset is excluded and counted. A
+repeated stamp keeps the first message. The pose and the covariances are
+not used. The frame must be the base of wheel_odom_T_imu_base in the odometry config.
+
 Exit codes: 0 ok, 1 conversion failed, 2 bad arguments.
 """
 import argparse
@@ -44,6 +52,7 @@ import numpy as np
 
 FORMAT_NAME = "glim_localization_replay"
 IMU_HEADER = "stamp_ns,acc_x,acc_y,acc_z,gyro_x,gyro_y,gyro_z"
+WHEEL_ODOM_HEADER = "stamp_ns,vx,vy,vz,wx,wy,wz"
 TIME_FIELD_NAMES = ("t", "time", "time_stamp", "timestamp")
 BIN_HEADER = struct.Struct("<4sIqIIII")  # magic, version, stamp_ns, num_points, flags, point_step, reserved
 FLAG_POINT_TIME = 1 << 0
@@ -54,6 +63,7 @@ POINT_FIELD_DTYPES = {1: "i1", 2: "u1", 3: "i2", 4: "u2", 5: "i4", 6: "u4", 7: "
 UINT32, FLOAT32, FLOAT64 = 6, 7, 8
 POINTCLOUD2 = "sensor_msgs/msg/PointCloud2"
 IMU = "sensor_msgs/msg/Imu"
+ODOMETRY = "nav_msgs/msg/Odometry"
 
 
 # In absolute mode, the first point time must be near the header stamp. Drivers differ by a fraction of a scan.
@@ -245,6 +255,16 @@ class Converter:
         self.has_time_field = None
         self.frame_stamps = set()
         self.imu_rows = {}
+        self.wheel_rows = {}
+        self.wheel_counts = {
+            "received": 0,
+            "child_frame_mismatch": 0,
+            "zero_stamp": 0,
+            "non_finite": 0,
+            "negative_stamp": 0,
+            "duplicate_stamp": 0,
+        }
+        self.wheel_offset_ns = int(round(args.wheel_odom_time_offset * 1e9))
         self.counts = {
             "frames_written": 0,
             "frames_empty": 0,
@@ -381,6 +401,48 @@ class Converter:
             return
         self.imu_rows[stamp_ns] = values
 
+    def add_wheel_odom(self, msg):
+        """Take the twist as the ROS nodes do (convert_wheel_odom in wheel_odom_input.hpp)."""
+        counts = self.wheel_counts
+        counts["received"] += 1
+        if self.args.wheel_odom_child_frame and msg.child_frame_id != self.args.wheel_odom_child_frame:
+            counts["child_frame_mismatch"] += 1
+            return
+        if msg.header.stamp.sec == 0 and msg.header.stamp.nanosec == 0:
+            counts["zero_stamp"] += 1
+            return
+        twist = msg.twist.twist
+        values = np.array(
+            [twist.linear.x, twist.linear.y, twist.linear.z, twist.angular.x, twist.angular.y, twist.angular.z],
+            dtype=np.float64,
+        )
+        if not np.isfinite(values).all():
+            counts["non_finite"] += 1
+            return
+        # Not stamp_to_ns: a negative header stamp is a time the ROS nodes accept, and the offset may make it positive
+        stamp_ns = int(msg.header.stamp.sec) * 1_000_000_000 + int(msg.header.stamp.nanosec) + self.wheel_offset_ns
+        if stamp_ns < 0:
+            counts["negative_stamp"] += 1
+            return
+        if stamp_ns in self.wheel_rows:
+            counts["duplicate_stamp"] += 1
+            return
+        self.wheel_rows[stamp_ns] = values
+
+    def write_wheel_odom(self):
+        if not self.wheel_rows:
+            counts = {k: v for k, v in self.wheel_counts.items() if v}
+            raise ConversionError(
+                f"no usable wheel odometry messages on {self.args.wheel_odom_topic} ({counts or 'none received'}); "
+                "check --wheel-odom-child-frame"
+            )
+        stamps = sorted(self.wheel_rows)
+        with open(os.path.join(self.args.out, "wheel_odom.csv"), "w") as handle:
+            handle.write(WHEEL_ODOM_HEADER + "\n")
+            for stamp in stamps:
+                handle.write(f"{stamp}," + ",".join(f"{v:.17g}" for v in self.wheel_rows[stamp]) + "\n")
+        return len(stamps)
+
     def write_imu(self):
         if not self.imu_rows:
             raise ConversionError("no usable IMU messages")
@@ -421,12 +483,17 @@ def select_topics(connections, args):
 
     points = choose(clouds, args.points_topic, "point cloud")
     imu = choose(imus, args.imu_topic, "IMU")
-    for connection, expected in ((points, POINTCLOUD2), (imu, IMU)):
+    checks = [(points, POINTCLOUD2), (imu, IMU)]
+    wheel = None
+    if args.wheel_odom_topic:
+        wheel = choose([], args.wheel_odom_topic, "wheel odometry")
+        checks.append((wheel, ODOMETRY))
+    for connection, expected in checks:
         if connection.msgtype == "livox_ros_driver2/msg/CustomMsg" or connection.msgtype == "livox_ros_driver/msg/CustomMsg":
             raise ConversionError("Livox CustomMsg is not supported; use the PointCloud2 output of the driver")
         if connection.msgtype != expected:
             raise ConversionError(f"topic {connection.topic} has type {connection.msgtype}, expected {expected}")
-    return points, imu
+    return points, imu, wheel
 
 
 def convert(args):
@@ -444,13 +511,16 @@ def convert(args):
     converter = Converter(args)
     try:
         with Reader(args.bag) as reader:
-            points_connection, imu_connection = select_topics(reader.connections, args)
-            for connection, _, raw in reader.messages(connections=[points_connection, imu_connection]):
+            points_connection, imu_connection, wheel_connection = select_topics(reader.connections, args)
+            connections = [points_connection, imu_connection] + ([wheel_connection] if wheel_connection else [])
+            for connection, _, raw in reader.messages(connections=connections):
                 msg = typestore.deserialize_cdr(raw, connection.msgtype)
                 if connection is points_connection:
                     converter.add_frame(msg)
-                else:
+                elif connection is imu_connection:
                     converter.add_imu(msg)
+                else:
+                    converter.add_wheel_odom(msg)
     except ConversionError:
         raise
     except Exception as error:  # rosbags raises its own exception types for unreadable bags
@@ -463,6 +533,7 @@ def convert(args):
     if args.point_clock_offset is not None:
         converter.check_clock_residual_spread()
     acc_scale, num_imu, median_acc = converter.write_imu()
+    num_wheel_odom = converter.write_wheel_odom() if wheel_connection else None
 
     if args.gt:
         if not os.path.isfile(args.gt):
@@ -478,7 +549,15 @@ def convert(args):
         "acc_scale": acc_scale,
         "imu_median_acc_norm_before_scale": median_acc,
         "excluded": converter.counts,
+        "wheel_odom": None,
     }
+    if wheel_connection:
+        conversion["wheel_odom"] = {
+            "topic": wheel_connection.topic,
+            "child_frame_id": args.wheel_odom_child_frame,
+            "time_offset_s": args.wheel_odom_time_offset,
+            "counts": converter.wheel_counts,
+        }
     meta = {
         "format": FORMAT_NAME,
         "version": 1,
@@ -486,8 +565,10 @@ def convert(args):
         "per_point_time": bool(converter.has_time_field),
         "num_frames": converter.counts["frames_written"],
         "num_imu": num_imu,
-        "conversion": conversion,
     }
+    if num_wheel_odom is not None:
+        meta["num_wheel_odom"] = num_wheel_odom
+    meta["conversion"] = conversion
     with open(os.path.join(out, "meta.json"), "w") as handle:
         json.dump(meta, handle, indent=2)
         handle.write("\n")
@@ -512,6 +593,17 @@ def parse_args(argv):
         "point time is more than 1 s from the header stamp is rejected",
     )
     parser.add_argument("--intensity-field", default="intensity", help="intensity field name (default: intensity)")
+    parser.add_argument("--wheel-odom-topic", help="nav_msgs/Odometry topic to write to wheel_odom.csv (default: none)")
+    parser.add_argument(
+        "--wheel-odom-child-frame",
+        help="with --wheel-odom-topic: the child_frame_id to accept, the base of wheel_odom_T_imu_base "
+        "(default base_link; '' accepts any)",
+    )
+    parser.add_argument(
+        "--wheel-odom-time-offset",
+        type=float,
+        help="with --wheel-odom-topic: seconds added to the header stamps (default 0)",
+    )
     parser.add_argument("--gt", help="ground truth in TUM format (T_world_imu) to copy into the dataset as traj_gt.txt")
     return parser.parse_args(argv)
 
@@ -541,6 +633,19 @@ def main(argv=None):
     if args.acc_scale is not None and not (math.isfinite(args.acc_scale) and args.acc_scale > 0):
         sys.stderr.write("error: --acc-scale must be positive\n")
         return 2
+    if args.wheel_odom_topic is not None and not args.wheel_odom_topic.strip():
+        sys.stderr.write("error: --wheel-odom-topic is empty\n")
+        return 2
+    if not args.wheel_odom_topic and (args.wheel_odom_child_frame is not None or args.wheel_odom_time_offset is not None):
+        sys.stderr.write("error: --wheel-odom-child-frame and --wheel-odom-time-offset need --wheel-odom-topic\n")
+        return 2
+    if args.wheel_odom_child_frame is None:
+        args.wheel_odom_child_frame = "base_link"
+    if args.wheel_odom_time_offset is None:
+        args.wheel_odom_time_offset = 0.0
+    if not (math.isfinite(args.wheel_odom_time_offset) and abs(args.wheel_odom_time_offset) <= 1e9):
+        sys.stderr.write("error: --wheel-odom-time-offset must be finite and at most 1e9 s\n")
+        return 2
     if args.point_clock_offset is not None:
         error = validate_point_clock_offset(args)
         if error:
@@ -558,6 +663,9 @@ def main(argv=None):
     conversion = meta["conversion"]
     print(f"wrote {meta['num_frames']} frames and {meta['num_imu']} IMU samples to {args.out}")
     print(f"per-point time: {conversion['time_field']}; excluded: {conversion['excluded']}")
+    wheel = conversion["wheel_odom"]
+    if wheel:
+        print(f"wrote {meta['num_wheel_odom']} wheel odometry samples from {wheel['topic']}; counts: {wheel['counts']}")
     offset = conversion["point_clock_offset"]
     if offset:
         residual = offset["residual_s"]
