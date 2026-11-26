@@ -57,7 +57,8 @@ struct LocalizationPublisherParams
   /// Pose of the IMU in the base frame. The estimate is of the IMU, so T_map_base = T_map_imu *
   /// inverse(T_base_imu)
   Eigen::Isometry3d T_base_imu = Eigen::Isometry3d::Identity();
-  /// Minimum time between /diagnostics messages [s]. A change of level is published at once
+  /// Minimum time between /diagnostics messages [s]. A change of level is published at once, and a
+  /// clock that steps back restarts the period
   double diagnostics_period = 1.0;
   std::string diagnostics_name = "glim_localization: localization";
   std::string diagnostics_hardware_id = "glim_localization";

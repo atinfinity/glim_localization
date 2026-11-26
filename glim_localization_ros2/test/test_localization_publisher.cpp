@@ -16,6 +16,7 @@
 #include "diagnostic_msgs/msg/diagnostic_array.hpp"
 #include "geometry_msgs/msg/pose_with_covariance_stamped.hpp"
 #include "nav_msgs/msg/odometry.hpp"
+#include "rosgraph_msgs/msg/clock.hpp"
 #include "tf2_msgs/msg/tf_message.hpp"
 #include "tf2_ros/transform_broadcaster.h"
 
@@ -117,9 +118,10 @@ class Fixture {
 public:
   explicit Fixture(
     const LocalizationPublisherParams & params,
-    const std::string & name = "publisher_test")
+    const std::string & name = "publisher_test",
+    const rclcpp::NodeOptions & options = rclcpp::NodeOptions())
   {
-    node_ = std::make_shared<rclcpp::Node>(name);
+    node_ = std::make_shared<rclcpp::Node>(name, options);
     observer_ = std::make_shared<rclcpp::Node>(name + "_observer");
     executor_.add_node(node_);
     executor_.add_node(observer_);
@@ -494,6 +496,52 @@ TEST(LocalizationPublisher, DiagnosticsWarnOnDegradedAndErrorOnLost) {
     ASSERT_EQ(fixture.diagnostics[i].status.size(), 1u);
     EXPECT_EQ(fixture.diagnostics[i].status[0].level, cases[i].second) << "case " << i;
   }
+}
+
+// Same-level diagnostics wait for diagnostics_period, a change of level is published at once, and a
+// sim clock that steps back restarts the period.
+TEST(LocalizationPublisher, DiagnosticsAreRateLimitedAndRestartWhenTheClockStepsBack) {
+  LocalizationPublisherParams params;
+  params.diagnostics_period = 1.0;
+  Fixture fixture(params, "publisher_diag_rate",
+    rclcpp::NodeOptions().parameter_overrides({rclcpp::Parameter("use_sim_time", true)}));
+  const auto clock_pub = fixture.observer_->create_publisher<rosgraph_msgs::msg::Clock>("/clock",
+      rclcpp::QoS(10));
+  ASSERT_TRUE(fixture.spin_until([&] {return clock_pub->get_subscription_count() >= 1;}));
+  fixture.wait_for_discovery(1);
+  // Publish /clock until the publisher's node sees it
+  const auto set_clock = [&](double seconds) {
+      rosgraph_msgs::msg::Clock msg;
+      msg.clock = to_msg(seconds);
+      const rclcpp::Time expected(msg.clock, RCL_ROS_TIME);
+      return fixture.spin_until([&] {
+          clock_pub->publish(msg);
+          return fixture.node_->now() == expected;
+        });
+    };
+  const auto settle = [&](size_t expected) {
+      fixture.spin_until([&] {return fixture.diagnostics.size() >= expected;}, 2s);
+      fixture.spin_for(200ms);
+      return fixture.diagnostics.size();
+    };
+
+  ASSERT_TRUE(set_clock(10.0));
+  fixture.publisher->on_status(frame_status(0, LocalizationState::TRACKING));
+  fixture.publisher->on_status(frame_status(1, LocalizationState::TRACKING));
+  EXPECT_EQ(settle(1), 1u) << "the same level within the period is not published";
+  fixture.publisher->on_status(frame_status(2, LocalizationState::DEGRADED));
+  fixture.publisher->on_status(frame_status(3, LocalizationState::DEGRADED));
+  EXPECT_EQ(settle(2), 2u) << "a change of level is published at once";
+  ASSERT_TRUE(set_clock(11.5));
+  fixture.publisher->on_status(frame_status(4, LocalizationState::DEGRADED));
+  EXPECT_EQ(settle(3), 3u) << "the same level after the period is published";
+  ASSERT_TRUE(set_clock(5.0));
+  fixture.publisher->on_status(frame_status(5, LocalizationState::DEGRADED));
+  fixture.publisher->on_status(frame_status(6, LocalizationState::DEGRADED));
+  ASSERT_EQ(settle(4), 4u) << "a clock that steps back restarts the period";
+  EXPECT_EQ(rclcpp::Time(fixture.diagnostics[3].header.stamp).nanoseconds(), 5000000000LL);
+  EXPECT_EQ(fixture.diagnostics[3].status.at(0).level,
+    diagnostic_msgs::msg::DiagnosticStatus::WARN);
 }
 
 // The result of the initial pose search reaches the status message and the diagnostics.

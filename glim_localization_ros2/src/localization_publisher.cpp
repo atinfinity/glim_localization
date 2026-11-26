@@ -445,7 +445,8 @@ void LocalizationPublisher::publish_diagnostics(const LocalizationStatus & msg)
   const uint8_t level = diagnostic_level(msg.state);
   const auto now = clock_->now();
   const bool changed = !last_diag_level_ || *last_diag_level_ != level;
-  if (!changed && last_diag_time_.nanoseconds() != 0 &&
+  // A clock that stepped back (a sim clock restarted) restarts the period
+  if (!changed && last_diag_time_.nanoseconds() != 0 && now >= last_diag_time_ &&
     (now - last_diag_time_).seconds() < params_.diagnostics_period)
   {
     return;
