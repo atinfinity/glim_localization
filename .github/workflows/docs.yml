@@ -50,6 +50,13 @@ jobs:
           cache-dependency-path: requirements-docs.txt
       - name: Install Zensical
         run: python -m pip install -r requirements-docs.txt
+      # ci.yml skips a change to only the site inputs, so the tests that read them run here too: the
+      # home page generator, and the docs-only detector, which checks the trigger paths of this file.
+      # pytest is pinned as in scripts/requirements.txt; PyYAML comes from requirements-docs.txt.
+      - name: Test the generator and the docs-only detector
+        run: |
+          python -m pip install pytest==9.2.0
+          python -m pytest -q -p no:cacheprovider scripts/tests/test_docs_site_index.py scripts/tests/test_is_docs_only.py
       # --strict aborts the build on any warning, for example a broken link or anchor.
       - name: Build the site
         run: |
