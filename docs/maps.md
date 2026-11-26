@@ -2,6 +2,8 @@
 
 Localization takes either a GLIM dump directory (from a GLIM mapping run) or a compiled map. `map_compiler` writes a compiled map: a slimmed dump without frame data plus a `map_index.json` with the submap poses and bounding boxes. It is also the way to build a map from a PCD or PLY file, and it can export a 2D occupancy grid for Nav2.
 
+Which input to keep as the master copy, a GLIM dump or a point cloud, and what each one costs, is in [Which map to keep](getting_started.md#which-map-to-keep).
+
 The commands run inside the container (see [Build and test](build.md#build-and-test)). Put your input under the host directory `out/`, which the container sees as `/ws/out`.
 
 ```bash
