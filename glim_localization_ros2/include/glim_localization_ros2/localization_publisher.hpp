@@ -104,10 +104,11 @@ public:
 
   /// Publish ~/status and /diagnostics, and the pending frame if the status is for it (frame_id >=
   /// 0 and the same stamp). A status that is not for a frame (frame_id < 0, as emitted when a reset
-  /// is applied, or LOST when the initial pose search then rejects the pose) carries stamp = the reset's min_stamp, which may be 0. It is stamped with the last
-  /// accepted frame stamp, or with the current time if there is none, and never used as a pose
-  /// time. Such a status drops the pending frame, which is from before the reset. An external reset
-  /// re-anchors odom->base at the next frame.
+  /// is applied, or LOST when the initial pose search then rejects the pose) carries stamp = the
+  /// reset's min_stamp, which may be 0. It is stamped with the last accepted frame stamp, or with
+  /// the current time if there is none, and never used as a pose time. Such a status drops the
+  /// pending frame, which is from before the reset. An external reset re-anchors odom->base at the
+  /// next frame.
   void on_status(const glim_localization::LocalizationStatus & status);
 
   /// Frames for which external odom->base was not available, so no map->odom was published (for
