@@ -1,6 +1,7 @@
 // The yaw search of the initial pose in the odometry: a large yaw error in the given pose, with and without the search.
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <filesystem>
 #include <functional>
 #include <iostream>
@@ -205,6 +206,27 @@ TEST_F(InitYawSearchTest, ConfiguredPoseWithLargeYawErrorConverges) {
     EXPECT_LT(stats.max_translation, kMaxTranslationError);
     EXPECT_LT(stats.max_rotation_deg, kMaxRotationErrorDeg);
   }
+}
+
+TEST_F(InitYawSearchTest, OffsetPoseWithinTheBoundConverges) {
+  // 1.5 m and 90 deg off, with a 2.5 m bound: the match moves 1.5 m, within it
+  auto p = params(true);
+  p.estimate_init_state = false;
+  p.init_T_world_imu = perturbed_pose(0.0, 90.0 * kDeg);
+  p.init_T_world_imu.translation() = synthetic_T_world_imu(0.0).translation() + Eigen::Vector3d(1.5, 0.0, 0.0);
+  p.init_v_world_imu.setZero();
+  p.init_yaw_search.max_translation = 2.5;
+  OdometryEstimationLocalizationCPU odometry(p, *map_);
+
+  size_t imu_cursor = 0;
+  const auto stats = run(odometry, imu_cursor, 0, 30);
+  const auto status = odometry.status();
+  print("search, 1.5 m and 90 deg off, bound 2.5 m", stats, status);
+  EXPECT_EQ(status.init_search, InitSearchResult::ACCEPTED);
+  EXPECT_EQ(status.init_search_reason, InitSearchReason::NONE);
+  EXPECT_EQ(status.state, LocalizationState::TRACKING) << to_string(status.state);
+  EXPECT_LT(stats.last_translation, kMaxTranslationError);
+  EXPECT_LT(stats.last_rotation_deg, kMaxRotationErrorDeg);
 }
 
 TEST_F(InitYawSearchTest, CoarseStepStillReportsARunnerUp) {
@@ -518,6 +540,11 @@ TEST_F(InitYawSearchTest, InvalidParametersAreRejected) {
   p = params(true);
   p.init_yaw_search.step = 0.4 * kDeg;  // Below the 0.5 deg floor
   EXPECT_THROW(OdometryEstimationLocalizationCPU(p, *map_), std::invalid_argument);
+  for (const double max_translation : {-1.0, std::nan(""), std::numeric_limits<double>::infinity()}) {
+    p = params(true);
+    p.init_yaw_search.max_translation = max_translation;
+    EXPECT_THROW(OdometryEstimationLocalizationCPU(p, *map_), std::invalid_argument) << max_translation;
+  }
   // Validated also when disabled: a typo should not wait until someone turns the search on
   p = params(false);
   p.init_yaw_search.range = -1.0;
