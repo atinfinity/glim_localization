@@ -37,6 +37,7 @@ struct Arguments {
   std::optional<long long> max_frames;
   ReplayOptions::OnImuGap on_imu_gap = ReplayOptions::OnImuGap::ABORT;
   double min_tracking_ratio = 0.9;
+  std::optional<bool> wheel_odom;  // --wheel-odom on|off; unset keeps the config
 };
 
 struct UsageError : std::runtime_error {
@@ -47,7 +48,7 @@ void print_usage() {
   std::cerr << "usage: glim_localization_replay --data <dir> --config <dir> --map <dir> --out <dir>\n"
                "         [--init-pose x y z qx qy qz qw] [--init-vel vx vy vz] [--init-stamp <s>]\n"
                "         [--start <s>] [--end <s>] [--max-frames N] [--max-imu-gap <s>]\n"
-               "         [--on-imu-gap abort|reset] [--min-tracking-ratio <r>]\n"
+               "         [--on-imu-gap abort|reset] [--min-tracking-ratio <r>] [--wheel-odom on|off]\n"
                "\n"
                "  --data        replay dataset directory (meta.json, imu.csv, points/*.bin)\n"
                "  --config      GLIM-style config directory containing config.json\n"
@@ -64,6 +65,8 @@ void print_usage() {
                "                odometry reset itself from its last pose and velocity; a longer gap still exits 3\n"
                "  --min-tracking-ratio  fail with exit 1 if less than this share of the estimated frames, counted from the first\n"
                "                TRACKING frame, is TRACKING (default 0.9, 0 disables). A LOST frame always stops the run with exit 1\n"
+               "  --wheel-odom  on: feed wheel_odom.csv of the dataset (required) to the odometry, overriding wheel_odom.enabled\n"
+               "                of the config. off: do not use wheel odometry. Default: the config, fed if the dataset has the file\n"
                "\n"
                "exit codes: 0 ok, 1 runtime failure (also LOST or tracking ratio below the minimum), 2 bad arguments/config/map/initial pose,\n"
                "            3 invalid dataset, 4 finished without any pose\n";
@@ -129,6 +132,15 @@ Arguments parse_arguments(int argc, char** argv) {
         args.on_imu_gap = ReplayOptions::OnImuGap::RESET;
       } else {
         throw UsageError("--on-imu-gap must be abort or reset, got '" + value + "'");
+      }
+    } else if (option == "--wheel-odom") {
+      const std::string value = next(option);
+      if (value == "on") {
+        args.wheel_odom = true;
+      } else if (value == "off") {
+        args.wheel_odom = false;
+      } else {
+        throw UsageError("--wheel-odom must be on or off, got '" + value + "'");
       }
     } else if (option == "--min-tracking-ratio") {
       args.min_tracking_ratio = parse_double(option, next(option));
@@ -269,6 +281,17 @@ int main(int argc, char** argv) {
     options.on_imu_gap = args.on_imu_gap;
     options.imu_gap_reset_max = params.imu_gap_reset_max;
     check_imu_rate(dataset, options.max_imu_gap);
+    if (args.wheel_odom) {
+      if (*args.wheel_odom && (!dataset.has_wheel_odom() || dataset.wheel_odom().empty())) {
+        throw UsageError("--wheel-odom on needs wheel_odom.csv with samples in " + args.data);
+      }
+      params.wheel_odom.enabled = *args.wheel_odom;
+    }
+    // Fed only if both are there (ReplayRunner)
+    const bool wheel_odom_used = params.wheel_odom.enabled && dataset.has_wheel_odom() && !dataset.wheel_odom().empty();
+    if (params.wheel_odom.enabled && !wheel_odom_used) {
+      std::cerr << "warning: wheel odometry is enabled, but the dataset has no wheel_odom.csv samples; running without it\n";
+    }
 
     const auto map_begin = std::chrono::steady_clock::now();
     auto map = std::make_shared<MapManager>();
@@ -318,6 +341,7 @@ int main(int argc, char** argv) {
         {"map_max_submaps", params.map_factors.max_submaps},
         {"map_factor_weight", params.map_factor_weight},
         {"num_threads", params.num_threads},
+        {"wheel_odom", wheel_odom_used},
       };
       std::ofstream ofs(fs::path(args.out) / "replay_args.json", std::ios::trunc);
       if (!(ofs << json.dump(2) << "\n")) {

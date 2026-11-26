@@ -185,6 +185,40 @@ TEST_F(ReplayToolTest, RejectsBadArguments) {
   EXPECT_NE(std::system((quote(REPLAY_TOOL_PATH) + " --data x > /dev/null 2>&1").c_str()), 0);  // Missing options
 }
 
+TEST_F(ReplayToolTest, WheelOdometryOption) {
+  // Default: the config (disabled), so nothing is fed
+  ASSERT_EQ(run(init_pose_args()), 0);
+  EXPECT_FALSE(nlohmann::json::parse(std::ifstream(out_ / "replay_args.json")).at("effective").at("wheel_odom"));
+  EXPECT_FALSE(nlohmann::json::parse(std::ifstream(out_ / "summary.json")).contains("wheel_odom"));
+
+  ASSERT_EQ(run(init_pose_args() + " --wheel-odom on"), 0);
+  EXPECT_TRUE(nlohmann::json::parse(std::ifstream(out_ / "replay_args.json")).at("effective").at("wheel_odom"));
+  const auto summary = nlohmann::json::parse(std::ifstream(out_ / "summary.json"));
+  EXPECT_EQ(summary.at("wheel_odom").at("added"), 30);  // Every frame but the first
+  EXPECT_EQ(summary.at("wheel_odom").at("missing"), 0);
+  const auto frames = read_lines(out_ / "frames.csv");
+  ASSERT_EQ(frames.size(), 32u);
+  EXPECT_NE(frames[0].find(",num_wheel_fed,wheel"), std::string::npos);
+  EXPECT_EQ(frames[2].substr(frames[2].rfind(',') + 1), "added");
+
+  ASSERT_EQ(run(init_pose_args() + " --wheel-odom off"), 0);
+  EXPECT_FALSE(nlohmann::json::parse(std::ifstream(out_ / "replay_args.json")).at("effective").at("wheel_odom"));
+
+  EXPECT_EQ(run(init_pose_args() + " --wheel-odom maybe"), 2);
+  EXPECT_EQ(run(init_pose_args() + " --wheel-odom"), 2);
+  // on needs the file
+  const fs::path data = copy_data("no_wheel");
+  fs::remove(data / "wheel_odom.csv");
+  auto meta = nlohmann::json::parse(std::ifstream(data / "meta.json"));
+  meta.erase("num_wheel_odom");
+  std::ofstream(data / "meta.json", std::ios::trunc) << meta.dump();
+  EXPECT_EQ(run(init_pose_args() + " --wheel-odom on", data), 2);
+  EXPECT_EQ(run(init_pose_args() + " --wheel-odom off", data), 0);
+  // A header without samples is no wheel odometry either
+  std::ofstream(data / "wheel_odom.csv") << "stamp_ns,vx,vy,vz,wx,wy,wz\n";
+  EXPECT_EQ(run(init_pose_args() + " --wheel-odom on", data), 2);
+}
+
 TEST_F(ReplayToolTest, RejectsBadConfigAndMap) {
   EXPECT_EQ(run(init_pose_args(), fs::path(), *root_ / "no_such_config"), 2);
   EXPECT_EQ(run(init_pose_args(), fs::path(), fs::path(), *root_ / "no_such_map"), 2);
