@@ -40,9 +40,9 @@ export GLIM_R2_GAP_BAG="${fixture}/gap_bag"
 
 pkg_build="${base}/build/glim_localization_ros2"
 # Every gtest that must run. Add the name of a new test here.
-expected=(test_message_constants test_localization_publisher test_map_publisher test_gyro_buffer test_init_pose_delay)
+expected=(test_message_constants test_localization_publisher test_map_publisher test_gyro_buffer test_init_pose_delay test_wheel_odom_input)
 # Every launch test that must run (the file name without .py). Add the name of a new test here.
-expected_launch=(test_r1_extension test_r2_node test_r2_imu_gap test_launch_r1 test_launch_r1_live test_launch_r2 test_launch_r2_component)
+expected_launch=(test_r1_extension test_r2_node test_r2_imu_gap test_r2_wheel_odom test_launch_r1 test_launch_r1_live test_launch_r2 test_launch_r2_component)
 # Every ament linter test that must run (ament_lint_auto, see CONTRIBUTING.md), per package. cpplint_derived
 # is the cpplint run on the file derived from glim_ros2 (glim_localization_ros2/CMakeLists.txt). The
 # messages package has no C++ or Python sources, so only the linters of its CMake and XML files are

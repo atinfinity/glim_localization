@@ -42,6 +42,7 @@
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp_components/register_node_macro.hpp"
 #include "lifecycle_msgs/msg/state.hpp"
+#include "nav_msgs/msg/odometry.hpp"
 #include "rclcpp_lifecycle/lifecycle_node.hpp"
 #include "sensor_msgs/msg/imu.hpp"
 #include "sensor_msgs/msg/point_cloud2.hpp"
@@ -62,6 +63,7 @@
 #include "glim_localization_ros2/init_pose_delay.hpp"
 #include "glim_localization_ros2/localization_publisher.hpp"
 #include "glim_localization_ros2/map_publisher.hpp"
+#include "glim_localization_ros2/wheel_odom_input.hpp"
 
 namespace glim_localization_ros2
 {
@@ -72,6 +74,7 @@ namespace
 using CallbackReturn = rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn;
 using PoseMsg = geometry_msgs::msg::PoseWithCovarianceStamped;
 using ImuMsg = sensor_msgs::msg::Imu;
+using OdometryMsg = nav_msgs::msg::Odometry;
 using PointsMsg = sensor_msgs::msg::PointCloud2;
 using InitializeSrv = glim_localization_msgs::srv::Initialize;
 using TriggerSrv = std_srvs::srv::Trigger;
@@ -98,14 +101,15 @@ bool init_qos_profile(const std::string & name, rmw_qos_profile_t & profile)
   return true;
 }
 
-/// The QoS of glim_ros.<param_name> in config_ros.json ({profile, depth, durability, reliability,
+/// The QoS of <section>.<param_name> in config_ros.json ({profile, depth, durability, reliability,
 /// history}), as GlimROS reads it: the profile defaults to sensor_data, and default_qos is used
 /// when nothing is configured.
 rclcpp::QoS read_qos(
   const glim::Config & config, const std::string & param_name,
-  const rclcpp::Logger & logger, const std::optional<rclcpp::QoS> & default_qos = {})
+  const rclcpp::Logger & logger, const std::optional<rclcpp::QoS> & default_qos = {},
+  const std::string & section = "glim_ros")
 {
-  const std::vector<std::string> path = {"glim_ros", param_name};
+  const std::vector<std::string> path = {section, param_name};
   bool configured = false;
   rmw_qos_profile_t profile;
   const auto profile_name = config.param_nested<std::string>(path, "profile");
@@ -165,6 +169,9 @@ struct InputSettings
   double ang_scale = 1.0;
   std::string intensity_field;
   std::string ring_field;
+  // localization_ros: our own keys
+  std::string wheel_odom_topic;  ///< Empty: no wheel odometry subscription
+  WheelOdomInputParams wheel_odom;
 };
 
 }  // namespace
@@ -303,6 +310,16 @@ private:
     input_.intensity_field = config_sensors.param<std::string>("sensors", "intensity_field",
         "intensity");
     input_.ring_field = config_sensors.param<std::string>("sensors", "ring_field", "");
+    input_.wheel_odom_topic = config_ros.param<std::string>("localization_ros", "wheel_odom_topic",
+        "");
+    input_.wheel_odom.child_frame_id = config_ros.param<std::string>("localization_ros",
+        "wheel_odom_child_frame_id", "");
+    input_.wheel_odom.time_offset = config_ros.param<double>("localization_ros",
+        "wheel_odom_time_offset", 0.0);
+    if (!std::isfinite(input_.wheel_odom.time_offset)) {
+      RCLCPP_ERROR(get_logger(), "localization_ros.wheel_odom_time_offset must be finite");
+      return false;
+    }
     if (input_.imu_topic.empty() || input_.points_topic.empty()) {
       RCLCPP_ERROR(get_logger(),
           "glim_ros.imu_topic and glim_ros.points_topic must be set in config_ros.json");
@@ -313,6 +330,10 @@ private:
     default_imu_qos.get_rmw_qos_profile().depth = 1000;
     imu_qos_ = read_qos(config_ros, "imu_qos", get_logger(), default_imu_qos);
     points_qos_ = read_qos(config_ros, "points_qos", get_logger());
+    rclcpp::SensorDataQoS default_wheel_odom_qos;
+    default_wheel_odom_qos.get_rmw_qos_profile().depth = 200;
+    wheel_odom_qos_ = read_qos(config_ros, "wheel_odom_qos", get_logger(), default_wheel_odom_qos,
+        "localization_ros");
     publisher_params_ = read_publisher_params(config_ros);
     const MapPublisherParams map_publisher_params = read_map_publisher_params(config_ros);
 
@@ -387,6 +408,10 @@ private:
     acc_scale_ = input_.acc_scale;
     num_imu_ = 0;
     num_points_ = 0;
+    num_wheel_odom_ = 0;
+    num_wheel_odom_rejected_ = 0;
+    num_wheel_odom_dropped_ = 0;
+    wheel_odom_frame_logged_ = false;
     first_points_stamp_ = std::nan("");
 
     odometry_ = glim_localization::make_localization_odometry(*odometry_params_, map_);
@@ -406,6 +431,16 @@ private:
         [this](const PointsMsg::ConstSharedPtr msg) {on_points(*msg);});
     initial_pose_sub_ = subscribe<PoseMsg>("/initialpose", rclcpp::QoS(10),
         [this](const PoseMsg::ConstSharedPtr msg) {on_initial_pose(*msg);});
+    if (!input_.wheel_odom_topic.empty()) {
+      if (odometry_params_->wheel_odom.enabled) {
+        wheel_odom_sub_ = subscribe<OdometryMsg>(input_.wheel_odom_topic, *wheel_odom_qos_,
+            [this](const OdometryMsg::ConstSharedPtr msg) {on_wheel_odom(*msg);});
+      } else {
+        RCLCPP_WARN(get_logger(),
+            "localization_ros.wheel_odom_topic is set but odometry_estimation.wheel_odom_enabled "
+            "is false: not subscribing to %s", input_.wheel_odom_topic.c_str());
+      }
+    }
     // AsyncOdometryEstimation also queues its results for get_results(); the node publishes from
     // the callbacks, so drop them
     drain_timer_ = create_wall_timer(std::chrono::milliseconds(100), [this] {
@@ -445,6 +480,7 @@ private:
   {
     drain_timer_.reset();
     initial_pose_sub_.reset();
+    wheel_odom_sub_.reset();
     points_sub_.reset();
     imu_sub_.reset();
     // stops and joins the odometry thread, so no callback comes after this
@@ -461,6 +497,12 @@ private:
         num_imu_.load(), num_points_.load(), first_points_stamp_.load(), drops.frames_without_gyro,
           drops.unpaired_frames, drops.stale_frames,
         drops.tf_lookup_failures);
+      if (!input_.wheel_odom_topic.empty()) {
+        RCLCPP_INFO(get_logger(),
+            "stopping: wheel odometry received %zu, rejected %zu, dropped by the odometry %zu",
+            num_wheel_odom_.load(), num_wheel_odom_rejected_.load(),
+            num_wheel_odom_dropped_.load());
+      }
     }
     bridge_->detach();
     preprocessor_.reset();
@@ -477,6 +519,7 @@ private:
     odometry_params_.reset();
     imu_qos_.reset();
     points_qos_.reset();
+    wheel_odom_qos_.reset();
   }
 
   void on_imu(const ImuMsg & msg)
@@ -510,6 +553,33 @@ private:
       return;
     }
     async_odometry_->insert_imu(stamp, acc_scale_ * acc, angular_vel);
+  }
+
+  void on_wheel_odom(const OdometryMsg & msg)
+  {
+    if (!odometry_) {
+      return;
+    }
+    ++num_wheel_odom_;
+    WheelOdomSample sample;
+    const auto reject = convert_wheel_odom(msg, input_.wheel_odom, sample);
+    if (reject != WheelOdomReject::NONE) {
+      ++num_wheel_odom_rejected_;
+      RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 5000,
+          "rejecting wheel odometry on %s: %s (child_frame_id '%s', expected '%s')",
+          input_.wheel_odom_topic.c_str(), to_string(reject), msg.child_frame_id.c_str(),
+          input_.wheel_odom.child_frame_id.c_str());
+      return;
+    }
+    if (input_.wheel_odom.child_frame_id.empty() && !wheel_odom_frame_logged_.exchange(true)) {
+      RCLCPP_INFO(get_logger(),
+          "wheel odometry twist in child_frame_id '%s' (not checked: "
+          "localization_ros.wheel_odom_child_frame_id is empty)", msg.child_frame_id.c_str());
+    }
+    // Thread-safe; bypasses the frame queue, so the samples are buffered before their frame runs
+    if (!odometry_->insert_wheel_odom(sample.stamp, sample.linear_vel, sample.angular_vel)) {
+      ++num_wheel_odom_dropped_;
+    }
   }
 
   void on_points(const PointsMsg & msg)
@@ -628,6 +698,7 @@ private:
   InputSettings input_;
   std::optional<rclcpp::QoS> imu_qos_;
   std::optional<rclcpp::QoS> points_qos_;
+  std::optional<rclcpp::QoS> wheel_odom_qos_;
   LocalizationPublisherParams publisher_params_;
   std::unique_ptr<OdometryParams> odometry_params_;
   std::shared_ptr<const glim_localization::MapManager> map_;
@@ -642,6 +713,10 @@ private:
   std::atomic<size_t> num_imu_{0};
   std::atomic<size_t> num_points_{0};
   std::atomic<double> first_points_stamp_{0.0};
+  std::atomic<size_t> num_wheel_odom_{0};
+  std::atomic<size_t> num_wheel_odom_rejected_{0};  ///< By the conversion (frame, stamp, value)
+  std::atomic<size_t> num_wheel_odom_dropped_{0};   ///< By the odometry (not newer than the last)
+  std::atomic<bool> wheel_odom_frame_logged_{false};
   std::unique_ptr<glim::TimeKeeper> time_keeper_;
   std::unique_ptr<glim::CloudPreprocessor> preprocessor_;
   std::shared_ptr<glim_localization::OdometryEstimationLocalization> odometry_;
@@ -649,6 +724,7 @@ private:
   rclcpp::Subscription<ImuMsg>::SharedPtr imu_sub_;
   rclcpp::Subscription<PointsMsg>::SharedPtr points_sub_;
   rclcpp::Subscription<PoseMsg>::SharedPtr initial_pose_sub_;
+  rclcpp::Subscription<OdometryMsg>::SharedPtr wheel_odom_sub_;
   rclcpp::TimerBase::SharedPtr drain_timer_;
   rclcpp::TimerBase::SharedPtr autostart_timer_;
 };

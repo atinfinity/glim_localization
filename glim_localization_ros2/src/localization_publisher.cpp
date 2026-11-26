@@ -400,6 +400,10 @@ void LocalizationPublisher::on_status(const glim_localization::LocalizationStatu
   msg.init_search_runner_up_score = status.init_search_runner_up_score;
   msg.init_search_runner_up_yaw_offset = status.init_search_runner_up_yaw_offset;
   msg.init_search_time = status.init_search_time;
+  msg.wheel_factors = status.wheel_factors;
+  msg.wheel_gated = status.wheel_gated;
+  msg.wheel_readmitted = status.wheel_readmitted;
+  msg.wheel_missing = status.wheel_missing;
   msg.header.frame_id = params_.map_frame;
 
   std::lock_guard<std::mutex> lock(mutex_);
@@ -475,6 +479,10 @@ void LocalizationPublisher::publish_diagnostics(const LocalizationStatus & msg)
   status.values.push_back(key_value("init_search_runner_up_yaw_offset_deg",
       std::to_string(msg.init_search_runner_up_yaw_offset * 180.0 / M_PI)));
   status.values.push_back(key_value("init_search_time", std::to_string(msg.init_search_time)));
+  status.values.push_back(key_value("wheel_factors", std::to_string(msg.wheel_factors)));
+  status.values.push_back(key_value("wheel_gated", std::to_string(msg.wheel_gated)));
+  status.values.push_back(key_value("wheel_readmitted", std::to_string(msg.wheel_readmitted)));
+  status.values.push_back(key_value("wheel_missing", std::to_string(msg.wheel_missing)));
 
   diagnostic_msgs::msg::DiagnosticArray array;
   array.header.stamp = now;

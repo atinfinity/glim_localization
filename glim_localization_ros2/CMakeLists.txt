@@ -128,11 +128,16 @@ if(BUILD_TESTING)
   ament_add_gtest(test_init_pose_delay test/test_init_pose_delay.cpp)
   target_include_directories(test_init_pose_delay PRIVATE include)
 
+  # No ROS graph: nav_msgs/Odometry to a wheel odometry sample (R1, R2)
+  ament_add_gtest(test_wheel_odom_input test/test_wheel_odom_input.cpp)
+  target_link_libraries(test_wheel_odom_input Eigen3::Eigen ${nav_msgs_TARGETS})
+  target_include_directories(test_wheel_odom_input PRIVATE include)
+
   # End to end over synthetic bags. They need the datasets made by scripts/test_colcon.sh (see the tests).
   # Jazzy has no isolated launch test helper; add_launch_test passes RUNNER on to ament_add_test.
   find_package(launch_testing_ament_cmake REQUIRED)
   # test_launch_*: the installed launch files (launch/), headless (rviz:=false)
-  foreach(launch_test test_r1_extension test_r2_node test_r2_imu_gap
+  foreach(launch_test test_r1_extension test_r2_node test_r2_imu_gap test_r2_wheel_odom
       test_launch_r1 test_launch_r1_live test_launch_r2 test_launch_r2_component)
     add_launch_test(test/${launch_test}.py TIMEOUT 300 RUNNER "${ros_isolated_runner}"
       ENV ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST)
