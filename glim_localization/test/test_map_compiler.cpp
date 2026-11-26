@@ -391,6 +391,36 @@ TEST_F(MapCompilerTest, PlyAndPcdGiveTheSameMap) {
   }
 }
 
+TEST_F(MapCompilerTest, BinaryCompressedPcdGivesTheSameMapAsBinary) {
+  const auto points = make_synthetic_world_points(params_);
+  for (const bool double_xyz : {false, true}) {
+    fs::remove_all(dir_ / "from_binary");
+    fs::remove_all(dir_ / "from_compressed");
+    write_synthetic_pcd((dir_ / "binary.pcd").string(), points, PcdEncoding::Binary, double_xyz);
+    write_synthetic_pcd((dir_ / "compressed.pcd").string(), points, PcdEncoding::BinaryCompressed, double_xyz);
+    ASSERT_EQ(compile(dir_ / "binary.pcd", dir_ / "from_binary", "--grid-size 15 --voxel-size 0.5"), 0) << last_log();
+    ASSERT_EQ(compile(dir_ / "compressed.pcd", dir_ / "from_compressed", "--grid-size 15 --voxel-size 0.5"), 0) << last_log();
+
+    const auto binary_index = nlohmann::json::parse(std::ifstream(dir_ / "from_binary" / "map_index.json"));
+    const auto compressed_index = nlohmann::json::parse(std::ifstream(dir_ / "from_compressed" / "map_index.json"));
+    EXPECT_EQ(compressed_index.at("source"), "pcd");
+    EXPECT_EQ(binary_index, compressed_index);
+
+    LoadedSubmaps from_binary, from_compressed;
+    ASSERT_TRUE(load_map((dir_ / "from_binary").string(), from_binary));
+    ASSERT_TRUE(load_map((dir_ / "from_compressed").string(), from_compressed));
+    ASSERT_EQ(from_binary.size(), from_compressed.size());
+    ASSERT_GT(from_binary.size(), 2u);
+    for (size_t i = 0; i < from_binary.size(); i++) {
+      ASSERT_EQ(from_binary[i].points->size(), from_compressed[i].points->size());
+      for (size_t j = 0; j < from_binary[i].points->size(); j++) {
+        ASSERT_EQ(from_binary[i].points->points[j], from_compressed[i].points->points[j]);
+        ASSERT_EQ(from_binary[i].points->covs[j], from_compressed[i].points->covs[j]);
+      }
+    }
+  }
+}
+
 TEST_F(MapCompilerTest, CompilesPlyWithDownsampling) {
   const auto points = make_synthetic_world_points(params_);
   write_synthetic_ply((dir_ / "cloud.ply").string(), points, PlyEncoding::BinaryLittleEndian);

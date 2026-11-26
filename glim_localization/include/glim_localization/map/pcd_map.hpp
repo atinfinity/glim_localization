@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <string>
 #include <vector>
 
@@ -11,11 +12,17 @@ namespace glim_localization {
 
 using PcdPoints = std::vector<Eigen::Vector4d, Eigen::aligned_allocator<Eigen::Vector4d>>;
 
-/// Read x, y and z from a PCD file with `DATA ascii` or `DATA binary` (`binary_compressed` is rejected).
+/// Read x, y and z from a PCD file with `DATA ascii`, `binary` or `binary_compressed` (PCL's LZF-compressed,
+/// field-major layout, without the `_` padding fields).
 /// x, y and z must be single floats (F4 or F8). Other fields are skipped, and VIEWPOINT is ignored.
 /// Points with a non-finite coordinate are dropped. The result has w = 1.
 /// On failure, `points` is unchanged.
 bool read_pcd(const std::string& path, PcdPoints& points);
+
+/// Decompress an LZF stream (the format of liblzf, which PCL uses for `binary_compressed`) into exactly `out_size` bytes.
+/// Returns false if the stream is malformed (a back reference before the start of the output, a run past the end of
+/// the input), or if it does not decompress to exactly `out_size` bytes. `out` is written up to the point of failure.
+bool lzf_decompress(const char* in, size_t in_size, char* out, size_t out_size);
 
 /// Lower bounds of PcdMapParams. Smaller tiles explode the submap count, smaller voxels flood the voxel grid,
 /// and fewer than 5 neighbours give degenerate covariances (k = 1 is a zero matrix).

@@ -18,6 +18,7 @@ namespace {
 void print_usage() {
   std::cerr << "usage: map_compiler <input> <output_dir> [options]\n"
             << "  <input>  a GLIM dump, a compiled map, or a .pcd or .ply file (x, y, z in the map frame)\n"
+            << "           (PCD: DATA ascii, binary or binary_compressed)\n"
             << "options for .pcd and .ply input:\n"
             << "  --grid-size <m>    tile edge along x and y, at least 1 (default 20)\n"
             << "  --voxel-size <m>   voxel grid downsampling before tiling, 0 disables it, otherwise at least 0.01 (default 0)\n"

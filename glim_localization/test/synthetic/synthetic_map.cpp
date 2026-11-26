@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <random>
@@ -165,9 +166,20 @@ SyntheticPoints make_synthetic_world_points(const SyntheticMapParams& params) {
   return points;
 }
 
+std::string lzf_encode_literals(const std::string& data) {
+  std::string encoded;
+  for (size_t i = 0; i < data.size(); i += 32) {
+    const size_t len = std::min<size_t>(32, data.size() - i);
+    encoded.push_back(static_cast<char>(len - 1));
+    encoded.append(data, i, len);
+  }
+  return encoded;
+}
+
 void write_synthetic_pcd(const std::string& path, const SyntheticPoints& points, PcdEncoding encoding, bool double_xyz) {
   std::ofstream ofs(path, std::ios::binary | std::ios::trunc);
   const int size = double_xyz ? 8 : 4;
+  const char* data = encoding == PcdEncoding::Ascii ? "ascii" : encoding == PcdEncoding::Binary ? "binary" : "binary_compressed";
   ofs << "# .PCD v0.7 - synthetic test data\n"
       << "VERSION 0.7\n"
       << "FIELDS x y z intensity\n"
@@ -178,7 +190,34 @@ void write_synthetic_pcd(const std::string& path, const SyntheticPoints& points,
       << "HEIGHT 1\n"
       << "VIEWPOINT 0 0 0 1 0 0 0\n"
       << "POINTS " << points.size() << "\n"
-      << "DATA " << (encoding == PcdEncoding::Ascii ? "ascii" : "binary") << "\n";
+      << "DATA " << data << "\n";
+
+  if (encoding == PcdEncoding::BinaryCompressed) {
+    // Field-major: all x, then all y, all z and all intensities.
+    std::string raw;
+    for (int axis = 0; axis < 4; axis++) {
+      for (size_t i = 0; i < points.size(); i++) {
+        if (axis == 3) {
+          const float intensity = static_cast<float>(i % 256);
+          raw.append(reinterpret_cast<const char*>(&intensity), sizeof(intensity));
+        } else if (double_xyz) {
+          const double value = points[i][axis];
+          raw.append(reinterpret_cast<const char*>(&value), sizeof(value));
+        } else {
+          const float value = static_cast<float>(points[i][axis]);
+          raw.append(reinterpret_cast<const char*>(&value), sizeof(value));
+        }
+      }
+    }
+    const std::string compressed = lzf_encode_literals(raw);
+    const uint32_t sizes[2] = {static_cast<uint32_t>(compressed.size()), static_cast<uint32_t>(raw.size())};
+    ofs.write(reinterpret_cast<const char*>(sizes), sizeof(sizes));
+    ofs << compressed;
+    if (!ofs) {
+      throw std::runtime_error("failed to write " + path);
+    }
+    return;
+  }
 
   for (size_t i = 0; i < points.size(); i++) {
     const float intensity = static_cast<float>(i % 256);

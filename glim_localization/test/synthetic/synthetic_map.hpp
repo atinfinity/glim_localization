@@ -42,9 +42,13 @@ using SyntheticPoints = std::vector<Eigen::Vector4d, Eigen::aligned_allocator<Ei
 /// The same noisy corridor points as write_synthetic_dump, once each, in the world frame (w = 1).
 SyntheticPoints make_synthetic_world_points(const SyntheticMapParams& params = SyntheticMapParams());
 
-enum class PcdEncoding { Ascii, Binary };
+enum class PcdEncoding { Ascii, Binary, BinaryCompressed };
+
+/// LZF-encode `data` with literal runs only (a valid stream that any LZF decoder accepts; no compression).
+std::string lzf_encode_literals(const std::string& data);
 
 /// Write points as a PCD v0.7 file with fields x y z (F4, or F8 if `double_xyz`) and a float intensity.
+/// BinaryCompressed writes PCL's layout (field-major, LZF) with lzf_encode_literals.
 void write_synthetic_pcd(const std::string& path, const SyntheticPoints& points, PcdEncoding encoding, bool double_xyz = false);
 
 enum class PlyEncoding { Ascii, BinaryLittleEndian };
