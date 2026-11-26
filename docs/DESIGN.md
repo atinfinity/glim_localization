@@ -309,7 +309,7 @@ glim_localization/                  # repository
 
 #### Publication rules
 
-- **Pairing.** The estimate of a frame is published only together with the status of the same frame. `LocalizationPublisher::on_frame` only stores the frame; `on_status` with `frame_id >= 0` and the same stamp publishes it with that status's state. A stored frame replaced by a newer one is dropped and counted (`unpaired_frames()`). The core emits the frame callback before its status, so the publisher subscribes `OdometryEstimationCallbacks::on_update_new_frame` (the corrected state, not the IMU prediction of `on_new_frame`) and `LocalizationCallbacks::on_status`.
+- **Pairing.** The estimate of a frame is published only together with the status of the same frame. `LocalizationPublisher::on_frame` only stores the frame; `on_status` with `frame_id >= 0` and the same stamp publishes it with that status's state. A stored frame is dropped and counted (`unpaired_frames()`) when a newer frame replaces it or a reset status (`frame_id < 0`) comes before its own status; the frame is from before the reset, and an external reset must re-anchor `odom->base` at a frame after it. The core emits the frame callback before its status, so the publisher subscribes `OdometryEstimationCallbacks::on_update_new_frame` (the corrected state, not the IMU prediction of `on_new_frame`) and `LocalizationCallbacks::on_status`.
 - **State gate.**
 
   | state of the frame | `~/pose` | `~/odometry` | `map->odom` | `odom->base` (internal_odom) |
