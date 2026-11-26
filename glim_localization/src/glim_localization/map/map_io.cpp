@@ -142,7 +142,7 @@ constexpr const char* kIndexFormat = "glim_localization_map";
 constexpr int kIndexVersion = 1;
 
 /// The index holds exact poses because data.txt rounds them.
-bool load_compiled_map(const std::string& path, LoadedSubmaps& submaps) {
+bool load_compiled_map(const std::string& path, LoadedSubmaps& submaps, std::string* source) {
   const std::string file = path + "/" + kIndexFile;
   try {
     std::ifstream ifs(file);
@@ -195,7 +195,13 @@ bool load_compiled_map(const std::string& path, LoadedSubmaps& submaps) {
       result.push_back(std::move(loaded));
     }
 
+    // Informational only: a missing or odd value does not fail the load.
+    const auto recorded = index.find("source");
+    const std::string recorded_source = recorded != index.end() && recorded->is_string() ? recorded->get<std::string>() : "unknown";
     submaps = std::move(result);
+    if (source) {
+      *source = recorded_source;
+    }
     return true;
   } catch (const std::exception& e) {
     spdlog::error("failed to read {}: {}", file, e.what());
@@ -316,14 +322,14 @@ bool save_compiled_map(const std::string& path, const LoadedSubmaps& submaps, co
   }
 }
 
-bool load_map(const std::string& path, LoadedSubmaps& submaps) {
+bool load_map(const std::string& path, LoadedSubmaps& submaps, std::string* source) {
   std::error_code ec;
   if (!fs::is_directory(path, ec)) {
     spdlog::error("map directory not found: {}", path);
     return false;
   }
   if (fs::exists(path + "/" + kIndexFile)) {
-    return load_compiled_map(path, submaps);
+    return load_compiled_map(path, submaps, source);
   }
 
   const auto count = count_submaps(path);
@@ -359,6 +365,9 @@ bool load_map(const std::string& path, LoadedSubmaps& submaps) {
   }
 
   submaps = std::move(result);
+  if (source) {
+    *source = "glim_dump";
+  }
   return true;
 }
 
