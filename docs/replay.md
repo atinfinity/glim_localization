@@ -1,6 +1,6 @@
 # Offline replay and evaluation
 
-No ROS is needed. The replay reads a simple dataset (`meta.json`, `imu.csv`, `points/*.bin`; format in [DESIGN 6.5](DESIGN.md#65-offline-replay-phase-4)). Python tools run from the venv in the image:
+No ROS is needed. The replay reads a simple dataset (`meta.json`, `imu.csv`, `points/*.bin`, optional `wheel_odom.csv`; format in [DESIGN 6.5](DESIGN.md#65-offline-replay-phase-4)). Python tools run from the venv in the image:
 
 ```bash
 alias py='env -u PYTHONPATH $GLIM_LOC_PYTHON'
@@ -119,7 +119,7 @@ py scripts/evaluate.py --est /ws/out/run/traj_localization.txt --gt /ws/out/data
   - After the offset there are two checks on the residual (first point after the offset - header). Each frame must be within 1 s of its header, which catches a wrong offset and large jumps. The residual may spread (max - min over all frames) over at most one scan period, taken as the median interval of the header stamps, which catches drift and smaller jumps. Changes below one scan period pass.
   - The value must be finite and at most 1e9 s (about 32 years). The option is refused for relative per-point times, `--time-mode relative`, and clouds without a time field.
   - The offset is printed, and `meta.json` records it under `conversion.point_clock_offset`: `source` (`given` or `estimated`), `offset_ns`, `offset_s`, `estimated_from_frame`, `definition` (`header clock = point clock + offset`), and the residual as min, median and max (`residual_s`). Without the option the field is `null`.
-- `glim_localization_replay`: `--init-pose` is `T_world_imu` in the map frame. Other options: `--init-vel`, `--start`, `--end`, `--max-frames`, `--max-imu-gap` (default 0.05 s), `--on-imu-gap abort|reset`, `--min-tracking-ratio` (default 0.9). Outputs: `traj_localization.txt` (TUM), `frames.csv`, `summary.json`, `replay_args.json`. Exit codes: 0 ok, 1 runtime failure (including LOST or a low tracking ratio), 2 bad arguments, config, map or initial pose, 3 invalid dataset (including IMU gaps), 4 no pose.
+- `glim_localization_replay`: `--init-pose` is `T_world_imu` in the map frame. Other options: `--init-vel`, `--start`, `--end`, `--max-frames`, `--max-imu-gap` (default 0.05 s), `--on-imu-gap abort|reset`, `--min-tracking-ratio` (default 0.9), `--wheel-odom on|off` (feed `wheel_odom.csv`; default: `wheel_odom_enabled` of the config). Outputs: `traj_localization.txt` (TUM), `frames.csv`, `summary.json`, `replay_args.json`. Exit codes: 0 ok, 1 runtime failure (including LOST or a low tracking ratio), 2 bad arguments, config, map or initial pose, 3 invalid dataset (including IMU gaps), 4 no pose.
 - `evaluate.py`: ATE and RPE with evo (no realignment) and processing time statistics; writes `eval.json` and `eval.txt`, and exits 1 when a threshold or the pose coverage (`--min-coverage`, default 0.9) is not met.
 - Set `T_lidar_imu` in `config_sensors.json` of a copied config for your sensor; the shipped configs use identity. Then pass `--config` your copied config instead of `glim_localization/config`.
 

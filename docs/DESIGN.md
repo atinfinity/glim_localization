@@ -359,9 +359,10 @@ flowchart LR
 
 ### Dataset format (version 1)
 
-- `meta.json`: `format` = `glim_localization_replay`, `version` = 1, `stamp_definition` = `first_point` (the frame stamp is the acquisition time of the first point), `per_point_time`, `num_frames`, `num_imu`.
+- `meta.json`: `format` = `glim_localization_replay`, `version` = 1, `stamp_definition` = `first_point` (the frame stamp is the acquisition time of the first point), `per_point_time`, `num_frames`, `num_imu`, and `num_wheel_odom` only when `wheel_odom.csv` is written.
 - `imu.csv`: header `stamp_ns,acc_x,acc_y,acc_z,gyro_x,gyro_y,gyro_z`, real numbers with 17 digits, stamps strictly increasing. Acceleration in m/s^2, angular velocity in rad/s.
 - `points/<stamp ns zero-padded to 19 digits>.bin`: a 32-byte header (`GLRP`, u32 version=1, i64 stamp_ns, u32 num_points, u32 flags, u32 point_step=20, u32 reserved), followed by f32 x, y, z, t, intensity per point (little-endian). `t` is seconds from the stamp in [0, 1), and the minimum is 0.
+- Optional `wheel_odom.csv` ([#14](https://github.com/atinfinity/glim_localization/issues/14)): header `stamp_ns,vx,vy,vz,wx,wy,wz`, the twist of the wheel base in the base frame (m/s, rad/s), the same number format and order rules as `imu.csv`. It must match `num_wheel_odom` when the key is present; a key without the file, or a file whose row count disagrees, is invalid (exit code 3). Datasets without it stay valid.
 - Optional `traj_gt.txt` (TUM format, T_world_imu).
 - Invalid (exit code 3): a negative stamp, a non-integer `version` (such as 1.9), whitespace, hexadecimal or inf/nan real numbers in imu.csv.
 
@@ -369,7 +370,8 @@ flowchart LR
 
 1. Read the frame and call `CloudPreprocessor` synchronously.
 2. Insert all IMU samples up to scan_end_time, plus one extra sample.
-3. Estimate with `insert_frame`.
+3. With wheel odometry fed (the setting `wheel_odom_enabled` and a non-empty `wheel_odom.csv`), insert the wheel samples up to the frame stamp, plus one extra sample, with `insert_wheel_odom`. The first frame starts 1 s before its stamp, so a long lead-in of samples is not buffered. A sample the odometry refuses (non-finite or not newer than the last one) is counted as `rejected`.
+4. Estimate with `insert_frame`.
 
 Upstream IMU integration integrates from the previously inserted frame to the current frame, needs at least 2 samples, and holds one sample across a gap. So missing IMU data directly becomes estimation error, and skipping cannot recover from it. `ReplayRunner` handles it as follows (`max_imu_gap` defaults to 0.05 s and is changed with `--max-imu-gap`. Measured to meet the Phase 3 accuracy criteria with a 25 Hz IMU: translation max 0.0104 m, rotation max 0.073 deg).
 
@@ -391,7 +393,9 @@ The result values are `estimated`, `dropped` (before `--init-stamp`, or the esti
 
 - `traj_localization.txt` (only frames that were estimated, TUM), `frames.csv` (all processed frames), `summary.json` (only when the run reaches the end. If the output directory has a previous summary.json, it is deleted at start), `replay_args.json`. Flushed every frame. summary.json is deleted before argument validation (right after parsing), so no old summary.json is left even for a rejected run.
 - Exit codes: 0 success, 1 runtime error (including divergence, LOST and insufficient tracking ratio), 2 error in arguments, config, map or initial pose (including an initial pose that is too late), 3 invalid data (including an abort due to an IMU gap and an IMU period that is too long), 4 no pose was produced.
-- Additional items in `summary.json`: `imu_gap_resets`, `tracking_ratio`, `min_tracking_ratio`. `replay_args.json` has `on_imu_gap`, `imu_gap_reset_max`, `min_tracking_ratio`.
+- Additional items in `summary.json`: `imu_gap_resets`, `tracking_ratio`, `min_tracking_ratio`, and with wheel odometry fed `wheel_odom` (`fed`, `rejected`, and the sums of the per-frame `added`, `gated` and `missing` wheel factors of `LocalizationStatus`). `replay_args.json` has `on_imu_gap`, `imu_gap_reset_max`, `min_tracking_ratio`, and `effective.wheel_odom` (whether wheel samples were fed).
+- `frames.csv` ends with `num_wheel_fed` and `wheel` (`none`, `added`, `gated` or `missing`: the wheel factor of that frame).
+- `--wheel-odom on|off` overrides `wheel_odom_enabled` of the config. `on` with a dataset without wheel samples (no `wheel_odom.csv`, or only its header) is exit code 2; the config enabled with no samples is a warning, and the run is IMU only.
 - The core `LocalizationStatus` has `processing_time` (wall time of `insert_frame` [s], 0 at a reset) and `last_reset_reason` (`ResetReason`: `NONE`=0, `EXTERNAL`=1, `IMU_GAP`=2. The same values as `RESET_*` of the ROS msg; the core does not include the msg).
 
 ### Bag conversion and evaluation
