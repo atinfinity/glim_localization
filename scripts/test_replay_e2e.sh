@@ -250,6 +250,69 @@ py "${repo_root}/scripts/replay_robustness.py" --suite quick --build-dir "${buil
   --out "${out}/robustness" > "${out}/robustness.log" 2>&1 || { cat "${out}/robustness.log" >&2; exit 1; }
 grep -E "^(pose|map)_|^PASS" "${out}/robustness.log"
 
+# Wheel odometry (wheel_odom.csv of the synthetic dataset, 50 Hz): the normal map with it on still meets the limits.
+# shellcheck disable=SC2086
+run_replay "${out}/run_wheel" --init-pose ${init_pose} --wheel-odom on
+py "${repo_root}/scripts/evaluate.py" --est "${out}/run_wheel/traj_localization.txt" --gt "${out}/input/data/traj_gt.txt" \
+  --frames "${out}/run_wheel/frames.csv" --out "${out}/run_wheel" --settle 3 --max-trans 0.1 --max-rot-deg 1 > "${out}/run_wheel.eval.log"
+# With the map 1 km away, no map factor holds the estimate: IMU only drifts by meters, the wheel factors bound it.
+# The state never leaves INITIALIZING (lost_frames is raised so that the run is not stopped as LOST), and the
+# initial pose is the exact ground truth, so the error is the drift alone.
+py - "${out}/input/map.pcd" "${out}/far.pcd" <<'PY'
+import sys
+import numpy as np
+src, dst = sys.argv[1:3]
+data = open(src, "rb").read()
+end = data.index(b"\n", data.index(b"DATA binary")) + 1
+assert b"FIELDS x y z intensity" in data[:end] and b"TYPE F F F F" in data[:end], "unexpected PCD layout"
+points = np.frombuffer(data[end:], dtype=np.float32).reshape(-1, 4).copy()
+points[:, 0] += 1000.0
+open(dst, "wb").write(data[:end] + points.tobytes())
+PY
+"${build_dir}/tools/map_compiler" "${out}/far.pcd" "${out}/far_map" > "${out}/far_map.log" 2>&1
+rm -rf "${out}/config_far"
+cp -r "${repo_root}/glim_localization/config" "${out}/config_far"
+sed -i 's/"lost_frames": [0-9]*/"lost_frames": 100000/' "${out}/config_far/config_odometry_localization_cpu.json"
+grep -q '"lost_frames": 100000' "${out}/config_far/config_odometry_localization_cpu.json"
+gt_pose="$(py - "${out}/input/data/traj_gt.txt" <<'PY'
+import sys
+print(" ".join(next(l for l in open(sys.argv[1]) if l.strip() and not l.startswith("#")).split()[1:8]))
+PY
+)"
+for wheel in off on; do
+  # shellcheck disable=SC2086
+  "${replay}" --data "${out}/input/data" --config "${out}/config_far" --map "${out}/far_map" --out "${out}/run_far_${wheel}" \
+    --init-pose ${gt_pose} --wheel-odom "${wheel}" --min-tracking-ratio 0 > "${out}/run_far_${wheel}.log" 2>&1
+  py "${repo_root}/scripts/evaluate.py" --est "${out}/run_far_${wheel}/traj_localization.txt" --gt "${out}/input/data/traj_gt.txt" \
+    --frames "${out}/run_far_${wheel}/frames.csv" --out "${out}/run_far_${wheel}" > "${out}/run_far_${wheel}.eval.log"
+done
+py - "${out}" <<'PY'
+import csv
+import json
+import sys
+out = sys.argv[1]
+def load(name):
+    d = f"{out}/{name}"
+    return (json.load(open(f"{d}/summary.json")), json.load(open(f"{d}/eval.json"))["errors"]["ate_trans_m"]["max"],
+            list(csv.DictReader(open(f"{d}/frames.csv"))), json.load(open(f"{d}/replay_args.json"))["effective"]["wheel_odom"])
+normal, _, normal_rows, normal_used = load("run_wheel")
+off, off_max, off_rows, off_used = load("run_far_off")
+on, on_max, on_rows, on_used = load("run_far_on")
+assert normal_used and on_used and not off_used, "replay_args.json effective.wheel_odom"
+assert "wheel_odom" not in off and all(r["wheel"] == "none" and r["num_wheel_fed"] == "0" for r in off_rows), "wheel fed while off"
+for name, summary, rows in (("normal", normal, normal_rows), ("far", on, on_rows)):
+    w = summary["wheel_odom"]
+    estimated = summary["frames_by_result"]["estimated"]
+    assert w["added"] == estimated - 1, f"{name}: {w['added']} wheel factors for {estimated} estimated frames"
+    assert w["gated"] == 0 and w["missing"] == 0 and w["rejected"] == 0, f"{name}: {w}"
+    assert sum(int(r["num_wheel_fed"]) for r in rows) == w["fed"], f"{name}: num_wheel_fed does not add up"
+    assert sum(r["wheel"] == "added" for r in rows) == w["added"], f"{name}: wheel column does not add up"
+print(f"far map: max translation error IMU only {off_max:.3f} m, with wheel odometry {on_max:.3f} m "
+      f"({on['wheel_odom']['added']} wheel factors)")
+assert on_max < 0.4, f"with wheel odometry the drift is {on_max} m"
+assert on_max < 0.2 * off_max, f"wheel odometry does not bound the drift: {on_max} m vs {off_max} m"
+PY
+
 # Exit codes
 set +e
 "${replay}" --data "${out}/input/data" --config "${repo_root}/glim_localization/config" --map "${out}/input/map" --out "${out}/no_init" >/dev/null 2>&1
@@ -257,7 +320,21 @@ rc_no_init=$?
 "${replay}" --data "${out}/input/data" --config "${repo_root}/glim_localization/config" --map "${out}/input/map" --out "${out}/late" \
   --init-pose ${init_pose} --init-stamp 1000 >/dev/null 2>&1
 rc_late=$?
+rm -rf "${out}/no_wheel"
+cp -r "${out}/input/data" "${out}/no_wheel"
+rm "${out}/no_wheel/wheel_odom.csv"
+py - "${out}/no_wheel/meta.json" <<'PY'
+import json
+import sys
+meta = json.load(open(sys.argv[1]))
+del meta["num_wheel_odom"]
+json.dump(meta, open(sys.argv[1], "w"))
+PY
+"${replay}" --data "${out}/no_wheel" --config "${repo_root}/glim_localization/config" --map "${out}/input/map" --out "${out}/no_wheel_out" \
+  --init-pose ${init_pose} --wheel-odom on >/dev/null 2>&1
+rc_no_wheel=$?
 set -e
+[ "${rc_no_wheel}" = 2 ] || { echo "FAIL: --wheel-odom on without wheel_odom.csv exited ${rc_no_wheel}, expected 2" >&2; exit 1; }
 [ "${rc_no_init}" = 2 ] || { echo "FAIL: missing initial pose exited ${rc_no_init}, expected 2" >&2; exit 1; }
 [ "${rc_late}" = 4 ] || { echo "FAIL: --init-stamp after the end exited ${rc_late}, expected 4" >&2; exit 1; }
 
