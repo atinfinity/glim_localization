@@ -95,7 +95,7 @@ PCD input reads `DATA ascii`, `binary` and `binary_compressed` with x, y, z as F
 
 ### Which map to keep
 
-Localization runs the compiled map from `map_compiler`. Keep the input you compiled it from as the master copy, and compile again when you change options:
+Localization loads a GLIM dump directly or a compiled map from `map_compiler`; a point cloud always goes through `map_compiler` first. Whichever you run, keep the input as the master copy, and compile again when you change options:
 
 - **Map built with GLIM:** keep the GLIM dump. It has the per-submap structure, with each submap's points, covariances and pose, and also the pose graph (`graph.bin`, `values.bin`) and the trajectories, which a compiled map leaves out. Compiling a dump copies the points, poses and covariances as they are, so it can be compiled again at any time without loss.
 - **Any other map** (another SLAM, a survey, [sdf2map](sim_eval.md)): keep the PCD or PLY file. Those tools can read and edit it, and a compiled map cannot be exported back to a point cloud.
