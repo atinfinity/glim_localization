@@ -61,12 +61,14 @@ jobs:
         with:
           path: site/
 
-  # Needs GitHub Pages enabled with "GitHub Actions" as the source (repository settings).
+  # Needs GitHub Pages enabled with "GitHub Actions" as the source (repository settings). Skipped until the
+  # repository variable PAGES_ENABLED is 'true', so main does not fail, and the github-pages environment is not
+  # created without its branch rule, before Pages is set up.
   deploy:
     needs: build
     if: >-
       github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
-      && github.repository == 'atinfinity/glim_localization'
+      && github.repository == 'atinfinity/glim_localization' && vars.PAGES_ENABLED == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
