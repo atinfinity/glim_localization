@@ -15,6 +15,8 @@
 
 #include "Eigen/Geometry"
 
+#include "gtsam_points/types/point_cloud.hpp"
+
 #include "diagnostic_msgs/msg/diagnostic_array.hpp"
 #include "geometry_msgs/msg/pose_with_covariance_stamped.hpp"
 #include "glim_localization_msgs/msg/localization_status.hpp"
@@ -26,6 +28,7 @@
 #include "rclcpp/node_interfaces/node_parameters_interface.hpp"
 #include "rclcpp/node_interfaces/node_topics_interface.hpp"
 #include "rclcpp/rclcpp.hpp"
+#include "sensor_msgs/msg/point_cloud2.hpp"
 #include "tf2_ros/buffer.h"
 #include "tf2_ros/transform_broadcaster.h"
 #include "tf2_ros/transform_listener.h"
@@ -60,6 +63,11 @@ struct LocalizationPublisherParams
   /// Minimum time between /diagnostics messages [s]. A change of level is published at once, and a
   /// clock that steps back restarts the period
   double diagnostics_period = 1.0;
+  /// Publish ~/aligned_points: the scan of each published frame in the map frame
+  bool publish_aligned_points = true;
+  /// Downsampling voxel of ~/aligned_points [m]: one point (the centroid) per voxel. 0 keeps every
+  /// point
+  double aligned_points_voxel = 0.0;
   std::string diagnostics_name = "glim_localization: localization";
   std::string diagnostics_hardware_id = "glim_localization";
 };
@@ -74,11 +82,14 @@ struct FrameEstimate
   Eigen::Vector3d v_map_imu = Eigen::Vector3d::Zero();
   /// Bias-corrected angular velocity in the IMU frame
   Eigen::Vector3d w_imu = Eigen::Vector3d::Zero();
+  /// Deskewed points of the frame in the IMU frame (EstimationFrame::frame, shared, not copied).
+  /// Null when the frame has none; ~/aligned_points is then not published for it
+  gtsam_points::PointCloud::ConstPtr points_imu;
 };
 
-/// Publishes ~/pose, ~/odometry, ~/status, /diagnostics and TF. Shared by the R1 extension and the
-/// R2 node. ROS only; the core does not depend on it. Methods are thread-safe. In external_odom the
-/// node must be spun (it listens to /tf).
+/// Publishes ~/pose, ~/odometry, ~/aligned_points, ~/status, /diagnostics and TF. Shared by the R1
+/// extension and the R2 node. ROS only; the core does not depend on it. Methods are thread-safe. In
+/// external_odom the node must be spun (it listens to /tf).
 class LocalizationPublisher {
 public:
   using NodeInterfaces = rclcpp::node_interfaces::NodeInterfaces<
@@ -89,7 +100,7 @@ public:
     rclcpp::node_interfaces::NodeTopicsInterface>;
 
   /// @throw std::invalid_argument if a frame name is empty, or if the parameters are not finite or
-  /// negative
+  /// negative (T_base_imu, diagnostics_period, aligned_points_voxel)
   LocalizationPublisher(
     NodeInterfaces node,
     const LocalizationPublisherParams & params = LocalizationPublisherParams());
@@ -118,6 +129,9 @@ public:
   size_t unpaired_frames() const;
   /// Frames dropped because their stamp was not newer than the last accepted one
   size_t stale_frames() const;
+  /// ~/aligned_points messages built and published. A cloud is built only while the topic has a
+  /// subscriber (for tests)
+  size_t aligned_clouds() const;
   /// The buffer that listens to /tf in external_odom, otherwise null (for tests)
   const tf2_ros::Buffer * tf_buffer() const {return tf_buffer_.get();}
 
@@ -130,6 +144,9 @@ private:
   void publish_tf(
     const builtin_interfaces::msg::Time & stamp, const Eigen::Isometry3d & T_map_odom,
     const Eigen::Isometry3d & T_odom_base, bool with_map_odom);
+  void publish_aligned_points(
+    const FrameEstimate & frame,
+    const builtin_interfaces::msg::Time & stamp);
   void publish_diagnostics(const glim_localization_msgs::msg::LocalizationStatus & msg);
 
   const LocalizationPublisherParams params_;
@@ -138,6 +155,8 @@ private:
 
   rclcpp::Publisher<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr pose_pub_;
   rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr odometry_pub_;
+  /// Null when publish_aligned_points is false
+  rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr aligned_points_pub_;
   rclcpp::Publisher<glim_localization_msgs::msg::LocalizationStatus>::SharedPtr status_pub_;
   rclcpp::Publisher<diagnostic_msgs::msg::DiagnosticArray>::SharedPtr diagnostics_pub_;
   std::unique_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
@@ -151,6 +170,7 @@ private:
   bool allow_older_stamp_ = false;    ///< An external reset came since the last accepted frame
   size_t unpaired_frames_ = 0;
   size_t stale_frames_ = 0;
+  size_t aligned_clouds_ = 0;
   // internal_odom anchor: T_odom_base = anchor * T_map_base, T_map_odom = inverse(anchor)
   bool has_odom_base_ = false;
   bool reanchor_ = false;

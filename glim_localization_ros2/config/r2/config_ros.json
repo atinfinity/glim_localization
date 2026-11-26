@@ -23,6 +23,10 @@
   //                    40 bytes per voxel while building), in the node start (R1) or configure (R2). With 0, a map
   //                    above 10 million points gets a warning. A ~/map above 1 GiB (about 89 million points) is
   //                    not published (a warning says so)
+  // publish_aligned_points : publish the scan of each published frame on ~/aligned_points, in the map frame (sensor
+  //                          data QoS; not in LOST). Built only while the topic has a subscriber
+  // aligned_points_voxel   : ~/aligned_points keeps one point (the centroid) per voxel of this size [m]; 0 keeps every
+  //                          point
   // wheel_odom_topic          : nav_msgs/Odometry input of wheel_odom_enabled (odometry config); empty: none. Only
   //                             twist.twist is used, in child_frame_id (the base of wheel_odom_T_imu_base); the pose,
   //                             header.frame_id and the covariances are ignored, and no TF is looked up. Not subscribed
@@ -38,6 +42,8 @@
     "diagnostics_period": 1.0,
     "publish_map": true,
     "map_cloud_voxel": 0.5,
+    "publish_aligned_points": true,
+    "aligned_points_voxel": 0.0,
     "wheel_odom_topic": "",
     "wheel_odom_child_frame_id": "base_link",
     "wheel_odom_time_offset": 0.0,

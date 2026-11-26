@@ -46,6 +46,13 @@ LocalizationPublisherParams read_publisher_params(const glim::Config & config)
       to_string(params.tf_mode)));
   params.diagnostics_period = config.param<double>(section, "diagnostics_period",
       params.diagnostics_period);
+  params.publish_aligned_points = config.param<bool>(section, "publish_aligned_points",
+      params.publish_aligned_points);
+  params.aligned_points_voxel = config.param<double>(section, "aligned_points_voxel",
+      params.aligned_points_voxel);
+  if (!std::isfinite(params.aligned_points_voxel) || params.aligned_points_voxel < 0.0) {
+    throw std::invalid_argument("aligned_points_voxel must be finite and not negative");
+  }
   params.T_base_imu = parse_pose7(config.param<std::vector<double>>(section, "T_base_imu",
       {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0}), "T_base_imu");
   return params;
@@ -112,6 +119,11 @@ void EstimateBridge::add_frame(const glim::EstimationFrame & frame)
   estimate.stamp = frame.stamp;
   estimate.T_map_imu = frame.T_world_imu;
   estimate.v_map_imu = frame.v_world_imu;
+  // A shared pointer copy, no point copy on the odometry thread. The points are deskewed in the IMU
+  // frame when frame_id is IMU, as in GLIM's IMU odometry and in this core
+  if (frame.frame_id == glim::FrameID::IMU) {
+    estimate.points_imu = frame.frame;
+  }
 
   std::lock_guard<std::mutex> lock(mutex_);
   if (!publisher_) {

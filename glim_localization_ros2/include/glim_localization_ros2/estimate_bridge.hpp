@@ -30,9 +30,9 @@ namespace glim_localization_ros2
 Eigen::Isometry3d parse_pose7(const std::vector<double> & v, const std::string & name);
 
 /// Publisher settings from config_ros.json: map and odom frame names from "glim_ros", the rest from
-/// "localization_ros" (tf_mode, base_frame_id, T_base_imu, diagnostics_period). Shared by R1 and
-/// R2.
-/// @throw std::invalid_argument for a bad tf_mode or T_base_imu
+/// "localization_ros" (tf_mode, base_frame_id, T_base_imu, diagnostics_period,
+/// publish_aligned_points, aligned_points_voxel). Shared by R1 and R2.
+/// @throw std::invalid_argument for a bad tf_mode, T_base_imu or aligned_points_voxel
 LocalizationPublisherParams read_publisher_params(const glim::Config & config_ros);
 
 /// Connects the core's callbacks to a LocalizationPublisher. Shared by the R1 extension and the R2
