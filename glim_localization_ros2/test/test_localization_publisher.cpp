@@ -782,6 +782,28 @@ TEST(LocalizationPublisher, LostFrameIsSuppressedExceptOdomBase) {
   EXPECT_EQ(fixture.statuses[1].state, StatusMsg::LOST);
 }
 
+// Only LOST is suppressed: INITIALIZING and DEGRADED publish the pose, odometry and TF.
+TEST(LocalizationPublisher, InitializingAndDegradedPublishPoseAndTf) {
+  Fixture fixture(LocalizationPublisherParams(), "publisher_states");
+  fixture.wait_for_discovery(1);
+  fixture.feed(make_frame(0, 0.0), LocalizationState::INITIALIZING);
+  fixture.feed(make_frame(1, 0.0), LocalizationState::DEGRADED);
+  ASSERT_TRUE(fixture.spin_until([&] {
+      return fixture.statuses.size() >= 2 && fixture.poses.size() >= 2 &&
+             fixture.odometries.size() >= 2 && fixture.count("map", "odom") >= 2 &&
+             fixture.count("odom", "base_link") >= 2;
+    }));
+  for (int k = 0; k < 2; ++k) {
+    const auto stamp = key(to_msg(kStart + k * kDt));
+    EXPECT_EQ(key(fixture.poses[k].header.stamp), stamp) << "frame " << k;
+    EXPECT_EQ(key(fixture.odometries[k].header.stamp), stamp) << "frame " << k;
+    EXPECT_TRUE(fixture.find("map", "odom", stamp)) << "frame " << k;
+    EXPECT_TRUE(fixture.find("odom", "base_link", stamp)) << "frame " << k;
+  }
+  EXPECT_EQ(fixture.statuses.at(0).state, StatusMsg::INITIALIZING);
+  EXPECT_EQ(fixture.statuses.at(1).state, StatusMsg::DEGRADED);
+}
+
 TEST(LocalizationPublisher, ExternalOdomPublishesNothingInLost) {
   LocalizationPublisherParams params;
   params.tf_mode = TfMode::EXTERNAL_ODOM;
