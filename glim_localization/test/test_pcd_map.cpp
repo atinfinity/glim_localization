@@ -266,6 +266,15 @@ TEST_F(PcdMapTest, ReadsBinaryCompressedWithPaddingAndBackReferences) {
   EXPECT_EQ(read[0], Eigen::Vector4d(1.0, 2.0, 3.0, 1.0));
   EXPECT_EQ(read[1], Eigen::Vector4d(1.0, 5.0, 6.0, 1.0));
 
+  // A field with COUNT 3 before x: its block holds 3 values per point, so x starts after 2 * 12 bytes
+  const std::string normal_header = "FIELDS normal x y z\nSIZE 4 4 4 4\nTYPE F F F F\nCOUNT 3 1 1 1\nWIDTH 2\nHEIGHT 1\nPOINTS 2\n"
+                                    "DATA binary_compressed\n";
+  const std::string normal_data = float_bytes({9.0f, 9.0f, 9.0f, 8.0f, 8.0f, 8.0f, 1.0f, 4.0f, 2.0f, 5.0f, 3.0f, 6.0f});
+  ASSERT_TRUE(read_pcd(write_text("normal.pcd", normal_header + compressed_body(lzf_encode_literals(normal_data), 48)).string(), read));
+  ASSERT_EQ(read.size(), 2u);
+  EXPECT_EQ(read[0], Eigen::Vector4d(1.0, 2.0, 3.0, 1.0));
+  EXPECT_EQ(read[1], Eigen::Vector4d(4.0, 5.0, 6.0, 1.0));
+
   // An empty cloud
   ASSERT_TRUE(read_pcd(
     write_text("empty.pcd", "FIELDS x y z\nSIZE 4 4 4\nTYPE F F F\nPOINTS 0\nDATA binary_compressed\n" + compressed_body("", 0)).string(),
