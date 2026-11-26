@@ -116,6 +116,52 @@ TEST_F(MapCompilerTest, CompiledMapCanBeCompiledAgain) {
   EXPECT_LT((first[2].T_world_origin.matrix() - second[2].T_world_origin.matrix()).cwiseAbs().maxCoeff(), 1e-9);
 }
 
+TEST_F(MapCompilerTest, LoadMapReportsTheSource) {
+  std::string source = "untouched";
+  LoadedSubmaps submaps;
+  ASSERT_TRUE(load_map(input_.string(), submaps, &source));
+  EXPECT_EQ(source, "glim_dump");
+
+  ASSERT_TRUE(save_compiled_map(output_.string(), submaps, "ply"));
+  ASSERT_TRUE(load_map(output_.string(), submaps, &source));
+  EXPECT_EQ(source, "ply");
+
+  // The source is informational: a missing or non-string value loads as "unknown".
+  edit_index([](nlohmann::json& index) { index.erase("source"); });
+  ASSERT_TRUE(load_map(output_.string(), submaps, &source));
+  EXPECT_EQ(source, "unknown");
+  edit_index([](nlohmann::json& index) { index["source"] = 3; });
+  source = "untouched";
+  ASSERT_TRUE(load_map(output_.string(), submaps, &source));
+  EXPECT_EQ(source, "unknown");
+
+  // A failed load leaves it unchanged.
+  source = "untouched";
+  EXPECT_FALSE(load_map((dir_ / "missing").string(), submaps, &source));
+  EXPECT_EQ(source, "untouched");
+}
+
+TEST_F(MapCompilerTest, RecompilingKeepsTheSource) {
+  const auto read_source = [](const fs::path& map) {
+    return nlohmann::json::parse(std::ifstream(map / "map_index.json")).at("source").get<std::string>();
+  };
+  // A GLIM dump, compiled twice
+  ASSERT_EQ(compile(input_, output_), 0) << last_log();
+  ASSERT_EQ(compile(output_, dir_ / "dump_again"), 0) << last_log();
+  EXPECT_EQ(read_source(output_), "glim_dump");
+  EXPECT_EQ(read_source(dir_ / "dump_again"), "glim_dump");
+
+  // A PCD map, compiled again as it is and with recomputed covariances. Both used to record "glim_dump".
+  write_synthetic_pcd((dir_ / "cloud.pcd").string(), make_synthetic_world_points(params_), PcdEncoding::Binary);
+  // One large tile, so no tile has fewer than k points.
+  ASSERT_EQ(compile(dir_ / "cloud.pcd", dir_ / "from_pcd", "--grid-size 1000"), 0) << last_log();
+  ASSERT_EQ(compile(dir_ / "from_pcd", dir_ / "pcd_again"), 0) << last_log();
+  ASSERT_EQ(compile(dir_ / "from_pcd", dir_ / "pcd_recomputed", "--recompute-covariances --k-neighbors 5"), 0) << last_log();
+  EXPECT_EQ(read_source(dir_ / "from_pcd"), "pcd");
+  EXPECT_EQ(read_source(dir_ / "pcd_again"), "pcd");
+  EXPECT_EQ(read_source(dir_ / "pcd_recomputed"), "pcd");
+}
+
 TEST_F(MapCompilerTest, KeepsDumpCovariancesByDefault) {
   ASSERT_EQ(compile(input_, output_), 0) << last_log();
   LoadedSubmaps dump, compiled;
@@ -386,6 +432,38 @@ TEST_F(MapCompilerTest, PlyAndPcdGiveTheSameMap) {
       for (size_t j = 0; j < from_ply[i].points->size(); j++) {
         ASSERT_EQ(from_ply[i].points->points[j], from_pcd[i].points->points[j]);
         ASSERT_EQ(from_ply[i].points->covs[j], from_pcd[i].points->covs[j]);
+      }
+    }
+  }
+}
+
+TEST_F(MapCompilerTest, BinaryCompressedPcdGivesTheSameMapAsBinary) {
+  const auto points = make_synthetic_world_points(params_);
+  for (const bool double_xyz : {false, true}) {
+    fs::remove_all(dir_ / "from_binary");
+    fs::remove_all(dir_ / "from_compressed");
+    write_synthetic_pcd((dir_ / "binary.pcd").string(), points, PcdEncoding::Binary, double_xyz);
+    write_synthetic_pcd((dir_ / "compressed.pcd").string(), points, PcdEncoding::BinaryCompressed, double_xyz);
+    // No --voxel-size: the multi-threaded voxel grid sampling does not keep the order of its output points, so two
+    // runs on the same points can differ in order and in the last bits of the centroids
+    ASSERT_EQ(compile(dir_ / "binary.pcd", dir_ / "from_binary", "--grid-size 15"), 0) << last_log();
+    ASSERT_EQ(compile(dir_ / "compressed.pcd", dir_ / "from_compressed", "--grid-size 15"), 0) << last_log();
+
+    const auto binary_index = nlohmann::json::parse(std::ifstream(dir_ / "from_binary" / "map_index.json"));
+    const auto compressed_index = nlohmann::json::parse(std::ifstream(dir_ / "from_compressed" / "map_index.json"));
+    EXPECT_EQ(compressed_index.at("source"), "pcd");
+    EXPECT_EQ(binary_index, compressed_index);
+
+    LoadedSubmaps from_binary, from_compressed;
+    ASSERT_TRUE(load_map((dir_ / "from_binary").string(), from_binary));
+    ASSERT_TRUE(load_map((dir_ / "from_compressed").string(), from_compressed));
+    ASSERT_EQ(from_binary.size(), from_compressed.size());
+    ASSERT_GT(from_binary.size(), 2u);
+    for (size_t i = 0; i < from_binary.size(); i++) {
+      ASSERT_EQ(from_binary[i].points->size(), from_compressed[i].points->size());
+      for (size_t j = 0; j < from_binary[i].points->size(); j++) {
+        ASSERT_EQ(from_binary[i].points->points[j], from_compressed[i].points->points[j]);
+        ASSERT_EQ(from_binary[i].points->covs[j], from_compressed[i].points->covs[j]);
       }
     }
   }

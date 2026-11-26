@@ -18,11 +18,12 @@ namespace {
 void print_usage() {
   std::cerr << "usage: map_compiler <input> <output_dir> [options]\n"
             << "  <input>  a GLIM dump, a compiled map, or a .pcd or .ply file (x, y, z in the map frame)\n"
+            << "           (PCD: DATA ascii, binary or binary_compressed)\n"
             << "options for .pcd and .ply input:\n"
             << "  --grid-size <m>    tile edge along x and y, at least 1 (default 20)\n"
             << "  --voxel-size <m>   voxel grid downsampling before tiling, 0 disables it, otherwise at least 0.01 (default 0)\n"
             << "  --k-neighbors <n>  neighbours for covariance estimation, 5 to 1000 (default 10)\n"
-            << "options for a GLIM dump or a compiled map:\n"
+            << "options for a GLIM dump or a compiled map (a compiled map keeps the source in its map_index.json):\n"
             << "  --recompute-covariances  re-estimate the per-point covariances from the k nearest neighbours within each\n"
             << "                           submap, as for .pcd and .ply input (default off: keep the stored ones)\n"
             << "  --k-neighbors <n>        with --recompute-covariances: neighbours, 5 to 1000 (default 10)\n"
@@ -168,7 +169,7 @@ int main(int argc, char** argv) {
   }
 
   glim_localization::LoadedSubmaps submaps;
-  std::string source = "glim_dump";
+  std::string source;  // Set by the input below
   const std::string format = point_cloud_format(input);
   if (!format.empty()) {
     if (recompute_covariances) {
@@ -206,7 +207,8 @@ int main(int argc, char** argv) {
       std::cerr << "invalid options: k_neighbors " << params.k_neighbors << " must be at least " << glim_localization::kMinPcdKNeighbors << std::endl;
       return 1;
     }
-    if (!glim_localization::load_map(input, submaps)) {
+    // A compiled map keeps the source it was compiled from (for example "pcd"), also with --recompute-covariances.
+    if (!glim_localization::load_map(input, submaps, &source)) {
       spdlog::error("failed to load {}", input);
       return 1;
     }

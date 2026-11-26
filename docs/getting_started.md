@@ -91,7 +91,7 @@ Localization takes either a GLIM dump directory (from a GLIM mapping run) or a m
 /ws/build/core/tools/map_compiler /ws/out/map.ply /ws/out/map --grid-size 50 --voxel-size 0.1
 ```
 
-PCD input reads `DATA ascii` and `binary` with x, y, z as F4 or F8; PLY input reads `ascii` and `binary_little_endian` with vertex x, y, z as `float` or `double`. Localization uses up to `map_max_submaps` (default 5) tiles nearest to the robot, so for long-range LiDAR use `--grid-size` 50 to 100. The options, and the 2D occupancy grid for Nav2 (`--occupancy-grid`), are in [Map preparation](maps.md).
+PCD input reads `DATA ascii`, `binary` and `binary_compressed` with x, y, z as F4 or F8; PLY input reads `ascii` and `binary_little_endian` with vertex x, y, z as `float` or `double`. Localization uses up to `map_max_submaps` (default 5) tiles nearest to the robot, so for long-range LiDAR use `--grid-size` 50 to 100. The options, and the 2D occupancy grid for Nav2 (`--occupancy-grid`), are in [Map preparation](maps.md).
 
 ## 6. Replay a real bag and evaluate it
 

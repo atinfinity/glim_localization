@@ -23,9 +23,9 @@ Point cloud options (`.pcd` and `.ply`; rejected for dump input, except `--k-nei
 | `--voxel-size <m>` | Voxel downsampling before tiling, 0 disables it, otherwise at least 0.01 | 0 |
 | `--k-neighbors <n>` | Neighbours for covariance estimation, 5 to 1000 | 10 |
 
-PCD input reads `DATA ascii` and `binary` with x, y, z as F4 or F8; other fields are ignored. PLY input reads `format ascii` and `binary_little_endian` with vertex x, y, z as `float` or `double`. Other properties (intensity, normals, colors, lists) and other elements (faces) are ignored, and big-endian PLY is rejected. The same points give the same map from either format. Localization uses up to `map_max_submaps` (default 5) tiles nearest to the robot, so 20 m tiles cover only about 40 x 40 m. For long-range LiDAR use `--grid-size` 50 to 100, or raise `map_max_submaps`.
+PCD input reads `DATA ascii`, `binary` and `binary_compressed` (PCL's LZF format) with x, y, z as F4 or F8; other fields are ignored. PLY input reads `format ascii` and `binary_little_endian` with vertex x, y, z as `float` or `double`. Other properties (intensity, normals, colors, lists) and other elements (faces) are ignored, and big-endian PLY is rejected. The same points give the same map from either format. Localization uses up to `map_max_submaps` (default 5) tiles nearest to the robot, so 20 m tiles cover only about 40 x 40 m. For long-range LiDAR use `--grid-size` 50 to 100, or raise `map_max_submaps`.
 
-Not supported yet: compressed PCD ([#12](https://github.com/atinfinity/glim_localization/issues/12)). See [Status and limitations](status.md).
+The whole cloud is held in memory (roughly 300 bytes per point), and a cloud with more than 2^31 - 1 points after downsampling is rejected; use `--voxel-size` or split the cloud ([#12](https://github.com/atinfinity/glim_localization/issues/12)). See [Status and limitations](status.md).
 
 ## Recomputing covariances of a GLIM dump
 
@@ -43,7 +43,7 @@ By default, the per-point covariances of a GLIM dump or a compiled map are copie
 - **Per submap:** neighbours are searched within each submap, not across submaps. GLIM submaps overlap and each covers the sensor range, so a search across submaps would mix slightly offset copies of the same surface. The default k = 10 matches GLIM's per-scan default (`k_correspondences`); GLIM itself estimates covariances per scan and merges the transformed scan covariances into the submap, so recomputed covariances come from a different neighbourhood than the ones in the dump.
 - **Tile edges:** for a map compiled from a PCD or PLY file, the tiles do not overlap, so points near a tile edge then see only the neighbours in their own tile. To change k for such a map, compile it again from the point cloud.
 - **Errors:** `--recompute-covariances` with `.pcd` or `.ply` input, and `--k-neighbors` with map directory input but without `--recompute-covariances`, are rejected. A submap with fewer than k points fails the run, and nothing is written.
-- Points, poses and submap ids are unchanged, and `map_index.json` keeps `source: "glim_dump"`.
+- Points, poses and submap ids are unchanged, and `map_index.json` keeps the input's `source` (`glim_dump` for a dump, `pcd` for a map compiled from a PCD file, and so on).
 
 ## 2D occupancy grid for Nav2
 

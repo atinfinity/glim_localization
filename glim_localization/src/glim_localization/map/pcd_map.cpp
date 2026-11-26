@@ -126,8 +126,8 @@ bool read_header(std::ifstream& ifs, const std::string& path, PcdHeader& header)
     spdlog::error("no DATA line in {}", path);
     return false;
   }
-  if (header.data != "ascii" && header.data != "binary") {
-    spdlog::error("unsupported PCD DATA {} in {} (only ascii and binary)", header.data, path);
+  if (header.data != "ascii" && header.data != "binary" && header.data != "binary_compressed") {
+    spdlog::error("unsupported PCD DATA {} in {} (only ascii, binary and binary_compressed)", header.data, path);
     return false;
   }
   if (names.empty() || sizes.size() != names.size() || types.size() != names.size() || (!counts.empty() && counts.size() != names.size())) {
@@ -239,6 +239,11 @@ double read_float(const char* bytes, size_t size) {
   return value;
 }
 
+/// gtsam_points::estimate_covariances takes the point count as an int.
+bool fits_covariance_estimation(size_t num_points) {
+  return num_points <= static_cast<size_t>(std::numeric_limits<int>::max());
+}
+
 bool read_binary(std::ifstream& ifs, const std::string& path, const PcdHeader& header, PcdPoints& points) {
   // point_bytes >= 12 (x, y and z). Compare with the file before allocating, so a huge POINTS cannot exhaust memory.
   const auto remaining = remaining_bytes(ifs);
@@ -265,6 +270,85 @@ bool read_binary(std::ifstream& ifs, const std::string& path, const PcdHeader& h
     for (int axis = 0; axis < 3; axis++) {
       const PcdField& field = header.fields[header.xyz[axis]];
       p[axis] = read_float(point + field.offset, field.size);
+    }
+    points.push_back(p);
+  }
+  return true;
+}
+
+/// PCL's binary_compressed: two little-endian uint32 (compressed size, uncompressed size), then an LZF stream.
+/// The uncompressed data is field-major (all values of the first field, then of the next, ...) and, unlike binary
+/// data, leaves out the padding fields named "_".
+bool read_binary_compressed(std::ifstream& ifs, const std::string& path, const PcdHeader& header, PcdPoints& points) {
+  uint32_t sizes[2];
+  ifs.read(reinterpret_cast<char*>(sizes), sizeof(sizes));
+  if (static_cast<size_t>(ifs.gcount()) != sizeof(sizes)) {
+    spdlog::error("truncated binary_compressed header in {}", path);
+    return false;
+  }
+  const size_t compressed_size = sizes[0];
+  const size_t uncompressed_size = sizes[1];
+
+  // Byte offset of each field within one packed point (padding left out). Field f starts at field_offset[f] * num_points.
+  std::vector<size_t> field_offset(header.fields.size(), 0);
+  size_t packed_point_bytes = 0;
+  for (size_t i = 0; i < header.fields.size(); i++) {
+    if (header.fields[i].name == "_") {
+      continue;
+    }
+    field_offset[i] = packed_point_bytes;
+    packed_point_bytes += header.fields[i].size * header.fields[i].count;
+  }
+  // packed_point_bytes >= 12 (x, y and z). The sizes are uint32, so a larger cloud cannot be stored this way.
+  if (header.num_points > std::numeric_limits<uint32_t>::max() / packed_point_bytes) {
+    spdlog::error("{} points of {} bytes in {} exceed the 4 GiB limit of binary_compressed", header.num_points, packed_point_bytes, path);
+    return false;
+  }
+  if (uncompressed_size != header.num_points * packed_point_bytes) {
+    spdlog::error("binary_compressed data in {} holds {} bytes, but {} points of {} bytes need {}", path, uncompressed_size,
+                  header.num_points, packed_point_bytes, header.num_points * packed_point_bytes);
+    return false;
+  }
+  if (uncompressed_size == 0) {
+    return true;
+  }
+
+  // Check both sizes before allocating: the compressed data must be in the file, and LZF expands at most 88 times
+  // (a 3-byte back reference copies at most 264 bytes).
+  constexpr size_t kMaxLzfExpansion = 88;
+  const auto remaining = remaining_bytes(ifs);
+  if (!remaining) {
+    spdlog::error("failed to get the size of {}", path);
+    return false;
+  }
+  if (compressed_size > *remaining) {
+    spdlog::error("truncated binary_compressed data in {}: {} compressed bytes, {} left", path, compressed_size, *remaining);
+    return false;
+  }
+  if (uncompressed_size > compressed_size * kMaxLzfExpansion) {
+    spdlog::error("corrupt binary_compressed data in {}: {} bytes cannot expand to {}", path, compressed_size, uncompressed_size);
+    return false;
+  }
+
+  std::vector<char> compressed(compressed_size);
+  ifs.read(compressed.data(), static_cast<std::streamsize>(compressed.size()));
+  if (static_cast<size_t>(ifs.gcount()) != compressed.size()) {
+    spdlog::error("truncated binary_compressed data in {}", path);
+    return false;
+  }
+  std::vector<char> buffer(uncompressed_size);
+  if (!lzf_decompress(compressed.data(), compressed.size(), buffer.data(), buffer.size())) {
+    spdlog::error("corrupt binary_compressed data in {}", path);
+    return false;
+  }
+
+  points.reserve(header.num_points);
+  for (size_t i = 0; i < header.num_points; i++) {
+    Eigen::Vector4d p(0.0, 0.0, 0.0, 1.0);
+    for (int axis = 0; axis < 3; axis++) {
+      const int f = header.xyz[axis];
+      const PcdField& field = header.fields[f];
+      p[axis] = read_float(buffer.data() + field_offset[f] * header.num_points + i * field.size, field.size);
     }
     points.push_back(p);
   }
@@ -335,6 +419,47 @@ bool read_ascii(std::ifstream& ifs, const std::string& path, const PcdHeader& he
 
 }  // namespace
 
+bool lzf_decompress(const char* in, size_t in_size, char* out, size_t out_size) {
+  const auto* ip = reinterpret_cast<const unsigned char*>(in);
+  const unsigned char* const in_end = ip + in_size;
+  size_t op = 0;
+  while (ip < in_end) {
+    const unsigned int ctrl = *ip++;
+    if (ctrl < 32) {
+      // A literal run of ctrl + 1 bytes
+      const size_t len = ctrl + 1;
+      if (len > static_cast<size_t>(in_end - ip) || len > out_size - op) {
+        return false;
+      }
+      std::memcpy(out + op, ip, len);
+      ip += len;
+      op += len;
+      continue;
+    }
+    // A back reference: length ctrl >> 5 (one more byte is added if it is 7) plus 2, offset of 13 bits plus 1
+    size_t len = ctrl >> 5;
+    if (len == 7) {
+      if (ip >= in_end) {
+        return false;
+      }
+      len += *ip++;
+    }
+    if (ip >= in_end) {
+      return false;
+    }
+    const size_t offset = ((static_cast<size_t>(ctrl & 0x1f) << 8) | *ip++) + 1;
+    len += 2;
+    if (offset > op || len > out_size - op) {
+      return false;
+    }
+    // Byte by byte: the source may overlap the bytes being written (a repeated pattern).
+    for (size_t j = 0; j < len; j++, op++) {
+      out[op] = out[op - offset];
+    }
+  }
+  return op == out_size;
+}
+
 bool read_pcd(const std::string& path, PcdPoints& points) {
   std::ifstream ifs(path, std::ios::binary);
   if (!ifs) {
@@ -349,7 +474,10 @@ bool read_pcd(const std::string& path, PcdPoints& points) {
 
   PcdPoints all;
   try {
-    if (!(header.data == "binary" ? read_binary(ifs, path, header, all) : read_ascii(ifs, path, header, all))) {
+    const bool read = header.data == "binary"              ? read_binary(ifs, path, header, all)
+                      : header.data == "binary_compressed" ? read_binary_compressed(ifs, path, header, all)
+                                                           : read_ascii(ifs, path, header, all);
+    if (!read) {
       return false;
     }
   } catch (const std::exception& e) {
@@ -439,6 +567,12 @@ bool build_pcd_submaps(const PcdPoints& points, const PcdMapParams& params, Load
     spdlog::error("{} points are fewer than k_neighbors {}", cloud->size(), params.k_neighbors);
     return false;
   }
+  if (!fits_covariance_estimation(cloud->size())) {
+    spdlog::error("{} points after downsampling exceed the {} points that covariance estimation takes at once; use a larger voxel size "
+                  "or split the cloud",
+                  cloud->size(), std::numeric_limits<int>::max());
+    return false;
+  }
 
   const auto covs = gtsam_points::estimate_covariances(cloud->points, cloud->size(), params.k_neighbors, params.num_threads);
 
@@ -498,6 +632,11 @@ bool recompute_covariances(LoadedSubmaps& submaps, int k_neighbors, int num_thre
   for (const auto& submap : submaps) {
     if (!submap.points || submap.points->size() < static_cast<size_t>(k_neighbors)) {
       spdlog::error("submap {} has {} points, fewer than k_neighbors {}", submap.id, submap.points ? submap.points->size() : 0, k_neighbors);
+      return false;
+    }
+    if (!fits_covariance_estimation(submap.points->size())) {
+      spdlog::error("submap {} has {} points, more than the {} that covariance estimation takes at once", submap.id, submap.points->size(),
+                    std::numeric_limits<int>::max());
       return false;
     }
     auto cloud = gtsam_points::PointCloudCPU::clone(*submap.points);

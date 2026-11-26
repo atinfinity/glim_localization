@@ -2,9 +2,11 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <initializer_list>
 #include <limits>
 #include <map>
 #include <memory>
+#include <optional>
 #include <random>
 #include <set>
 #include <sstream>
@@ -74,14 +76,14 @@ protected:
 
 TEST_F(PcdMapTest, ReadsAsciiAndBinaryWithExtraFields) {
   for (const bool double_xyz : {false, true}) {
-    for (const auto encoding : {PcdEncoding::Ascii, PcdEncoding::Binary}) {
+    for (const auto encoding : {PcdEncoding::Ascii, PcdEncoding::Binary, PcdEncoding::BinaryCompressed}) {
       const fs::path path = dir_ / "cloud.pcd";
       write_synthetic_pcd(path.string(), points_, encoding, double_xyz);
       PcdPoints read;
       ASSERT_TRUE(read_pcd(path.string(), read));
       ASSERT_EQ(read.size(), points_.size());
       // Binary F4 rounds to float, about 1e-3 m at 12345 m
-      const double tolerance = encoding == PcdEncoding::Binary && !double_xyz ? 2e-3 : 1e-9;
+      const double tolerance = encoding != PcdEncoding::Ascii && !double_xyz ? 2e-3 : 1e-9;
       for (size_t i = 0; i < read.size(); i++) {
         ASSERT_LT((read[i] - points_[i]).cwiseAbs().maxCoeff(), tolerance) << i;
         ASSERT_EQ(read[i].w(), 1.0);
@@ -122,7 +124,7 @@ TEST_F(PcdMapTest, ReadsBinaryWithFieldsBeforeXyz) {
 TEST_F(PcdMapTest, RejectsUnsupportedOrBrokenFiles) {
   const std::string fields = "FIELDS x y z\nSIZE 4 4 4\nTYPE F F F\nCOUNT 1 1 1\n";
   expect_read_fails(dir_ / "missing.pcd");
-  expect_read_fails(write_text("compressed.pcd", fields + "WIDTH 1\nHEIGHT 1\nPOINTS 1\nDATA binary_compressed\n"));
+  expect_read_fails(write_text("unknown_data.pcd", fields + "WIDTH 1\nHEIGHT 1\nPOINTS 1\nDATA binary_lz4\n"));
   expect_read_fails(write_text("no_data.pcd", fields + "WIDTH 1\nHEIGHT 1\nPOINTS 1\n"));
   expect_read_fails(write_text("no_z.pcd", "FIELDS x y\nSIZE 4 4\nTYPE F F\nPOINTS 1\nDATA ascii\n1 2\n"));
   expect_read_fails(write_text("int_x.pcd", "FIELDS x y z\nSIZE 4 4 4\nTYPE I F F\nPOINTS 1\nDATA ascii\n1 2 3\n"));
@@ -189,6 +191,118 @@ TEST_F(PcdMapTest, RejectsPointsAboveTheFileSizeBeforeAllocating) {
   ASSERT_TRUE(read_pcd(write_text("exact_ascii.pcd", "FIELDS x y z\nSIZE 4 4 4\nTYPE F F F\nPOINTS 2\nDATA ascii\n1 2 3\n4 5 6").string(), read));
   ASSERT_EQ(read.size(), 2u);
   EXPECT_EQ(read[1], Eigen::Vector4d(4.0, 5.0, 6.0, 1.0));
+}
+
+namespace {
+
+/// Decompress with lzf_decompress into exactly `out_size` bytes, or nullopt.
+std::optional<std::string> lzf(const std::string& in, size_t out_size) {
+  std::string out(out_size, '\0');
+  if (!lzf_decompress(in.data(), in.size(), out.data(), out.size())) {
+    return std::nullopt;
+  }
+  return out;
+}
+
+/// The binary_compressed body: compressed size, uncompressed size (little-endian uint32), then the stream.
+std::string compressed_body(const std::string& stream, uint32_t uncompressed_size) {
+  const uint32_t sizes[2] = {static_cast<uint32_t>(stream.size()), uncompressed_size};
+  return std::string(reinterpret_cast<const char*>(sizes), sizeof(sizes)) + stream;
+}
+
+std::string float_bytes(std::initializer_list<float> values) {
+  std::string bytes;
+  for (const float value : values) {
+    bytes.append(reinterpret_cast<const char*>(&value), sizeof(value));
+  }
+  return bytes;
+}
+
+}  // namespace
+
+TEST(LzfTest, DecompressesLiteralsAndBackReferences) {
+  using namespace std::string_literals;
+  EXPECT_EQ(lzf(""s, 0), ""s);
+  EXPECT_EQ(lzf("\x02"s + "abc", 3), "abc"s);
+  // A literal "a", then 3 bytes from offset 1: the copy overlaps the bytes it writes.
+  EXPECT_EQ(lzf("\x00"s + "a" + "\x20\x00"s, 4), "aaaa"s);
+  // A long match: length 7 + 5 + 2 = 14 from offset 2.
+  EXPECT_EQ(lzf("\x01"s + "ab" + "\xe0\x05\x01"s, 16), "abababababababab"s);
+
+  // The 13-bit offset: 256 + 0 + 1 = 257 back from 300 bytes is byte 43.
+  std::string literal;
+  for (int i = 0; i < 300; i++) {
+    literal.push_back(static_cast<char>(i % 251));
+  }
+  const auto far = lzf(lzf_encode_literals(literal) + "\x21\x00"s, 303);
+  ASSERT_TRUE(far.has_value());
+  EXPECT_EQ(far->substr(300), literal.substr(43, 3));
+}
+
+TEST(LzfTest, RejectsMalformedStreamsAndWrongSizes) {
+  using namespace std::string_literals;
+  EXPECT_FALSE(lzf("\x02"s + "abc", 4));                 // Ends before the output is full
+  EXPECT_FALSE(lzf("\x02"s + "abc", 2));                 // Runs past the end of the output
+  EXPECT_FALSE(lzf("\x00"s + "a" + "\x20\x00"s, 3));     // A back reference past the end of the output
+  EXPECT_FALSE(lzf("\x05"s + "ab", 6));                  // A literal run past the end of the input
+  EXPECT_FALSE(lzf("\x20\x00"s, 3));                     // A back reference before the start of the output
+  EXPECT_FALSE(lzf("\x00"s + "a" + "\x20\x01"s, 4));     // Offset 2 with one byte written
+  EXPECT_FALSE(lzf("\x00"s + "a" + "\x20"s, 4));         // No offset byte
+  EXPECT_FALSE(lzf("\x00"s + "a" + "\xe0"s, 10));        // No length byte
+  EXPECT_FALSE(lzf("\x00"s + "a" + "\xe0\x00"s, 10));    // No offset byte after the length byte
+}
+
+TEST_F(PcdMapTest, ReadsBinaryCompressedWithPaddingAndBackReferences) {
+  // PCL leaves the "_" padding out of the compressed data; label is a U2 field after z.
+  // Field-major data: x = (1, 1), y = (2, 5), z = (3, 6), label = (7, 8). The second x is a back reference to the first.
+  const std::string header = "FIELDS _ x y z label\nSIZE 4 4 4 4 2\nTYPE U F F F U\nCOUNT 1 1 1 1 1\nWIDTH 2\nHEIGHT 1\nPOINTS 2\n"
+                             "DATA binary_compressed\n";
+  const uint16_t labels[2] = {7, 8};
+  const std::string tail = float_bytes({2.0f, 5.0f, 3.0f, 6.0f}) + std::string(reinterpret_cast<const char*>(labels), sizeof(labels));
+  const std::string stream = std::string("\x03", 1) + float_bytes({1.0f}) + std::string("\x40\x03", 2) + lzf_encode_literals(tail);
+  PcdPoints read;
+  ASSERT_TRUE(read_pcd(write_text("padded.pcd", header + compressed_body(stream, 28)).string(), read));
+  ASSERT_EQ(read.size(), 2u);
+  EXPECT_EQ(read[0], Eigen::Vector4d(1.0, 2.0, 3.0, 1.0));
+  EXPECT_EQ(read[1], Eigen::Vector4d(1.0, 5.0, 6.0, 1.0));
+
+  // A field with COUNT 3 before x: its block holds 3 values per point, so x starts after 2 * 12 bytes
+  const std::string normal_header = "FIELDS normal x y z\nSIZE 4 4 4 4\nTYPE F F F F\nCOUNT 3 1 1 1\nWIDTH 2\nHEIGHT 1\nPOINTS 2\n"
+                                    "DATA binary_compressed\n";
+  const std::string normal_data = float_bytes({9.0f, 9.0f, 9.0f, 8.0f, 8.0f, 8.0f, 1.0f, 4.0f, 2.0f, 5.0f, 3.0f, 6.0f});
+  ASSERT_TRUE(read_pcd(write_text("normal.pcd", normal_header + compressed_body(lzf_encode_literals(normal_data), 48)).string(), read));
+  ASSERT_EQ(read.size(), 2u);
+  EXPECT_EQ(read[0], Eigen::Vector4d(1.0, 2.0, 3.0, 1.0));
+  EXPECT_EQ(read[1], Eigen::Vector4d(4.0, 5.0, 6.0, 1.0));
+
+  // An empty cloud
+  ASSERT_TRUE(read_pcd(
+    write_text("empty.pcd", "FIELDS x y z\nSIZE 4 4 4\nTYPE F F F\nPOINTS 0\nDATA binary_compressed\n" + compressed_body("", 0)).string(),
+    read));
+  EXPECT_TRUE(read.empty());
+}
+
+TEST_F(PcdMapTest, RejectsBrokenBinaryCompressed) {
+  const std::string header = "FIELDS x y z\nSIZE 4 4 4\nTYPE F F F\nPOINTS 1\nDATA binary_compressed\n";
+  const std::string point = lzf_encode_literals(float_bytes({1.0f, 2.0f, 3.0f}));
+  PcdPoints read;
+  ASSERT_TRUE(read_pcd(write_text("good.pcd", header + compressed_body(point, 12)).string(), read));
+
+  expect_read_fails(write_text("no_sizes.pcd", header + std::string(6, '\0')));
+  expect_read_fails(write_text("wrong_size.pcd", header + compressed_body(point, 16)));
+  expect_read_fails(write_text("short_stream.pcd", header + compressed_body(point, 12).substr(0, 15)));
+  expect_read_fails(write_text("short_output.pcd", header + compressed_body(lzf_encode_literals(float_bytes({1.0f, 2.0f})), 12)));
+  expect_read_fails(write_text("bad_reference.pcd", header + compressed_body(std::string("\x20\x00", 2), 12)));
+
+  // Sizes that would allocate gigabytes must fail before allocating.
+  // 3 * 10^8 points of 12 bytes fit in uint32, but 4 compressed bytes cannot expand to 3.6 GB.
+  const std::string many = "FIELDS x y z\nSIZE 4 4 4\nTYPE F F F\nPOINTS 300000000\nDATA binary_compressed\n";
+  const std::string expand_log = read_fails_with_log(write_text("expands.pcd", many + compressed_body(std::string(4, '\0'), 3600000000u)));
+  EXPECT_NE(expand_log.find("cannot expand"), std::string::npos) << expand_log;
+  // 4 * 10^8 points of 12 bytes exceed the uint32 sizes.
+  const std::string too_many = "FIELDS x y z\nSIZE 4 4 4\nTYPE F F F\nPOINTS 400000000\nDATA binary_compressed\n";
+  const std::string limit_log = read_fails_with_log(write_text("too_many.pcd", too_many + compressed_body(std::string(4, '\0'), 0)));
+  EXPECT_NE(limit_log.find("4 GiB limit"), std::string::npos) << limit_log;
 }
 
 TEST_F(PcdMapTest, SplitsIntoGridTilesWithCovariances) {
