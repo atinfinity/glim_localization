@@ -10,6 +10,9 @@
 #include <string>
 #include <vector>
 
+#include "Eigen/Geometry"
+
+#include "gtsam_points/types/point_cloud.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "sensor_msgs/msg/point_cloud2.hpp"
 
@@ -58,6 +61,18 @@ void check_map_cloud_size(size_t num_points, size_t max_bytes = kMaxMapCloudByte
 /// large is allocated then
 sensor_msgs::msg::PointCloud2 make_map_cloud(
   const std::vector<glim_localization::MapTile::ConstPtr> & tiles,
+  double voxel_size,
+  const std::string & frame_id,
+  size_t max_bytes = kMaxMapCloudBytes);
+
+/// The points of one scan transformed by T_frame_points into frame_id (for ~/aligned_points: the
+/// deskewed IMU-frame points of a frame and its T_map_imu), in the same layout and with the same
+/// downsampling as make_map_cloud. The header stamp is left zero.
+/// @throw std::invalid_argument if voxel_size is negative or not finite
+/// @throw std::length_error if the cloud would exceed max_bytes
+sensor_msgs::msg::PointCloud2 make_aligned_cloud(
+  const gtsam_points::PointCloud & points,
+  const Eigen::Isometry3d & T_frame_points,
   double voxel_size,
   const std::string & frame_id,
   size_t max_bytes = kMaxMapCloudBytes);

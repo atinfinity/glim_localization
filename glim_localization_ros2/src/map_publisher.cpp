@@ -12,9 +12,11 @@
 #include <cstring>
 #include <limits>
 #include <stdexcept>
+#include <string>
 #include <unordered_map>
 
 #include "Eigen/Core"
+#include "Eigen/Geometry"
 
 #include "sensor_msgs/msg/point_field.hpp"
 
@@ -46,11 +48,96 @@ struct VoxelKeyHash
   }
 };
 
-void check_voxel_size(double voxel_size)
+void check_voxel_size(double voxel_size, const char * name = "map_cloud_voxel")
 {
   if (!std::isfinite(voxel_size) || voxel_size < 0.0) {
-    throw std::invalid_argument("map_cloud_voxel must be finite and not negative");
+    throw std::invalid_argument(std::string(name) + " must be finite and not negative");
   }
+}
+
+/// An unorganized float32 x, y, z cloud of the points that for_each_point visits (each as an
+/// Eigen::Vector3d in the output frame; num_input_points is their number), downsampled as described
+/// at make_map_cloud
+template<typename ForEachPoint>
+sensor_msgs::msg::PointCloud2 build_cloud(
+  const ForEachPoint & for_each_point, size_t num_input_points, double voxel_size,
+  const std::string & frame_id, size_t max_bytes)
+{
+  sensor_msgs::msg::PointCloud2 msg;
+  msg.header.frame_id = frame_id;
+  msg.height = 1;
+  const char * names[] = {"x", "y", "z"};
+  for (uint32_t k = 0; k < 3; k++) {
+    sensor_msgs::msg::PointField field;
+    field.name = names[k];
+    field.offset = 4 * k;
+    field.datatype = sensor_msgs::msg::PointField::FLOAT32;
+    field.count = 1;
+    msg.fields.push_back(field);
+  }
+  msg.is_bigendian = false;
+  msg.point_step = static_cast<uint32_t>(kMapCloudPointStep);
+  msg.is_dense = true;
+
+  const auto finish = [&](size_t num_points) {
+    // num_points passed check_map_cloud_size, so the uint32 fields do not wrap
+      msg.width = static_cast<uint32_t>(num_points);
+      msg.row_step = static_cast<uint32_t>(num_points * kMapCloudPointStep);
+      msg.data.resize(num_points * kMapCloudPointStep);
+    };
+
+  if (voxel_size <= 0.0) {
+    // Every point: write straight into the message (the input size is an upper bound, non-finite
+    // points are skipped)
+    check_map_cloud_size(num_input_points, max_bytes);
+    msg.data.resize(num_input_points * kMapCloudPointStep);
+    size_t n = 0;
+    const auto write_point = [&](const Eigen::Vector3d & p) {
+        if (!p.allFinite() || n >= num_input_points) {
+          return;
+        }
+        const Eigen::Vector3f pf = p.cast<float>();
+        std::memcpy(&msg.data[n * kMapCloudPointStep], pf.data(), 3 * sizeof(float));
+        n++;
+      };
+    for_each_point(write_point);
+    finish(n);
+    return msg;
+  }
+
+  // Sum and count per voxel, in the order the voxels are first met (deterministic output)
+  std::vector<Eigen::Vector3d> sums;
+  std::vector<size_t> counts;
+  std::unordered_map<VoxelKey, size_t, VoxelKeyHash> index;
+  index.reserve(std::min<size_t>(num_input_points, size_t(1) << 20));
+  const auto add_point = [&](const Eigen::Vector3d & p) {
+      if (!p.allFinite()) {
+        return;
+      }
+      const Eigen::Vector3d c = (p / voxel_size).array().floor();
+      if ((c.array().abs() > kMaxVoxelCoord).any()) {
+        return;
+      }
+      const VoxelKey key{static_cast<int64_t>(c.x()), static_cast<int64_t>(c.y()),
+        static_cast<int64_t>(c.z())};
+      const auto [it, inserted] = index.emplace(key, sums.size());
+      if (inserted) {
+        sums.push_back(p);
+        counts.push_back(1);
+      } else {
+        sums[it->second] += p;
+        counts[it->second]++;
+      }
+    };
+  for_each_point(add_point);
+
+  check_map_cloud_size(sums.size(), max_bytes);
+  finish(sums.size());
+  for (size_t i = 0; i < sums.size(); i++) {
+    const Eigen::Vector3f p = (sums[i] / static_cast<double>(counts[i])).cast<float>();
+    std::memcpy(&msg.data[i * kMapCloudPointStep], p.data(), 3 * sizeof(float));
+  }
+  return msg;
 }
 
 }  // namespace
@@ -96,95 +183,35 @@ sensor_msgs::msg::PointCloud2 make_map_cloud(
   size_t max_bytes)
 {
   check_voxel_size(voxel_size);
-  const size_t num_input_points = count_map_points(tiles);
-
-  sensor_msgs::msg::PointCloud2 msg;
-  msg.header.frame_id = frame_id;
-  msg.height = 1;
-  const char * names[] = {"x", "y", "z"};
-  for (uint32_t k = 0; k < 3; k++) {
-    sensor_msgs::msg::PointField field;
-    field.name = names[k];
-    field.offset = 4 * k;
-    field.datatype = sensor_msgs::msg::PointField::FLOAT32;
-    field.count = 1;
-    msg.fields.push_back(field);
-  }
-  msg.is_bigendian = false;
-  msg.point_step = static_cast<uint32_t>(kMapCloudPointStep);
-  msg.is_dense = true;
-
-  const auto finish = [&](size_t num_points) {
-    // num_points passed check_map_cloud_size, so the uint32 fields do not wrap
-      msg.width = static_cast<uint32_t>(num_points);
-      msg.row_step = static_cast<uint32_t>(num_points * kMapCloudPointStep);
-      msg.data.resize(num_points * kMapCloudPointStep);
-    };
-
-  if (voxel_size <= 0.0) {
-    // Every point: write straight into the message (the input size is an upper bound, non-finite
-    // points are skipped)
-    check_map_cloud_size(num_input_points, max_bytes);
-    msg.data.resize(num_input_points * kMapCloudPointStep);
-    size_t n = 0;
-    for (const auto & tile : tiles) {
-      if (!tile || !tile->points) {
-        continue;
-      }
-      const auto & cloud = *tile->points;
-      for (size_t i = 0; i < cloud.size(); i++) {
-        const Eigen::Vector3d p = tile->T_world_origin * cloud.points[i].head<3>();
-        if (!p.allFinite()) {
+  const auto for_each_point = [&tiles](const auto & visit) {
+      for (const auto & tile : tiles) {
+        if (!tile || !tile->points) {
           continue;
         }
-        const Eigen::Vector3f pf = p.cast<float>();
-        std::memcpy(&msg.data[n * kMapCloudPointStep], pf.data(), 3 * sizeof(float));
-        n++;
+        const auto & cloud = *tile->points;
+        for (size_t i = 0; i < cloud.size(); i++) {
+          visit(Eigen::Vector3d(tile->T_world_origin * cloud.points[i].head<3>()));
+        }
       }
-    }
-    finish(n);
-    return msg;
-  }
+    };
+  return build_cloud(for_each_point, count_map_points(tiles), voxel_size, frame_id, max_bytes);
+}
 
-  // Sum and count per voxel, in the order the voxels are first met (deterministic output)
-  std::vector<Eigen::Vector3d> sums;
-  std::vector<size_t> counts;
-  std::unordered_map<VoxelKey, size_t, VoxelKeyHash> index;
-  index.reserve(std::min<size_t>(num_input_points, size_t(1) << 20));
-  for (const auto & tile : tiles) {
-    if (!tile || !tile->points) {
-      continue;
-    }
-    const auto & cloud = *tile->points;
-    for (size_t i = 0; i < cloud.size(); i++) {
-      const Eigen::Vector3d p = tile->T_world_origin * cloud.points[i].head<3>();
-      if (!p.allFinite()) {
-        continue;
+sensor_msgs::msg::PointCloud2 make_aligned_cloud(
+  const gtsam_points::PointCloud & points,
+  const Eigen::Isometry3d & T_frame_points,
+  double voxel_size,
+  const std::string & frame_id,
+  size_t max_bytes)
+{
+  check_voxel_size(voxel_size, "aligned_points_voxel");
+  const size_t num_points = points.points ? points.size() : 0;
+  const auto for_each_point = [&](const auto & visit) {
+      for (size_t i = 0; i < num_points; i++) {
+        visit(Eigen::Vector3d(T_frame_points * points.points[i].head<3>()));
       }
-      const Eigen::Vector3d c = (p / voxel_size).array().floor();
-      if ((c.array().abs() > kMaxVoxelCoord).any()) {
-        continue;
-      }
-      const VoxelKey key{static_cast<int64_t>(c.x()), static_cast<int64_t>(c.y()),
-        static_cast<int64_t>(c.z())};
-      const auto [it, inserted] = index.emplace(key, sums.size());
-      if (inserted) {
-        sums.push_back(p);
-        counts.push_back(1);
-      } else {
-        sums[it->second] += p;
-        counts[it->second]++;
-      }
-    }
-  }
-
-  check_map_cloud_size(sums.size(), max_bytes);
-  finish(sums.size());
-  for (size_t i = 0; i < sums.size(); i++) {
-    const Eigen::Vector3f p = (sums[i] / static_cast<double>(counts[i])).cast<float>();
-    std::memcpy(&msg.data[i * kMapCloudPointStep], p.data(), 3 * sizeof(float));
-  }
-  return msg;
+    };
+  return build_cloud(for_each_point, num_points, voxel_size, frame_id, max_bytes);
 }
 
 MapPublisher::MapPublisher(
