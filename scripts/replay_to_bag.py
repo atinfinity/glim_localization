@@ -12,6 +12,10 @@ ground truth (traj_gt.txt) so that glim_rosbag can start the localization withou
 --drop-imu START:DURATION  may be repeated. Leaves out the IMU samples stamped in [START, START + DURATION) seconds
     from the first frame, to make a bag with an IMU gap (the point clouds are kept).
 
+--wheel-odom  also writes /wheel_odom (nav_msgs/Odometry, child_frame_id base_link) at the ground-truth stamps, with
+    the twist of the IMU frame taken from traj_gt.txt by central differences (one-sided at the ends). It is the
+    input of a wheel odometry config with the identity wheel_odom_T_imu_base. The pose is the ground truth.
+
 The bag writer is write_bag from scripts/tests/test_bag_to_replay.py, which the bag_to_replay tests use.
 Only synthetic datasets are meant to go through this tool.
 
@@ -34,6 +38,9 @@ from rosbags.rosbag2 import StoragePlugin  # noqa: E402
 from scipy.spatial.transform import Rotation  # noqa: E402
 
 POSE_TYPE = "geometry_msgs/msg/PoseWithCovarianceStamped"
+ODOM_TYPE = "nav_msgs/msg/Odometry"
+WHEEL_TOPIC = "/wheel_odom"
+WHEEL_CHILD_FRAME = "base_link"
 STAMP_LEAD_NS = 1_000_000  # an initial pose is stamped this long before its frame
 
 
@@ -74,7 +81,7 @@ def read_imu(dataset):
 def read_gt(dataset):
     path = os.path.join(dataset, "traj_gt.txt")
     if not os.path.exists(path):
-        raise ConversionError(f"{path} is required for --initial-pose")
+        raise ConversionError(f"{path} is required for --initial-pose and --wheel-odom")
     rows = [line.split() for line in open(path) if line.strip() and not line.startswith("#")]
     return np.array([[float(v) for v in r[:8]] for r in rows])
 
@@ -140,6 +147,60 @@ def make_initial_poses(specs, clouds, gt):
     return out
 
 
+def gt_twists(gt):
+    """Return (linear, angular) arrays, both in the body frame of each ground-truth row [m/s, rad/s]."""
+    n = len(gt)
+    if n < 2:
+        raise ConversionError("--wheel-odom needs at least two ground-truth poses")
+    stamps = gt[:, 0]
+    if np.any(np.diff(stamps) <= 0):
+        raise ConversionError("--wheel-odom needs strictly increasing ground-truth stamps")
+    rotations = Rotation.from_quat(gt[:, 4:8])
+    linear = np.zeros((n, 3))
+    angular = np.zeros((n, 3))
+    for i in range(n):
+        lo, hi = max(i - 1, 0), min(i + 1, n - 1)
+        dt = stamps[hi] - stamps[lo]
+        linear[i] = rotations[i].inv().apply((gt[hi, 1:4] - gt[lo, 1:4]) / dt)
+        angular[i] = (rotations[lo].inv() * rotations[hi]).as_rotvec() / dt
+    return linear, angular
+
+
+def make_wheel_odom(gt):
+    """Return (topic, type, record ns, message) tuples for /wheel_odom, one per ground-truth pose."""
+    Msg = bag_tools.TS.types[ODOM_TYPE]
+    PoseCov = bag_tools.TS.types["geometry_msgs/msg/PoseWithCovariance"]
+    PoseBody = bag_tools.TS.types["geometry_msgs/msg/Pose"]
+    Point = bag_tools.TS.types["geometry_msgs/msg/Point"]
+    TwistCov = bag_tools.TS.types["geometry_msgs/msg/TwistWithCovariance"]
+    Twist = bag_tools.TS.types["geometry_msgs/msg/Twist"]
+    Vector3 = bag_tools.TS.types["geometry_msgs/msg/Vector3"]
+    linear, angular = gt_twists(gt)
+    out = []
+    for row, v, w in zip(gt, linear, angular):
+        stamp_ns = int(round(row[0] * 1e9))
+        msg = Msg(
+            header=bag_tools.Header(stamp=bag_tools.make_time(stamp_ns), frame_id="odom"),
+            child_frame_id=WHEEL_CHILD_FRAME,
+            pose=PoseCov(
+                pose=PoseBody(
+                    position=Point(x=float(row[1]), y=float(row[2]), z=float(row[3])),
+                    orientation=bag_tools.Quat(x=float(row[4]), y=float(row[5]), z=float(row[6]), w=float(row[7])),
+                ),
+                covariance=np.zeros(36),
+            ),
+            twist=TwistCov(
+                twist=Twist(
+                    linear=Vector3(x=float(v[0]), y=float(v[1]), z=float(v[2])),
+                    angular=Vector3(x=float(w[0]), y=float(w[1]), z=float(w[2])),
+                ),
+                covariance=np.zeros(36),
+            ),
+        )
+        out.append((WHEEL_TOPIC, ODOM_TYPE, stamp_ns, msg))
+    return out
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("dataset", help="replay dataset directory")
@@ -147,6 +208,7 @@ def main(argv=None):
     parser.add_argument("--storage", choices=["sqlite3", "mcap"], default="sqlite3")
     parser.add_argument("--initial-pose", action="append", default=[], type=parse_initial_pose, metavar="T[:dx,dy,dz,yaw_deg]")
     parser.add_argument("--drop-imu", action="append", default=[], type=parse_drop_imu, metavar="START:DURATION")
+    parser.add_argument("--wheel-odom", action="store_true", help=f"also write {WHEEL_TOPIC} from the ground truth")
     args = parser.parse_args(argv)
 
     if os.path.exists(args.out):
@@ -162,14 +224,19 @@ def main(argv=None):
         imus = drop_imu(imus, args.drop_imu, clouds[0][0])
         if args.drop_imu and len(imus) == num_imus:
             raise ConversionError("--drop-imu removed no IMU sample")
-        extra = make_initial_poses(args.initial_pose, clouds, read_gt(args.dataset)) if args.initial_pose else []
+        gt = read_gt(args.dataset) if args.initial_pose or args.wheel_odom else None
+        extra = make_initial_poses(args.initial_pose, clouds, gt) if args.initial_pose else []
+        wheel = make_wheel_odom(gt) if args.wheel_odom else []
     except (ConversionError, OSError, ValueError, KeyError) as e:
         print(f"error: {e}", file=sys.stderr)
         return 1
 
     plugin = StoragePlugin.SQLITE3 if args.storage == "sqlite3" else StoragePlugin.MCAP
-    bag_tools.write_bag(args.out, clouds, imus, plugin, extra)
-    print(f"wrote {len(clouds)} frames, {len(imus)} IMU samples ({num_imus - len(imus)} dropped) and {len(extra)} initial poses to {args.out}")
+    bag_tools.write_bag(args.out, clouds, imus, plugin, extra + wheel)
+    print(
+        f"wrote {len(clouds)} frames, {len(imus)} IMU samples ({num_imus - len(imus)} dropped), {len(extra)} initial poses"
+        f" and {len(wheel)} wheel odometry messages to {args.out}"
+    )
     return 0
 
 

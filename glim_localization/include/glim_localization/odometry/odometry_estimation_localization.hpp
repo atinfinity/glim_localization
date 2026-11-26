@@ -95,6 +95,12 @@ struct LocalizationCallbacks {
   /// The map of the oldest live odometry instance, or null if there is none. Safe from any thread. Lets a module that
   /// does not own the odometry (the R1 extension, loaded after it by glim_ros2) publish the map without loading it again.
   static std::shared_ptr<const MapManager> loaded_map();
+  /// Forward a wheel odometry twist to every live odometry instance (insert_wheel_odom). Safe from any thread. Lets a
+  /// module that does not own the odometry (the R1 extension) feed it.
+  /// @return true if at least one instance took the sample
+  static bool insert_wheel_odom(double stamp, const Eigen::Vector3d& linear_vel, const Eigen::Vector3d& angular_vel);
+  /// true if a live odometry instance has wheel odometry enabled (wheel_odom_enabled). Safe from any thread.
+  static bool wheel_odom_enabled();
 };
 
 /// Parameters shared by the CPU and GPU modules: the same keys with the same meaning in both configs.
@@ -184,6 +190,8 @@ public:
   /// @return false if wheel odometry is disabled or the sample was dropped (non-finite, or not newer than the last one;
   /// a run of WheelOdometryBuffer::kRestartRejects such samples is taken as a clock restart). A reset clears the samples.
   bool insert_wheel_odom(double stamp, const Eigen::Vector3d& linear_vel, const Eigen::Vector3d& angular_vel);
+  /// wheel_odom_enabled of the config. Immutable after construction.
+  bool wheel_odom_enabled() const;
 
   /// Thread-safe.
   LocalizationStatus status() const;

@@ -24,13 +24,14 @@ paths=(--base-paths "${repo_root}" --build-base "${base}/build" --install-base "
 
 # Fixture for the R1 launch test: the synthetic map and replay dataset (12 s), and the same data as a bag.
 # Two /initialpose messages are in the bag: the first frame (offset 0.3 m, -0.2 m, 0.1 m and 3 deg) and exact ground truth at 5 s.
+# /wheel_odom carries the ground-truth twist of the IMU frame at each frame stamp (test_r1_extension feeds it to the odometry).
 generator="${core_build}/test/synthetic_replay_dataset"
 [[ -x "${generator}" ]] || { echo "FAIL: ${generator} not built (run build_core.sh first)" >&2; exit 1; }
 rm -rf "${fixture}"
 mkdir -p "${fixture}"
 "${generator}" "${fixture}/input" 12
 env -u PYTHONPATH "${GLIM_LOC_PYTHON}" "${repo_root}/scripts/replay_to_bag.py" "${fixture}/input/data" --out "${fixture}/bag" \
-  --initial-pose "0:0.3,-0.2,0.1,3" --initial-pose "5"
+  --initial-pose "0:0.3,-0.2,0.1,3" --initial-pose "5" --wheel-odom
 export GLIM_R1_BAG="${fixture}/bag" GLIM_R1_DATA="${fixture}/input/data" GLIM_R1_MAP="${fixture}/input/map"
 # Fixture for the R2 IMU gap launch test: the same data with no IMU sample for 0.3 s from 6.0 s (GAP_START_S and
 # GAP_S in test_r2_imu_gap.py) and no /initialpose (the test sets the pose through ~/initialize).

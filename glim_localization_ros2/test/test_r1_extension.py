@@ -10,9 +10,13 @@ R1 end to end: glim_rosbag with the localization extension over a synthetic bag.
 Headless; no display.
 
 Inputs come from scripts/test_colcon.sh (see there), through environment variables:
-  GLIM_R1_BAG   the bag made by scripts/replay_to_bag.py (with two /initialpose messages)
+  GLIM_R1_BAG   the bag made by scripts/replay_to_bag.py (with two /initialpose messages and
+                /wheel_odom from the ground truth)
   GLIM_R1_DATA  the replay dataset the bag was made from (traj_gt.txt is the ground truth)
   GLIM_R1_MAP   the map dump of the same scene
+
+Wheel odometry is enabled (wheel_odom_enabled with the identity extrinsic, wheel_odom_topic
+/wheel_odom), so the extension feeds the bag's twists to the odometry.
 
 Assertions are on counts and bounds, not on timing. glim_rosbag keeps running after the bag ends
 (auto_quit:=false), and the test waits for the last pose with a long deadline that FAILS the test
@@ -55,6 +59,7 @@ GUI_LIBS = re.compile(
     r'^lib(GL|GLX|GLU|GLEW|GLESv2|GLdispatch|EGL|OpenGL|X11|X11-xcb|xcb)[._-]'
     r'|(?i:iridescence|glfw)')
 
+WHEEL_TOPIC = '/wheel_odom'
 NODE_NAME = 'glim_ros'  # GlimROS node, so ~/pose is /glim_ros/pose
 
 
@@ -66,17 +71,30 @@ def require_env(name):
     return value
 
 
-def make_config_dir(dst, map_path):
-    """Copy config/r1 to dst with the map path filled in."""
-    src = os.path.join(get_package_share_directory('glim_localization_ros2'), 'config', 'r1')
-    shutil.copytree(src, dst)
-    path = os.path.join(dst, 'config_odometry_localization_cpu.json')
+def edit_config(path, section, values):
     with open(path) as f:
         # The shipped configs start with a // provenance comment, which GLIM's own loader accepts
         config = json.loads('\n'.join(line.split('//')[0] for line in f))
-    config['odometry_estimation']['map_path'] = map_path
+    config[section].update(values)
     with open(path, 'w') as f:
         json.dump(config, f)
+
+
+def make_config_dir(dst, map_path):
+    """Copy config/r1 to dst with the map path filled in and wheel odometry on."""
+    src = os.path.join(get_package_share_directory('glim_localization_ros2'), 'config', 'r1')
+    shutil.copytree(src, dst)
+    edit_config(
+        os.path.join(dst, 'config_odometry_localization_cpu.json'), 'odometry_estimation',
+        {'map_path': map_path, 'wheel_odom_enabled': True})
+    ros_path = os.path.join(dst, 'config_ros.json')
+    edit_config(
+        ros_path, 'localization_ros',
+        {'wheel_odom_topic': WHEEL_TOPIC, 'wheel_odom_child_frame_id': 'base_link'})
+    # glim_rosbag hands bag messages to the extension as it reads them, but queues the frames for
+    # the odometry. At the default 100x it can read far ahead, and the reset of the 5 s
+    # /initialpose then clears wheel samples of frames after it. 2x bounds that backlog.
+    edit_config(ros_path, 'glim_ros', {'playback_speed': 2.0})
     return dst
 
 
@@ -259,10 +277,16 @@ class TestR1Extension(unittest.TestCase):
         self.assertEqual(final.reset_count, EXPECTED_RESETS)
         self.assertEqual(final.last_reset_reason, LocalizationStatus.RESET_EXTERNAL)
         self.assertEqual(final.state, LocalizationStatus.TRACKING)
+
+        # The extension subscribed to the wheel topic and its twists reached the odometry: frames
+        # since the last reset got wheel factors
+        self.assertIn(f'wheel odometry on {WHEEL_TOPIC}', output)
+        self.assertGreater(final.wheel_factors, 0)
         print(
             f'R1: {len(self.poses)}/{num_frames} poses, '
             f'worst error {worst_trans:.3f} m {worst_rot:.3f} deg, '
-            f'reset_count {final.reset_count}')
+            f'reset_count {final.reset_count}, wheel factors {final.wheel_factors} '
+            f'(gated {final.wheel_gated}, missing {final.wheel_missing})')
 
     def test_config_lists_only_our_extension(self):
         config_dir = os.path.join(
