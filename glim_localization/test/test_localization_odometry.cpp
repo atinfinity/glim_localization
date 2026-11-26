@@ -597,8 +597,20 @@ TEST_F(LocalizationOdometryTest, RejectsNonPositiveDegradedWeight) {
 
 TEST_F(LocalizationOdometryTest, AcceptsAResetAtTheSpeedLimit) {
   OdometryEstimationLocalizationCPU odometry(reset_test_params(), *map_);
-  EXPECT_TRUE(odometry.reset(Eigen::Isometry3d::Identity(), Eigen::Vector3d(OdometryEstimationLocalization::kMaxResetSpeed, 0.0, 0.0)));
+  const double stamp = (*frames_)[0]->stamp;
+  EXPECT_TRUE(odometry.reset(synthetic_T_world_imu(stamp), Eigen::Vector3d(OdometryEstimationLocalization::kMaxResetSpeed, 0.0, 0.0), stamp));
   EXPECT_TRUE(odometry.reset_pending());
+
+  // The limit itself must be safe to apply: the smoother solves the first frames without throwing
+  size_t imu_cursor = 0;
+  std::vector<glim::EstimationFrame::ConstPtr> marginalized;
+  for (size_t i = 0; i < 3; i++) {
+    feed_imu(odometry, *imu_, imu_cursor, (*frames_)[i]->stamp);
+    const auto estimate = odometry.insert_frame((*frames_)[i], marginalized);
+    ASSERT_TRUE(estimate) << "i=" << i;
+    EXPECT_TRUE(estimate->T_world_imu.matrix().allFinite()) << "i=" << i;
+  }
+  EXPECT_EQ(odometry.status().reset_count, 1);
 }
 
 TEST_F(LocalizationOdometryTest, RejectsInvalidConfiguredInitialState) {
@@ -656,9 +668,12 @@ TEST_F(LocalizationOdometryTest, SecondResetBeforeAnyFrameKeepsTheEstimatedBias)
   // The second reset comes before any frame of the first one's run: it must not fall back to the configured bias
   ASSERT_TRUE(odometry.reset(synthetic_T_world_imu(second_stamp), Eigen::Vector3d::Zero(), second_stamp));
   feed_imu(odometry, *imu_, imu_cursor, second_stamp);
-  EXPECT_TRUE(odometry.insert_frame((*frames_)[kFirstReset + 1], marginalized));
+  const auto estimate = odometry.insert_frame((*frames_)[kFirstReset + 1], marginalized);
+  ASSERT_TRUE(estimate);
   EXPECT_EQ(odometry.status().reset_count, 2);
   EXPECT_EQ(odometry.start_imu_bias(), estimated);
+  // The smoother starts from it too: the first estimate of the new run is near the carried bias, not the configured one
+  EXPECT_LT((estimate->imu_bias - estimated).norm(), (estimate->imu_bias - configured).norm());
 }
 
 TEST_F(LocalizationOdometryTest, RejectsNullMap) {

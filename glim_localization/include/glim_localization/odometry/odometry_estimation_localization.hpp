@@ -209,8 +209,9 @@ public:
   /// @return an empty string if queued, otherwise why it was refused
   std::string relocalize(double max_age);
 
-  /// Largest speed accepted by reset() and the configured init_v_world_imu [m/s]. A finite but huge velocity makes
-  /// the smoother throw IndeterminantLinearSystemException and abort the process.
+  /// Largest speed of a reset [m/s]: reset(), the configured init_v_world_imu, and the estimate that relocalize() and
+  /// the IMU gap self-reset start from (beyond it, the self-reset goes LOST). A finite but huge velocity makes the
+  /// smoother throw IndeterminantLinearSystemException and abort the process.
   static constexpr double kMaxResetSpeed = 100.0;
 
   /// IMU bias the current run started from: the configured imu_bias, then at every reset the newest estimate of the

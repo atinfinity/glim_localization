@@ -199,7 +199,8 @@ OdometryEstimationLocalization::OdometryEstimationLocalization(std::unique_ptr<P
     throw std::invalid_argument("init_v_world_imu is set without init_T_world_imu: set both, or neither to wait for a pose");
   }
   if (!p.estimate_init_state && !is_valid_reset(p.init_T_world_imu, p.init_v_world_imu, 0.0)) {
-    throw std::invalid_argument("init_T_world_imu must be a finite rigid transform and init_v_world_imu finite and at most 100 m/s");
+    throw std::invalid_argument(
+      "init_T_world_imu must be a finite rigid transform and init_v_world_imu finite and at most " + std::to_string(kMaxResetSpeed) + " m/s");
   }
   // Upstream estimators cannot produce a pose in the map frame, so wait for a given one.
   auto init = std::make_unique<MapInitialStateEstimation>(p.T_lidar_imu, p.imu_bias);
@@ -449,7 +450,7 @@ bool OdometryEstimationLocalization::handle_imu_gap(const glim::PreprocessedFram
   T.translation() += v * (frame->stamp - frames.back()->stamp);
   spdlog::warn("resetting the pose after an IMU gap of {:.3f} s", gap);
   if (!queue_reset(T, v, frame->stamp, ResetReason::IMU_GAP)) {
-    imu_lost_ = true;  // A non-finite state cannot be recovered
+    imu_lost_ = true;  // A non-finite state or one above kMaxResetSpeed cannot be recovered
     publish_lost();
     return true;
   }
@@ -668,7 +669,8 @@ void OdometryEstimationLocalization::apply_pending_reset(double frame_stamp) {
   const auto& p = localization_params();
   // The sensor is the same, so the latest bias estimate beats the configured one. Without a frame in this run (two
   // resets in a row), keep the bias this run started from.
-  if (!frames.empty()) {
+  // A non-finite estimate is not carried over, so a reset can still recover from it.
+  if (!frames.empty() && frames.back()->imu_bias.allFinite()) {
     start_imu_bias_ = frames.back()->imu_bias;
   }
   const Eigen::Matrix<double, 6, 1> imu_bias = start_imu_bias_;

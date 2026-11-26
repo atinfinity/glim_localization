@@ -7,12 +7,15 @@
 - **Decisions**:
   - **The limit is a constant, not a parameter.** 100 m/s (360 km/h) is far above any ground platform, and the point is only to keep the smoother away from values it cannot solve. A parameter would be one more thing to misconfigure.
   - **Reject rather than wait.** A config with a velocity but no pose is rejected instead of waiting for a pose. It is a config mistake, and waiting would hide it.
-  - **The rigidity check reuses the reset tolerance** (`|R^T R - I| < 1e-3`). A configured pose with a poorly normalized quaternion beyond that is now rejected at startup, as a `reset()` with the same pose already was.
-- **Verification**: `scripts/docker_run.sh scripts/ci.sh`, Docker, amd64. New and changed tests in `test_localization_odometry.cpp`:
+  - **The rigidity check reuses the reset tolerance** (`|R^T R - I| < 1e-3`). GLIM's `Config` and the replay `--init-pose` both normalize the quaternion, so config files are not affected. Only a non-rigid `init_T_world_imu` set in code is newly rejected.
+  - **The replay `--init-pose` overrides the check.** A config with `init_v_world_imu` and no pose stays valid when the pose comes from the command line.
+  - **A non-finite bias is not carried over.** A reset after a diverged run then starts from the bias the run before started from, so it can still recover.
+- **Verification**: `scripts/docker_run.sh scripts/ci.sh`, Docker, amd64. New and changed tests (in `test_localization_odometry.cpp` unless noted):
   - `RejectsInvalidResetRequests` now covers 1e50 m/s and the limit + 1 m/s;
-  - `AcceptsAResetAtTheSpeedLimit`;
   - `RejectsInvalidConfiguredInitialState` covers velocity without a pose, a huge configured velocity and a scaled rotation;
-  - `SecondResetBeforeAnyFrameKeepsTheEstimatedBias`: two resets with no estimated frame between them keep the bias estimated in the first run, not the configured one.
+  - `AcceptsAResetAtTheSpeedLimit` applies a reset at exactly 100 m/s and estimates three frames without throwing;
+  - `SecondResetBeforeAnyFrameKeepsTheEstimatedBias`: two resets with no estimated frame between them keep the bias estimated in the first run, not the configured one. The first estimate of the new run is also closer to that bias than to the configured one;
+  - `test_replay_tool.cpp` `ConfiguredVelocityNeedsAPose`: a config with `init_v_world_imu` and no pose exits 2, and exits 0 with `--init-pose`. This also covers the config parsing.
+  - Result: 334 of 334 core tests pass, and the ROS 2 tests and the replay e2e pass as well.
 - **Open**:
   - The rest of [#6](https://github.com/atinfinity/glim_localization/issues/6): the covariance callback slot after teardown, and the test and investigation items.
-  - The parsing of `init_v_without_pose` from a config file is a one-line check. It has no test of its own, because the test suite shares a single global config.
