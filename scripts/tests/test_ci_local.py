@@ -790,6 +790,16 @@ def test_docs_only_change_skips_and_is_not_recorded(env):
     assert len(env.call_lines()) == 1
 
 
+@pytest.mark.parametrize("name", ["zensical.toml", "scripts/docs_site_index.py"])
+def test_docs_site_input_change_skips_and_is_not_recorded(env, name):
+    commit_on_branch(env, name, "text\n")
+    result = env.run()
+    assert result.returncode == 0
+    assert "SKIPPED" in result.stdout and "docs-only" in result.stdout
+    assert env.call_lines() == []
+    assert env.stamps() == []
+
+
 def test_empty_diff_is_not_docs_only(env):
     assert "SKIPPED" not in env.run().stdout
     assert len(env.call_lines()) == 1
