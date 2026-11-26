@@ -31,8 +31,8 @@ bool load_map(const std::string& path, LoadedSubmaps& submaps, std::string* sour
 
 /// Write a compiled map holding only what localization needs.
 /// Fails without writing if `path` exists and is not empty. The result appears atomically.
-/// `source` is recorded in map_index.json ("glim_dump", "pcd" or "ply"; map_compiler keeps the source of a compiled
-/// map it compiles again). load_map reports it, and it never changes how the map is loaded.
+/// `source` is recorded in map_index.json ("glim_dump", "pcd" or "ply"; map_compiler passes on what load_map reports
+/// for a compiled map it compiles again, which may be "unknown" or another recorded string). load_map reports it, and it never changes how the map is loaded.
 bool save_compiled_map(const std::string& path, const LoadedSubmaps& submaps, const std::string& source = "glim_dump");
 
 }  // namespace glim_localization

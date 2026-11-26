@@ -22,12 +22,13 @@
     - `LzfTest.DecompressesLiteralsAndBackReferences`: literals, an overlapping back reference, a long match (`len == 7` plus an extra byte), and a 13-bit offset.
     - `LzfTest.RejectsMalformedStreamsAndWrongSizes`: a short or long output, a run past the end of the input, a reference before the start, and missing length or offset bytes.
     - `PcdMapTest.ReadsAsciiAndBinaryWithExtraFields` also covers `BinaryCompressed` (F4 and F8; the test writer encodes literal runs only).
-    - `PcdMapTest.ReadsBinaryCompressedWithPaddingAndBackReferences`: `_` padding left out, a U2 field after z, a back reference across points, and an empty cloud.
+    - `PcdMapTest.ReadsBinaryCompressedWithPaddingAndBackReferences`: `_` padding left out, a U2 field after z, a back reference across points, a COUNT 3 field before x, and an empty cloud.
     - `PcdMapTest.RejectsBrokenBinaryCompressed`: a missing size header, a wrong uncompressed size, a truncated stream, a short output, a bad reference, and two sizes that must fail before allocating gigabytes.
     - `PcdMapTest.RejectsUnsupportedOrBrokenFiles` now rejects an unknown `DATA` value instead of `binary_compressed`.
   - `test_map_compiler`:
     - `MapCompilerTest.BinaryCompressedPcdGivesTheSameMapAsBinary`: the same `map_index.json`, points and covariances as binary PCD, with F4 and F8. Without `--voxel-size`: the multi-threaded `voxelgrid_sampling` does not keep the order of its output points, so with downsampling the two maps held the same points in a different order and the centroids differed in the last bits.
     - `MapCompilerTest.LoadMapReportsTheSource`: dump, compiled map, a missing or non-string value, and a failed load.
     - `MapCompilerTest.RecompilingKeepsTheSource`: a dump and a PCD map, each compiled again, also with `--recompute-covariances`.
+- **Limits of the tests**: the compressed layout is checked against the PCL source (`writeBinaryCompressed`, `loadPCDFile`) and against the test writer, not against bytes written by PCL, which is not in the image. A golden file from `pcl::io::savePCDFileBinaryCompressed` would close that gap. The `INT_MAX` check has no test, since it needs more than 2^31 points.
 - **Verification**: `scripts/docker_run.sh scripts/ci.sh` (Docker, amd64): all checks pass, 352 core tests, the colcon tests, interfaces, the Python tests, the quick robustness suite and the replay e2e.
 - **Open**: `scripts/render_demo.py` still reads only ascii and binary PCD for its background map. The deferred items above stay in [#12](https://github.com/atinfinity/glim_localization/issues/12).
