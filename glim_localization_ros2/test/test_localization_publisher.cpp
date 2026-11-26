@@ -607,7 +607,8 @@ TEST(LocalizationPublisher, InitSearchResultIsReported) {
   EXPECT_EQ(fifth.message.find("runner-up"), std::string::npos) << fifth.message;
   EXPECT_EQ(value_of(fifth, "init_search_reason"), "NO_CANDIDATE");
   const auto & sixth = fixture.diagnostics[5].status.at(0);
-  EXPECT_NE(sixth.message.find("out of range: inlier ratio 0.959 beyond the maximum translation from the given pose, best within 0.630"),
+  EXPECT_NE(sixth.message.find(
+    "out of range: inlier ratio 0.959 beyond the maximum translation, best within 0.630"),
     std::string::npos) << sixth.message;
   EXPECT_EQ(value_of(sixth, "init_search_reason"), "OUT_OF_RANGE");
 }
