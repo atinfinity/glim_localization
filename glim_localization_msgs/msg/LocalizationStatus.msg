@@ -87,7 +87,7 @@ float64 init_search_score
 float64 init_search_yaw_offset
 
 # Inlier ratio of the best candidate more than two search steps (at most 90 deg) away in yaw from the best, in [0, 1];
-# 0 if none.
+# 0 if none. For OUT_OF_RANGE, that of the best candidate within the maximum translation instead.
 float64 init_search_runner_up_score
 
 # Its yaw relative to the given pose [rad], in [-pi, pi].

@@ -156,8 +156,8 @@ std::string init_search_rejection_reason(
       break;
     case LocalizationStatus::INIT_SEARCH_REASON_OUT_OF_RANGE:
       std::snprintf(text, sizeof(text),
-          "out of range: inlier ratio %.3f beyond the maximum translation from the given pose",
-          msg.init_search_score);
+          "out of range: inlier ratio %.3f beyond the maximum translation from the given pose, best within %.3f",
+          msg.init_search_score, msg.init_search_runner_up_score);
       break;
     default:
       std::snprintf(text, sizeof(text), "reason %d", static_cast<int>(msg.init_search_reason));

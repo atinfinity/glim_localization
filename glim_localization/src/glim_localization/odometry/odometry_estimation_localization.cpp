@@ -528,12 +528,15 @@ bool OdometryEstimationLocalization::run_init_search(const glim::PreprocessedFra
     status_.init_search_reason = to_init_search_reason(result.outcome);
     status_.init_search_candidates = result.num_evaluated;
     status_.init_search_candidates_total = result.num_candidates;
-    // For OUT_OF_RANGE the score is that of the match beyond the bound, the one that caused the rejection
-    const auto& reported = result.outcome == CandidateSearchOutcome::OUT_OF_RANGE ? result.out_of_range : result.best;
+    // For OUT_OF_RANGE the score is that of the match beyond the bound, the one that caused the rejection, and the
+    // runner-up is the best within the bound, the one it outscored
+    const bool out_of_range = result.outcome == CandidateSearchOutcome::OUT_OF_RANGE;
+    const auto& reported = out_of_range ? result.out_of_range : result.best;
+    const auto& second = out_of_range ? result.best : result.runner_up;
     status_.init_search_score = reported ? reported->score : 0.0;
     status_.init_search_yaw_offset = reported ? reported->yaw_offset : 0.0;
-    status_.init_search_runner_up_score = result.runner_up ? result.runner_up->score : 0.0;
-    status_.init_search_runner_up_yaw_offset = result.runner_up ? result.runner_up->yaw_offset : 0.0;
+    status_.init_search_runner_up_score = second ? second->score : 0.0;
+    status_.init_search_runner_up_yaw_offset = second ? second->yaw_offset : 0.0;
     status_.init_search_time = result.elapsed;
   }
 

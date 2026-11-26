@@ -543,6 +543,7 @@ TEST(LocalizationPublisher, InitSearchResultIsReported) {
   out_of_range.init_search = glim_localization::InitSearchResult::REJECTED;
   out_of_range.init_search_reason = glim_localization::InitSearchReason::OUT_OF_RANGE;
   out_of_range.init_search_score = 0.959;
+  out_of_range.init_search_runner_up_score = 0.63;
   fixture.publisher->on_status(out_of_range);
   ASSERT_TRUE(fixture.spin_until([&] {
       return fixture.statuses.size() >= 6 && fixture.diagnostics.size() >= 6;
@@ -606,7 +607,7 @@ TEST(LocalizationPublisher, InitSearchResultIsReported) {
   EXPECT_EQ(fifth.message.find("runner-up"), std::string::npos) << fifth.message;
   EXPECT_EQ(value_of(fifth, "init_search_reason"), "NO_CANDIDATE");
   const auto & sixth = fixture.diagnostics[5].status.at(0);
-  EXPECT_NE(sixth.message.find("out of range: inlier ratio 0.959 beyond the maximum translation"),
+  EXPECT_NE(sixth.message.find("out of range: inlier ratio 0.959 beyond the maximum translation from the given pose, best within 0.630"),
     std::string::npos) << sixth.message;
   EXPECT_EQ(value_of(sixth, "init_search_reason"), "OUT_OF_RANGE");
 }
