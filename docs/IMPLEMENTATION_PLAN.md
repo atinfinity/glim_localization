@@ -3,7 +3,7 @@
 Development, builds, and tests run in a headless Docker container with Ubuntu 24.04 + ROS 2 Jazzy (`docker/`). The container covers **the CPU core, offline evaluation, and the ROS 2 packages**. The GPU build (`BUILD_WITH_CUDA=ON`) and real-robot evaluation need a Linux machine with an NVIDIA GPU and come later.
 When a phase meets its completion criteria, its results are recorded in a progress entry under `docs/progress/` (earlier phases: `docs/PROGRESS.md`).
 
-Status: Phases 0 to 4 are done. Phase 5 is done except the `~/aligned_points` topic ([#18](https://github.com/atinfinity/glim_localization/issues/18)). Phase 6 is partly done (PCD and PLY input and 2D occupancy grid export for map_compiler, README).
+Status: Phases 0 to 4 are done. Phase 5 is done. Phase 6 is partly done (PCD and PLY input and 2D occupancy grid export for map_compiler, README).
 
 ## Phase 0: Environment and repository (done)
 
@@ -46,11 +46,11 @@ In the CPU version, `use_keyframes` means relative pose factors from the local m
 - Done when: replay on synthetic data reaches the same accuracy as Phase 3. If real data is available, convert and run it, and record the results in a progress entry under `docs/progress/`.
 - An evaluation mapper for real data (first step of [#5](https://github.com/atinfinity/glim_localization/issues/5)): `glim_localization_mapper` (no ROS) and `scripts/smoke_os1_128.sh`. Build a GLIM map and a reference trajectory from a replay dataset, run localization with the same preprocessing, and measure the agreement with GLIM. Done when: a synthetic test shows the dump can be read with `load_map`. Record real-data results in a progress entry under `docs/progress/`.
 
-## Phase 5: ROS 2 packages (done except `~/aligned_points`)
+## Phase 5: ROS 2 packages (done)
 
 1. Build and test with colcon in the container (ROS 2 Jazzy). Turn synthetic data into a bag and check the R1 and R2 nodes with it.
 2. `glim_localization_msgs`: `LocalizationStatus.msg` and `Initialize.srv`.
-3. `localization_publisher` (shared by R1 and R2): `~/pose`, `~/odometry`, `~/status`, `/diagnostics`, and TF (three `tf_mode` options, DESIGN §6). `~/map` (latched, downsampled; `map_publisher`) is done; `~/aligned_points` is deferred ([#18](https://github.com/atinfinity/glim_localization/issues/18)).
+3. `localization_publisher` (shared by R1 and R2): `~/pose`, `~/odometry`, `~/status`, `/diagnostics`, and TF (three `tf_mode` options, DESIGN §6). `~/map` (latched, downsampled; `map_publisher`) is done; `~/aligned_points` (the scan in the map frame, built only for a subscriber) is done ([#18](https://github.com/atinfinity/glim_localization/issues/18)).
 4. R1: `localization_extension` (`ExtensionModuleROS2`). `/initialpose` calls `reset()` through a shared queue in the core.
 5. R2: `glim_localization_node` (`rclcpp_lifecycle::LifecycleNode`, registered as a component). Base it on the input handling in `GlimROS` (copied parts carry the provenance comment).
 6. Launch files (R1 and R2, the R2 node standalone or as a component with `autostart`), parameter YAML files and an RViz config (done). Launch tests start each launch file headless and check `~/pose`, TF and `~/map`.
