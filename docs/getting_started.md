@@ -93,6 +93,25 @@ Localization takes either a GLIM dump directory (from a GLIM mapping run) or a m
 
 PCD input reads `DATA ascii`, `binary` and `binary_compressed` with x, y, z as F4 or F8; PLY input reads `ascii` and `binary_little_endian` with vertex x, y, z as `float` or `double`. Localization uses up to `map_max_submaps` (default 5) tiles nearest to the robot, so for long-range LiDAR use `--grid-size` 50 to 100. The options, and the 2D occupancy grid for Nav2 (`--occupancy-grid`), are in [Map preparation](maps.md).
 
+### Which map to keep
+
+Localization runs the compiled map from `map_compiler`. Keep the input you compiled it from as the master copy, and compile again when you change options:
+
+- **Map built with GLIM:** keep the GLIM dump. It has the per-submap structure, with each submap's points, covariances and pose, and also the pose graph (`graph.bin`, `values.bin`) and the trajectories, which a compiled map leaves out. Compiling a dump copies the points, poses and covariances as they are, so it can be compiled again at any time without loss.
+- **Any other map** (another SLAM, a survey, [sdf2map](sim_eval.md)): keep the PCD or PLY file. Those tools can read and edit it, and a compiled map cannot be exported back to a point cloud.
+
+What the point cloud path changes, compared with a GLIM dump:
+
+| | GLIM dump | PCD or PLY |
+| --- | --- | --- |
+| Covariances | GLIM's, copied as they are (or `--recompute-covariances` per submap) | Estimated by `map_compiler` from the k nearest neighbours over the whole cloud (`--k-neighbors`, default 10) |
+| Tiles | GLIM submaps, overlapping along the trajectory, each covering the sensor range | Disjoint x-y tiles of `--grid-size` (default 20 m; use 50 to 100 m for long-range LiDAR, see above) |
+| Size limit | - | The whole cloud in memory, at most 2^31 - 1 points after `--voxel-size` |
+
+- **Large coordinates:** `map_compiler` reads x, y and z as doubles and stores each tile relative to its centroid, so F8 (`double`) input at UTM-sized coordinates keeps its precision. F4 (`float`) input has already lost it in the file: a float has a step of about 3 cm at 500 km and 0.25 m at 3,000 km. Export such maps with double xyz, or shift them to a local origin first.
+- **Accuracy:** the difference between the two paths on the same scene has not been measured yet ([#61](https://github.com/atinfinity/glim_localization/issues/61)).
+- `map_index.json` of a compiled map records its `source` (`glim_dump`, `pcd` or `ply`), so you can tell which kind of master it came from. Compiling a compiled map again keeps the recorded value.
+
 ## 6. Replay a real bag and evaluate it
 
 > [!NOTE]
