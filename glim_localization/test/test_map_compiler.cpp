@@ -444,8 +444,10 @@ TEST_F(MapCompilerTest, BinaryCompressedPcdGivesTheSameMapAsBinary) {
     fs::remove_all(dir_ / "from_compressed");
     write_synthetic_pcd((dir_ / "binary.pcd").string(), points, PcdEncoding::Binary, double_xyz);
     write_synthetic_pcd((dir_ / "compressed.pcd").string(), points, PcdEncoding::BinaryCompressed, double_xyz);
-    ASSERT_EQ(compile(dir_ / "binary.pcd", dir_ / "from_binary", "--grid-size 15 --voxel-size 0.5"), 0) << last_log();
-    ASSERT_EQ(compile(dir_ / "compressed.pcd", dir_ / "from_compressed", "--grid-size 15 --voxel-size 0.5"), 0) << last_log();
+    // No --voxel-size: the multi-threaded voxel grid sampling does not keep the order of its output points, so two
+    // runs on the same points can differ in order and in the last bits of the centroids
+    ASSERT_EQ(compile(dir_ / "binary.pcd", dir_ / "from_binary", "--grid-size 15"), 0) << last_log();
+    ASSERT_EQ(compile(dir_ / "compressed.pcd", dir_ / "from_compressed", "--grid-size 15"), 0) << last_log();
 
     const auto binary_index = nlohmann::json::parse(std::ifstream(dir_ / "from_binary" / "map_index.json"));
     const auto compressed_index = nlohmann::json::parse(std::ifstream(dir_ / "from_compressed" / "map_index.json"));
