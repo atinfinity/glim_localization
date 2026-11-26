@@ -79,7 +79,11 @@ float64 init_search_score
 float64 init_search_yaw_offset
 float64 init_search_runner_up_score
 float64 init_search_runner_up_yaw_offset
-float64 init_search_time'
+float64 init_search_time
+int32 wheel_factors
+int32 wheel_gated
+int32 wheel_readmitted
+int32 wheel_missing'
 [[ "${status_api}" == "${expected_status}" ]] || fail "LocalizationStatus changed:
 $(diff <(echo "${expected_status}") <(echo "${status_api}") || true)"
 initialize_api="$(show_api glim_localization_msgs/srv/Initialize)" || fail "cannot show Initialize"

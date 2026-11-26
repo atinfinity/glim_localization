@@ -601,6 +601,38 @@ TEST(LocalizationPublisher, InitSearchResultIsReported) {
   EXPECT_EQ(value_of(fifth, "init_search_reason"), "NO_CANDIDATE");
 }
 
+// The wheel odometry counters reach the status message and the diagnostics.
+TEST(LocalizationPublisher, WheelCountersAreReported) {
+  LocalizationPublisherParams params;
+  params.diagnostics_period = 0.0;
+  Fixture fixture(params, "publisher_wheel");
+  fixture.wait_for_discovery(1);
+
+  auto status = frame_status(0, LocalizationState::TRACKING, 1);
+  status.wheel_factors = 7;
+  status.wheel_gated = 3;
+  status.wheel_readmitted = 2;
+  status.wheel_missing = 5;
+  fixture.publisher->on_status(status);
+  ASSERT_TRUE(fixture.spin_until([&] {
+      return fixture.statuses.size() >= 1 && fixture.diagnostics.size() >= 1;
+    }));
+
+  const auto & msg = fixture.statuses[0];
+  EXPECT_EQ(msg.wheel_factors, 7);
+  EXPECT_EQ(msg.wheel_gated, 3);
+  EXPECT_EQ(msg.wheel_readmitted, 2);
+  EXPECT_EQ(msg.wheel_missing, 5);
+  std::map<std::string, std::string> values;
+  for (const auto & kv : fixture.diagnostics[0].status.at(0).values) {
+    values[kv.key] = kv.value;
+  }
+  EXPECT_EQ(values["wheel_factors"], "7");
+  EXPECT_EQ(values["wheel_gated"], "3");
+  EXPECT_EQ(values["wheel_readmitted"], "2");
+  EXPECT_EQ(values["wheel_missing"], "5");
+}
+
 // The pose of a frame is published only with the status of the same frame.
 TEST(LocalizationPublisher, FrameAloneIsNotPublished) {
   Fixture fixture(LocalizationPublisherParams(), "publisher_pairing");

@@ -89,3 +89,14 @@ float64 init_search_runner_up_yaw_offset
 
 # Wall-clock time of the search [s].
 float64 init_search_time
+
+# Wheel odometry (wheel_odom_enabled in the odometry config), counted per frame since the last reset.
+# All 0 while it is disabled.
+# Frames that got a wheel relative pose factor.
+int32 wheel_factors
+# Frames whose wheel motion the consistency gate rejected (slip, a stuck wheel).
+int32 wheel_gated
+# Of wheel_factors, those added without the gate after a streak of gated frames.
+int32 wheel_readmitted
+# Frames whose interval the wheel samples did not cover.
+int32 wheel_missing
