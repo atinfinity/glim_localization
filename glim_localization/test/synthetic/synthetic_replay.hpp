@@ -11,7 +11,8 @@ namespace glim_localization::test {
 SyntheticMapParams replay_map_params();
 
 /// Write the synthetic trajectory as a replay dataset in `dir`: LiDAR frames at 10 Hz,
-/// IMU at 100 Hz up to t_end + 0.05 s, and the ground truth as TUM (traj_gt.txt).
+/// IMU at 100 Hz up to t_end + 0.05 s, wheel odometry at 50 Hz over the same span (base frame = IMU frame, small
+/// noise), and the ground truth as TUM (traj_gt.txt).
 /// Stamps are `round(t * 1e9)` ns. The LiDAR and IMU frames coincide.
 /// @return The number of frames written
 int write_synthetic_replay(const std::string& dir, double t_end, const SyntheticMapParams& map_params = replay_map_params());

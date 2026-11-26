@@ -5,6 +5,8 @@
 #include <limits>
 #include <random>
 
+#include <gtsam/geometry/Pose3.h>
+
 namespace glim_localization::test {
 namespace {
 
@@ -107,6 +109,27 @@ std::vector<SyntheticImuSample> make_synthetic_imu(double t_begin, double t_end,
     sample.stamp = t;
     sample.linear_acc = T_curr.linear().transpose() * (a_world + Eigen::Vector3d(0.0, 0.0, kGravity)) + params.acc_bias + noise(params.acc_noise);
     sample.angular_vel = delta.axis() * delta.angle() / (2.0 * kDiffStep) + params.gyro_bias + noise(params.gyro_noise);
+    samples.push_back(sample);
+  }
+  return samples;
+}
+
+std::vector<SyntheticWheelSample> make_synthetic_wheel(double t_begin, double t_end, const SyntheticWheelParams& params) {
+  std::mt19937 rng(params.seed);
+  std::normal_distribution<double> unit(0.0, 1.0);
+  const auto noise = [&](double sigma) {
+    return sigma > 0.0 ? Eigen::Vector3d(sigma * unit(rng), sigma * unit(rng), sigma * unit(rng)) : Eigen::Vector3d::Zero();
+  };
+
+  std::vector<SyntheticWheelSample> samples;
+  for (double t = t_begin; t <= t_end + 1e-9; t += 1.0 / params.rate) {
+    const Eigen::Isometry3d T0 = synthetic_T_world_imu(t - kDiffStep) * params.T_imu_base;
+    const Eigen::Isometry3d T1 = synthetic_T_world_imu(t + kDiffStep) * params.T_imu_base;
+    const gtsam::Vector6 xi = gtsam::Pose3::Logmap(gtsam::Pose3((T0.inverse() * T1).matrix())) / (2.0 * kDiffStep);
+    SyntheticWheelSample sample;
+    sample.stamp = t;
+    sample.angular = xi.head<3>() + noise(params.angular_noise);
+    sample.linear = xi.tail<3>() + noise(params.linear_noise);
     samples.push_back(sample);
   }
   return samples;
