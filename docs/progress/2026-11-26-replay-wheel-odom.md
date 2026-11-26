@@ -21,6 +21,8 @@
     | IMU only (`--wheel-odom off`) | 6.366 | 2.52 | 0 |
     | with wheel odometry (`--wheel-odom on`) | 0.214 | 0.096 | 120 added, 0 gated, 0 missing (602 samples fed) |
 
+    Why IMU only drifts this far: the synthetic IMU has a gyro bias of (0.002, -0.001, 0.0015) rad/s and an accelerometer bias of (0.02, -0.01, 0.015) m/s^2, and with no map factor the biases are never estimated. The horizontal gyro bias tilts the attitude linearly in time, which leaks gravity into the horizontal acceleration, so the position error grows about as g * b_g * t^3 / 6 (about 6.2 m at 12 s for 0.0022 rad/s; measured 0.014 m at 1 s, 0.34 m at 4 s, 2.1 m at 8 s, 6.37 m at 12 s), plus up to b_a * t^2 / 2 from the accelerometer bias. This is a worst case: in real use the biases are estimated while TRACKING, so the drift after losing the map is smaller. The table shows what wheel odometry bounds, not the expected IMU-only error of a real run.
+
     The e2e asserts the flags, one added factor per estimated frame but the first, no gated or missing factor, and the with-wheel max below 0.4 m and below 0.2 of the IMU-only max.
   - A dataset without `wheel_odom.csv` with `--wheel-odom on` exits 2.
 - **Tests**: `ReplayDatasetTest` (optional file, round trip, bad files), `ReplayRunnerTest` (feed up to the stamp plus one, the 1 s lead-in, fed only when enabled, accuracy, writer output), `ReplayToolTest.WheelOdometryOption`, `SyntheticReplayTest` (103 samples over 2.05 s, the body velocity), `SyntheticSensorTest.NoiselessWheelTwistIntegratesToTruth` (integrating the twist of an offset, rotated base over 1 s at 1 kHz: under 1 mm and 1e-4 rad).
