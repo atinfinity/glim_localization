@@ -473,7 +473,7 @@ def main(argv=None):
         map_changes = list(QUICK_MAP_CHANGES)
     for t, y, search, expected, *rest in pose_grid:
         bound = rest[0] if rest else args.search_max_translation
-        # The suffix only for a bound other than the one of the run, so the names of a run stay those of the baseline
+        # The suffix only for a case that sets its own bound, so the names of a run stay those of the baseline
         suffix = f"_mt{bound:g}" if search and rest else ""
         cases.append(
             {
@@ -530,6 +530,7 @@ def main(argv=None):
         "machine": platform.machine(),
         "criteria": {"settle_s": args.settle, "max_trans_m": args.max_trans, "max_rot_deg": args.max_rot_deg, "replay_exit": 0},
         "timeout_s": args.timeout,
+        "search_max_translation_m": args.search_max_translation,
         "offset_direction": OFFSET_DIRECTION.tolist(),
         "results": records,
         "failures": failures,
@@ -537,7 +538,7 @@ def main(argv=None):
     with open(os.path.join(args.out, "results.json"), "w") as handle:
         json.dump(report, handle, indent=2)
         handle.write("\n")
-    lines = [f"# Replay robustness ({args.suite})", ""] + pose_table(records) + map_table(records)
+    lines = [f"# Replay robustness ({args.suite})", "", f"Search translation bound: {args.search_max_translation:g} m (0 = off)", ""] + pose_table(records) + map_table(records)
     with open(os.path.join(args.out, "results.md"), "w") as handle:
         handle.write("\n".join(lines))
     print("\n".join(lines))
