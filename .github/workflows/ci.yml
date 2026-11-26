@@ -3,9 +3,20 @@ name: CI
 on:
   push:
     branches: [main]
-    paths-ignore: ['**.md', 'docs/**', 'LICENSE']
-  # Runs for every non-draft PR, including docs-only ones, so each PR gets a CI check. Marking a
-  # draft ready for review runs it.
+    # Docs-only pushes: Markdown, docs/, LICENSE and the docs site inputs, which docs.yml builds and
+    # checks. The same list as scripts/is_docs_only.sh, which the PR run below uses.
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - 'LICENSE'
+      - 'zensical.toml'
+      - 'requirements-docs.txt'
+      - 'scripts/docs_site_index.py'
+      - '.github/workflows/docs.yml'
+  # Runs for every non-draft PR, including docs-only ones, so each PR gets a CI check (the required
+  # checks build-and-test and build-and-test-arm64 report even when their steps are skipped). No
+  # paths filter here: a filtered-out PR would never report them. Marking a draft ready for review
+  # runs it.
   pull_request:
     branches: [main]
     types: [opened, synchronize, reopened, ready_for_review]
@@ -42,8 +53,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           fetch-depth: 2  # The PR merge commit and its parents.
-      # Docs-only PRs still report this check, but skip the build. --no-renames lists both paths
-      # of a rename, so moving code into docs/ runs the full checks.
+      # Docs-only PRs (scripts/is_docs_only.sh: Markdown, docs/, LICENSE, the docs site inputs) still
+      # report this check, but skip the build. --no-renames lists both paths of a rename, so moving
+      # code into docs/ runs the full checks.
       - name: Detect docs-only PR
         id: changes
         if: github.event_name == 'pull_request'
