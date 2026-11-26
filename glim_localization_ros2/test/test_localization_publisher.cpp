@@ -16,6 +16,7 @@
 #include "diagnostic_msgs/msg/diagnostic_array.hpp"
 #include "geometry_msgs/msg/pose_with_covariance_stamped.hpp"
 #include "nav_msgs/msg/odometry.hpp"
+#include "rosgraph_msgs/msg/clock.hpp"
 #include "tf2_msgs/msg/tf_message.hpp"
 #include "tf2_ros/transform_broadcaster.h"
 
@@ -117,9 +118,10 @@ class Fixture {
 public:
   explicit Fixture(
     const LocalizationPublisherParams & params,
-    const std::string & name = "publisher_test")
+    const std::string & name = "publisher_test",
+    const rclcpp::NodeOptions & options = rclcpp::NodeOptions())
   {
-    node_ = std::make_shared<rclcpp::Node>(name);
+    node_ = std::make_shared<rclcpp::Node>(name, options);
     observer_ = std::make_shared<rclcpp::Node>(name + "_observer");
     executor_.add_node(node_);
     executor_.add_node(observer_);
@@ -496,6 +498,53 @@ TEST(LocalizationPublisher, DiagnosticsWarnOnDegradedAndErrorOnLost) {
   }
 }
 
+// Same-level diagnostics wait for diagnostics_period, a change of level is published at once, and a
+// sim clock that steps back restarts the period.
+TEST(LocalizationPublisher, DiagnosticsAreRateLimitedAndRestartWhenTheClockStepsBack) {
+  LocalizationPublisherParams params;
+  params.diagnostics_period = 1.0;
+  Fixture fixture(params, "publisher_diag_rate",
+    rclcpp::NodeOptions().parameter_overrides({rclcpp::Parameter("use_sim_time", true)}));
+  const auto clock_pub = fixture.observer_->create_publisher<rosgraph_msgs::msg::Clock>("/clock",
+      rclcpp::QoS(10));
+  ASSERT_TRUE(fixture.spin_until([&] {return clock_pub->get_subscription_count() >= 1;}));
+  fixture.wait_for_discovery(1);
+  // Publish /clock until the publisher's node sees it
+  const auto set_clock = [&](double seconds) {
+      rosgraph_msgs::msg::Clock msg;
+      msg.clock = to_msg(seconds);
+      const rclcpp::Time expected(msg.clock, RCL_ROS_TIME);
+      const auto publish_and_check = [&] {
+          clock_pub->publish(msg);
+          return fixture.node_->now() == expected;
+        };
+      return fixture.spin_until(publish_and_check);
+    };
+  const auto settle = [&](size_t expected) {
+      fixture.spin_until([&] {return fixture.diagnostics.size() >= expected;}, 2s);
+      fixture.spin_for(200ms);
+      return fixture.diagnostics.size();
+    };
+
+  ASSERT_TRUE(set_clock(10.0));
+  fixture.publisher->on_status(frame_status(0, LocalizationState::TRACKING));
+  fixture.publisher->on_status(frame_status(1, LocalizationState::TRACKING));
+  EXPECT_EQ(settle(1), 1u) << "the same level within the period is not published";
+  fixture.publisher->on_status(frame_status(2, LocalizationState::DEGRADED));
+  fixture.publisher->on_status(frame_status(3, LocalizationState::DEGRADED));
+  EXPECT_EQ(settle(2), 2u) << "a change of level is published at once";
+  ASSERT_TRUE(set_clock(11.5));
+  fixture.publisher->on_status(frame_status(4, LocalizationState::DEGRADED));
+  EXPECT_EQ(settle(3), 3u) << "the same level after the period is published";
+  ASSERT_TRUE(set_clock(5.0));
+  fixture.publisher->on_status(frame_status(5, LocalizationState::DEGRADED));
+  fixture.publisher->on_status(frame_status(6, LocalizationState::DEGRADED));
+  ASSERT_EQ(settle(4), 4u) << "a clock that steps back restarts the period";
+  EXPECT_EQ(rclcpp::Time(fixture.diagnostics[3].header.stamp).nanoseconds(), 5000000000LL);
+  EXPECT_EQ(fixture.diagnostics[3].status.at(0).level,
+    diagnostic_msgs::msg::DiagnosticStatus::WARN);
+}
+
 // The result of the initial pose search reaches the status message and the diagnostics.
 TEST(LocalizationPublisher, InitSearchResultIsReported) {
   LocalizationPublisherParams params;
@@ -683,6 +732,32 @@ TEST(LocalizationPublisher, FrameReplacedBeforeItsStatusIsDroppedAndCounted) {
   EXPECT_EQ(fixture.publisher->unpaired_frames(), 1u);
 }
 
+// A frame whose status comes after an external reset status is from before the reset. It is
+// dropped, so odom->base is re-anchored at the first frame after the reset and does not step.
+TEST(LocalizationPublisher, PendingFrameIsDroppedAtAResetStatus) {
+  Fixture fixture(LocalizationPublisherParams(), "publisher_reset_pending");
+  fixture.wait_for_discovery(1);
+  for (int k = 0; k < 3; ++k) {
+    fixture.feed(make_frame(k, 0.0));
+  }
+  fixture.publisher->on_frame(make_frame(3, 0.0));
+  fixture.reset(ResetReason::EXTERNAL);
+  fixture.publisher->on_status(frame_status(3, LocalizationState::TRACKING, fixture.reset_count));
+  // The first frame after the reset is 30 m away
+  fixture.feed(make_frame_at(kStart + 4 * kDt, make_pose(30.0, 0.0, 0.0)));
+  ASSERT_TRUE(fixture.spin_until([&] {
+      return fixture.statuses.size() >= 6 && fixture.count("odom", "base_link") >= 4;
+    }));
+  fixture.spin_for(200ms);
+  EXPECT_EQ(fixture.poses.size(), 4u);
+  EXPECT_FALSE(fixture.find("odom", "base_link", key(to_msg(kStart + 3 * kDt))));
+  EXPECT_EQ(fixture.publisher->unpaired_frames(), 1u);
+  const auto before = fixture.find("odom", "base_link", key(to_msg(kStart + 2 * kDt)));
+  const auto after = fixture.find("odom", "base_link", key(to_msg(kStart + 4 * kDt)));
+  ASSERT_TRUE(before && after);
+  EXPECT_LT(pose_step(*before, *after), 1e-9);
+}
+
 // internal_odom: a LOST frame gives no pose, odometry or map->odom, only odom->base. The first LOST
 // frame is already suppressed, and the frame after it is published again.
 TEST(LocalizationPublisher, LostFrameIsSuppressedExceptOdomBase) {
@@ -706,6 +781,28 @@ TEST(LocalizationPublisher, LostFrameIsSuppressedExceptOdomBase) {
   EXPECT_FALSE(fixture.find("map", "odom", key(to_msg(kStart + kDt))));
   // ~/status still reports the lost state
   EXPECT_EQ(fixture.statuses[1].state, StatusMsg::LOST);
+}
+
+// Only LOST is suppressed: INITIALIZING and DEGRADED publish the pose, odometry and TF.
+TEST(LocalizationPublisher, InitializingAndDegradedPublishPoseAndTf) {
+  Fixture fixture(LocalizationPublisherParams(), "publisher_states");
+  fixture.wait_for_discovery(1);
+  fixture.feed(make_frame(0, 0.0), LocalizationState::INITIALIZING);
+  fixture.feed(make_frame(1, 0.0), LocalizationState::DEGRADED);
+  ASSERT_TRUE(fixture.spin_until([&] {
+      return fixture.statuses.size() >= 2 && fixture.poses.size() >= 2 &&
+             fixture.odometries.size() >= 2 && fixture.count("map", "odom") >= 2 &&
+             fixture.count("odom", "base_link") >= 2;
+    }));
+  for (int k = 0; k < 2; ++k) {
+    const auto stamp = key(to_msg(kStart + k * kDt));
+    EXPECT_EQ(key(fixture.poses[k].header.stamp), stamp) << "frame " << k;
+    EXPECT_EQ(key(fixture.odometries[k].header.stamp), stamp) << "frame " << k;
+    EXPECT_TRUE(fixture.find("map", "odom", stamp)) << "frame " << k;
+    EXPECT_TRUE(fixture.find("odom", "base_link", stamp)) << "frame " << k;
+  }
+  EXPECT_EQ(fixture.statuses.at(0).state, StatusMsg::INITIALIZING);
+  EXPECT_EQ(fixture.statuses.at(1).state, StatusMsg::DEGRADED);
 }
 
 TEST(LocalizationPublisher, ExternalOdomPublishesNothingInLost) {
