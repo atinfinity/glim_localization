@@ -154,3 +154,18 @@ def test_wheel_odom_needs_ground_truth(tmp_path, capsys):
     os.remove(dataset / "traj_gt.txt")
     assert replay_to_bag.main([str(dataset), "--out", str(tmp_path / "b"), "--wheel-odom"]) == 1
     assert "--wheel-odom" in capsys.readouterr().err
+
+
+def test_wheel_odom_round_trip(tmp_path):
+    # /wheel_odom written from the ground truth comes back as wheel_odom.csv with the same twists
+    dataset, stamps = make_dataset(tmp_path)
+    bag = tmp_path / "bag"
+    assert replay_to_bag.main([str(dataset), "--out", str(bag), "--wheel-odom"]) == 0
+    messages = read_messages(bag)["/wheel_odom"]
+    again = tmp_path / "again"
+    assert bag_to_replay.main([str(bag), "--out", str(again), "--wheel-odom-topic", "/wheel_odom"]) == 0
+    rows = (again / "wheel_odom.csv").read_text().splitlines()[1:]
+    assert [int(r.split(",")[0]) for r in rows] == stamps
+    for row, (_, msg) in zip(rows, messages):
+        v, w = msg.twist.twist.linear, msg.twist.twist.angular
+        assert [float(x) for x in row.split(",")[1:]] == [v.x, v.y, v.z, w.x, w.y, w.z]
