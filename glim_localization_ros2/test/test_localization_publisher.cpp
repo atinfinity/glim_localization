@@ -683,6 +683,32 @@ TEST(LocalizationPublisher, FrameReplacedBeforeItsStatusIsDroppedAndCounted) {
   EXPECT_EQ(fixture.publisher->unpaired_frames(), 1u);
 }
 
+// A frame whose status comes after an external reset status is from before the reset. It is
+// dropped, so odom->base is re-anchored at the first frame after the reset and does not step.
+TEST(LocalizationPublisher, PendingFrameIsDroppedAtAResetStatus) {
+  Fixture fixture(LocalizationPublisherParams(), "publisher_reset_pending");
+  fixture.wait_for_discovery(1);
+  for (int k = 0; k < 3; ++k) {
+    fixture.feed(make_frame(k, 0.0));
+  }
+  fixture.publisher->on_frame(make_frame(3, 0.0));
+  fixture.reset(ResetReason::EXTERNAL);
+  fixture.publisher->on_status(frame_status(3, LocalizationState::TRACKING, fixture.reset_count));
+  // The first frame after the reset is 30 m away
+  fixture.feed(make_frame_at(kStart + 4 * kDt, make_pose(30.0, 0.0, 0.0)));
+  ASSERT_TRUE(fixture.spin_until([&] {
+      return fixture.statuses.size() >= 6 && fixture.count("odom", "base_link") >= 4;
+    }));
+  fixture.spin_for(200ms);
+  EXPECT_EQ(fixture.poses.size(), 4u);
+  EXPECT_FALSE(fixture.find("odom", "base_link", key(to_msg(kStart + 3 * kDt))));
+  EXPECT_EQ(fixture.publisher->unpaired_frames(), 1u);
+  const auto before = fixture.find("odom", "base_link", key(to_msg(kStart + 2 * kDt)));
+  const auto after = fixture.find("odom", "base_link", key(to_msg(kStart + 4 * kDt)));
+  ASSERT_TRUE(before && after);
+  EXPECT_LT(pose_step(*before, *after), 1e-9);
+}
+
 // internal_odom: a LOST frame gives no pose, odometry or map->odom, only odom->base. The first LOST
 // frame is already suppressed, and the frame after it is published again.
 TEST(LocalizationPublisher, LostFrameIsSuppressedExceptOdomBase) {

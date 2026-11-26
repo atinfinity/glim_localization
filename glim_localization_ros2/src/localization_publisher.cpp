@@ -417,6 +417,12 @@ void LocalizationPublisher::on_status(const glim_localization::LocalizationStatu
   msg.header.stamp =
     for_frame ? to_time_msg(status.stamp) :
     (last_stamp_ ? to_time_msg(*last_stamp_) : builtin_interfaces::msg::Time(clock_->now()));
+  // A status that is not for a frame is a reset. A frame stored before it is from before the reset
+  // and is dropped: after an external reset, odom->base must be re-anchored at a frame after it
+  if (!for_frame && pending_) {
+    pending_.reset();
+    ++unpaired_frames_;
+  }
   if (status.reset_count != last_reset_count_) {
     last_reset_count_ = status.reset_count;
     if (status.last_reset_reason == glim_localization::ResetReason::EXTERNAL) {

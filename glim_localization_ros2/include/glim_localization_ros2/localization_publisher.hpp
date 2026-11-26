@@ -97,21 +97,22 @@ public:
   /// Store a frame. Nothing is published until on_status gets the status of the same frame (same
   /// stamp), which carries its state. Frames with a non-finite stamp, pose, velocity or angular
   /// velocity are dropped. A frame whose stamp is not newer than the last accepted one is dropped,
-  /// unless an external reset came since. A stored frame that is replaced by a newer one before its
-  /// status arrives is dropped.
+  /// unless an external reset came since. A stored frame is dropped if a newer frame or a reset
+  /// status (frame_id < 0) comes before its status.
   void on_frame(const FrameEstimate & frame);
 
   /// Publish ~/status and /diagnostics, and the pending frame if the status is for it (frame_id >=
   /// 0 and the same stamp). A status that is not for a frame (frame_id < 0, as emitted when a reset
   /// is applied) carries stamp = the reset's min_stamp, which may be 0. It is stamped with the last
   /// accepted frame stamp, or with the current time if there is none, and never used as a pose
-  /// time. An external reset re-anchors odom->base at the next frame.
+  /// time. Such a status drops the pending frame, which is from before the reset. An external reset
+  /// re-anchors odom->base at the next frame.
   void on_status(const glim_localization::LocalizationStatus & status);
 
   /// Frames for which external odom->base was not available, so no map->odom was published (for
   /// tests and logs)
   size_t tf_lookup_failures() const;
-  /// Frames dropped because a newer frame replaced them before their status arrived
+  /// Frames dropped because a newer frame or a reset status came before their status
   size_t unpaired_frames() const;
   /// Frames dropped because their stamp was not newer than the last accepted one
   size_t stale_frames() const;
