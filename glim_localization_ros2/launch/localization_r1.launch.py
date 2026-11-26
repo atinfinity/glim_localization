@@ -59,7 +59,8 @@ launch_utils = _load('launch_utils.py', 'glim_localization_launch_utils')
 PACKAGE = 'glim_localization_ros2'
 # The RViz config shows the R2 node's topics; GLIM's node is glim_ros
 RVIZ_REMAPPINGS = [
-    (f'/glim_localization/{topic}', f'/glim_ros/{topic}') for topic in ('map', 'pose', 'odometry')]
+    (f'/glim_localization/{topic}', f'/glim_ros/{topic}')
+    for topic in ('map', 'aligned_points', 'pose', 'odometry')]
 
 
 def launch_setup(context):
