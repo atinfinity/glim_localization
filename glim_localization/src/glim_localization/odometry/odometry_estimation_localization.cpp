@@ -253,6 +253,24 @@ std::shared_ptr<const MapManager> LocalizationCallbacks::loaded_map() {
   return registry.instances.empty() ? nullptr : registry.instances.front()->map();
 }
 
+bool LocalizationCallbacks::insert_wheel_odom(double stamp, const Eigen::Vector3d& linear_vel, const Eigen::Vector3d& angular_vel) {
+  auto& registry = reset_registry();
+  std::lock_guard<std::mutex> lock(registry.mutex);
+  bool inserted = false;
+  for (auto* instance : registry.instances) {
+    inserted |= instance->insert_wheel_odom(stamp, linear_vel, angular_vel);
+  }
+  return inserted;
+}
+
+bool LocalizationCallbacks::wheel_odom_enabled() {
+  auto& registry = reset_registry();
+  std::lock_guard<std::mutex> lock(registry.mutex);
+  return std::any_of(registry.instances.begin(), registry.instances.end(), [](const OdometryEstimationLocalization* instance) {
+    return instance->wheel_odom_enabled();
+  });
+}
+
 OdometryEstimationLocalization::~OdometryEstimationLocalization() {
   auto& registry = reset_registry();
   std::lock_guard<std::mutex> lock(registry.mutex);
@@ -726,6 +744,10 @@ bool OdometryEstimationLocalization::insert_wheel_odom(double stamp, const Eigen
     return false;
   }
   return wheel_.insert(stamp, linear_vel, angular_vel);
+}
+
+bool OdometryEstimationLocalization::wheel_odom_enabled() const {
+  return localization_params().wheel_odom.enabled;
 }
 
 gtsam::NonlinearFactorGraph OdometryEstimationLocalization::create_wheel_factors(const int current) {

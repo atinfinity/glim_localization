@@ -410,6 +410,28 @@ TEST_F(LocalizationOdometryTest, LoadedMapIsTheMapOfTheOldestLiveInstance) {
   EXPECT_EQ(LocalizationCallbacks::loaded_map(), nullptr);
 }
 
+TEST_F(LocalizationOdometryTest, WheelOdometryIsForwardedToLiveInstances) {
+  const Eigen::Vector3d linear(1.0, 0.0, 0.0);
+  const Eigen::Vector3d angular = Eigen::Vector3d::Zero();
+  EXPECT_FALSE(LocalizationCallbacks::wheel_odom_enabled());
+  EXPECT_FALSE(LocalizationCallbacks::insert_wheel_odom(1.0, linear, angular));
+  {
+    OdometryEstimationLocalizationCPU disabled(reset_test_params(), *map_);
+    EXPECT_FALSE(LocalizationCallbacks::wheel_odom_enabled());
+    EXPECT_FALSE(LocalizationCallbacks::insert_wheel_odom(1.0, linear, angular));
+    auto params = reset_test_params();
+    params.wheel_odom.enabled = true;
+    OdometryEstimationLocalizationCPU enabled(params, *map_);
+    EXPECT_TRUE(LocalizationCallbacks::wheel_odom_enabled());
+    EXPECT_TRUE(LocalizationCallbacks::insert_wheel_odom(1.0, linear, angular));
+    // The instance dropped this one (not newer than the last), so none took it
+    EXPECT_FALSE(LocalizationCallbacks::insert_wheel_odom(1.0, linear, angular));
+    EXPECT_TRUE(LocalizationCallbacks::insert_wheel_odom(1.1, linear, angular));
+  }
+  EXPECT_FALSE(LocalizationCallbacks::wheel_odom_enabled());
+  EXPECT_FALSE(LocalizationCallbacks::insert_wheel_odom(2.0, linear, angular));
+}
+
 TEST_F(LocalizationOdometryTest, BecomesLostWhenMapIsFarAway) {
   const fs::path far_dir = fs::temp_directory_path() / ("glim_loc_odometry_far_" + std::to_string(::getpid()));
   fs::remove_all(far_dir);
