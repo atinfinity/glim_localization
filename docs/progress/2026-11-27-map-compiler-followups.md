@@ -16,11 +16,7 @@
 - **Deferred** (left open in [#12](https://github.com/atinfinity/glim_localization/issues/12)):
   - *Memory (about 300 bytes per point) and per-tile covariance for more than 2^31 points.* Both need the cloud to be read and tiled in a streaming way, with a neighbour margin at the tile edges so that edge covariances stay the same. That redesigns `read_pcd` and `build_pcd_submaps` and needs numeric checks against the whole-cloud estimate. The new error message points to `--voxel-size` or splitting the cloud meanwhile.
   - *Tile selection by bounding box in MapManager.* The code would be small (the distance from the pose to each tile's world AABB, sorted by that distance, then by centroid distance, then by id, because overlapping GLIM submaps often have distance 0). But it changes the tiles that every map factor and the GPU prefetch see. It needs its own PR with a replay comparison, and the tests in `test_map_manager` and `test_tile_prefetch` would get new expectations. The `--grid-size 50` to `100` advice stays.
-  - *Upstream report.* Not filed. Filing is the maintainer's call. A draft for gtsam_points:
-
-    > **`voxelgrid_sampling` silently merges points outside the 21-bit voxel range**
-    >
-    > `gtsam_points::voxelgrid_sampling` (CPU) packs each voxel coordinate into 21 bits. A point more than about 2^20 voxels from the origin (about ±105 km at a 0.1 m voxel, which is reached with UTM coordinates) wraps into another voxel, and its point is averaged into a voxel that it is not in. The output then holds points that are not near any input point. The only sign is a warning. Expected: an error or a return value that callers can check, or coordinates relative to the cloud's centre. Workaround in glim_localization: downsample in a frame centred on the bounding box, and reject clouds wider than about 2^21 voxels.
+  - *Upstream report.* Split out into [#63](https://github.com/atinfinity/glim_localization/issues/63), which holds the draft for gtsam_points.
 - **Tests** (synthetic data only):
   - `test_pcd_map`:
     - `LzfTest.DecompressesLiteralsAndBackReferences`: literals, an overlapping back reference, a long match (`len == 7` plus an extra byte), and a 13-bit offset.
