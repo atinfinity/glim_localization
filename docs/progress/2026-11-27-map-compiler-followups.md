@@ -21,7 +21,7 @@
     > **`voxelgrid_sampling` silently merges points outside the 21-bit voxel range**
     >
     > `gtsam_points::voxelgrid_sampling` (CPU) packs each voxel coordinate into 21 bits. A point more than about 2^20 voxels from the origin (about ±105 km at a 0.1 m voxel, which is reached with UTM coordinates) wraps into another voxel, and its point is averaged into a voxel that it is not in. The output then holds points that are not near any input point. The only sign is a warning. Expected: an error or a return value that callers can check, or coordinates relative to the cloud's centre. Workaround in glim_localization: downsample in a frame centred on the bounding box, and reject clouds wider than about 2^21 voxels.
-- **Tests** (synthetic data only; nothing was built or run yet):
+- **Tests** (synthetic data only):
   - `test_pcd_map`:
     - `LzfTest.DecompressesLiteralsAndBackReferences`: literals, an overlapping back reference, a long match (`len == 7` plus an extra byte), and a 13-bit offset.
     - `LzfTest.RejectsMalformedStreamsAndWrongSizes`: a short or long output, a run past the end of the input, a reference before the start, and missing length or offset bytes.
@@ -30,8 +30,8 @@
     - `PcdMapTest.RejectsBrokenBinaryCompressed`: a missing size header, a wrong uncompressed size, a truncated stream, a short output, a bad reference, and two sizes that must fail before allocating gigabytes.
     - `PcdMapTest.RejectsUnsupportedOrBrokenFiles` now rejects an unknown `DATA` value instead of `binary_compressed`.
   - `test_map_compiler`:
-    - `MapCompilerTest.BinaryCompressedPcdGivesTheSameMapAsBinary`: the same `map_index.json`, points and covariances as binary PCD, with downsampling, F4 and F8.
+    - `MapCompilerTest.BinaryCompressedPcdGivesTheSameMapAsBinary`: the same `map_index.json`, points and covariances as binary PCD, with F4 and F8. Without `--voxel-size`: the multi-threaded `voxelgrid_sampling` does not keep the order of its output points, so with downsampling the two maps held the same points in a different order and the centroids differed in the last bits.
     - `MapCompilerTest.LoadMapReportsTheSource`: dump, compiled map, a missing or non-string value, and a failed load.
     - `MapCompilerTest.RecompilingKeepsTheSource`: a dump and a PCD map, each compiled again, also with `--recompute-covariances`.
-- **Verification**: pending. Run `scripts/docker_run.sh scripts/ci.sh` once building is allowed, and record the result here.
+- **Verification**: `scripts/docker_run.sh scripts/ci.sh` (Docker, amd64): all checks pass, 352 core tests, the colcon tests, interfaces, the Python tests, the quick robustness suite and the replay e2e.
 - **Open**: `scripts/render_demo.py` still reads only ascii and binary PCD for its background map. The deferred items above stay in [#12](https://github.com/atinfinity/glim_localization/issues/12).
