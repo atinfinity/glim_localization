@@ -8,10 +8,11 @@
     - `CandidateScore::translation`, the xy distance from the given pose;
     - `CandidateSearchResult::out_of_range`, the best match beyond the bound;
     - `InitSearchReason::OUT_OF_RANGE = 5` and `INIT_SEARCH_REASON_OUT_OF_RANGE = 5` in `LocalizationStatus.msg`;
-    - for this reason, `init_search_score` and `init_search_yaw_offset` are those of the match beyond the bound;
+    - for this reason, `init_search_score` and `init_search_yaw_offset` are those of the match beyond the bound, and `init_search_runner_up_*` those of the best within it, the one it outscored;
+    - a LOW_SCORE message names a match beyond the bound when there is one (`beyond 2.50 m: 0.600 at 5.00 m`), so that the bound does not hide it;
     - the log and diagnostics text starts with `out of range:`, and `replay_robustness.py` classifies it as `rejected_out_of_range`.
   - A negative or non-finite bound is rejected when the module is built, even with the search off.
-  - `replay_robustness.py --search-max-translation` sets the bound for the cases with the search. The quick suite gains the case at 4 m and 0 deg with the search and a 2.5 m bound, which is expected to be `rejected_out_of_range`.
+  - `replay_robustness.py --search-max-translation` sets the bound for the cases with the search, and `results.json` and `results.md` record it. The quick suite gains the case at 4 m and 0 deg with the search and a 2.5 m bound, which is expected to be `rejected_out_of_range`.
 - **Why**: on the synthetic corridor, a given pose 4 m off with the search converged to the corridor turned by 180 deg, about 1.9 m from the truth, and was accepted (10 `inaccurate` runs). All candidates start at the given position, and the wrong pose registers well, so nothing else in the search compares it against the truth. The registered pose of those runs moved 2.98 m from the given pose, further than any accepted correct pose moved.
 - **Decisions**:
   - **A bound on the distance moved, not a translation grid.** A throwaway tool (not committed) scored the 24 yaws on frame 0, both at the given position and on an xy grid (step 2 m, out to 4 m), for every search case of the sweep (99 cases). The grid scores were then put through the selection rules offline:
@@ -41,6 +42,7 @@
   - Synthetic scans:
     - `SymmetricSceneTest.MatchBeyondTheBoundIsRejected`: the given pose 1 m off with a 0.5 m bound gives `out of range: inlier ratio 0.932 at a yaw correction of -20.0 deg lies 1.00 m from the given pose, beyond 0.50 m (best within 0.426; ...)`;
     - `InitYawSearchTest.OffsetPoseWithinTheBoundConverges`: 1.5 m and 90 deg off with a 2.5 m bound is accepted (score 0.996) and tracks within 0.006 m;
+    - `InitYawSearchTest.OffsetPoseBeyondTheBoundIsOutOfRange`: the same pose with a 0.5 m bound is rejected as OUT_OF_RANGE and LOST, with the status score that of the match beyond the bound;
     - `InitYawSearchTest.InvalidParametersAreRejected`: a bound of -1, NaN or infinity throws.
   - `scripts/replay_robustness.py --suite full --jobs 4`, on the same input as the baseline of the [spike](2026-11-27-challenger-spike.md):
 
@@ -53,7 +55,7 @@
     - Bound 0 matches the baseline case by case.
     - At 2.5 m only search cases change: the 10 wrong runs at 4 m and the 12 ambiguous ones (3 m and 4 m) become `rejected_out_of_range`. For example, 4 m at 0 deg: `inlier ratio 0.959 at a yaw correction of 179.9 deg lies 2.98 m from the given pose, beyond 2.50 m (best within 0.630; 24 of 24 candidates in 2.050 s)`. No search case is `inaccurate`, every pass stays a pass, and no case without the search or with a map change changes.
   - The throwaway tool's timings were taken with the machine oversubscribed (6 jobs of 8 threads on 16 cores) and are not usable as a cost measurement. The bound adds no registration, so it does not change the cost of the search.
-  - `scripts/ci.sh` (Docker, amd64): all checks pass, 354 core tests, the colcon tests, and the quick suite with `pose_t4_yaw0_search_mt2.5: rejected_out_of_range`.
+  - `scripts/ci.sh` (Docker, amd64): all checks pass, 355 core tests, the colcon tests, and the quick suite with `pose_t4_yaw0_search_mt2.5: rejected_out_of_range`.
 - **Open**:
   - The cases without the search (38 wrong convergences) and the 180 deg alias in general: [#50](https://github.com/atinfinity/glim_localization/issues/50) (closed as a known limitation of the scene).
   - [#3](https://github.com/atinfinity/glim_localization/issues/3): the translation grid and global features wait for an asymmetric scene to measure them on.
