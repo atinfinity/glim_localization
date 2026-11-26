@@ -101,7 +101,7 @@ scripts/docker_run.sh bash -c '
 
 ```bash
 # 1. Convert a rosbag2 (sqlite3 or mcap) to a replay dataset
-py scripts/bag_to_replay.py <bag_dir> --out /ws/out/dataset [--points-topic /points] [--imu-topic /imu] [--acc-scale 9.80665] [--point-clock-offset <s>|estimate] [--gt traj.txt]
+py scripts/bag_to_replay.py <bag_dir> --out /ws/out/dataset [--points-topic /points] [--imu-topic /imu] [--acc-scale 9.80665] [--point-clock-offset <s>|estimate] [--wheel-odom-topic /odom] [--gt traj.txt]
 
 # 2. Localize
 /ws/build/core/tools/glim_localization_replay --data /ws/out/dataset --config glim_localization/config \
@@ -119,6 +119,7 @@ py scripts/evaluate.py --est /ws/out/run/traj_localization.txt --gt /ws/out/data
   - After the offset there are two checks on the residual (first point after the offset - header). Each frame must be within 1 s of its header, which catches a wrong offset and large jumps. The residual may spread (max - min over all frames) over at most one scan period, taken as the median interval of the header stamps, which catches drift and smaller jumps. Changes below one scan period pass.
   - The value must be finite and at most 1e9 s (about 32 years). The option is refused for relative per-point times, `--time-mode relative`, and clouds without a time field.
   - The offset is printed, and `meta.json` records it under `conversion.point_clock_offset`: `source` (`given` or `estimated`), `offset_ns`, `offset_s`, `estimated_from_frame`, `definition` (`header clock = point clock + offset`), and the residual as min, median and max (`residual_s`). Without the option the field is `null`.
+- Wheel odometry (optional): `--wheel-odom-topic` writes the twist of a `nav_msgs/Odometry` topic to `wheel_odom.csv`, as the ROS nodes take it. Messages with another `child_frame_id` than `--wheel-odom-child-frame` (default `base_link`, the base of `wheel_odom_T_imu_base`; `''` accepts any), a zero stamp or a non-finite value are excluded. `--wheel-odom-time-offset` is added to the header stamps. `meta.json` records the topic, the frame, the offset and the counts under `conversion.wheel_odom`. No usable message is an error. Replay it with `--wheel-odom on` and a config whose `wheel_odom_T_imu_base` is set for your robot.
 - `glim_localization_replay`: `--init-pose` is `T_world_imu` in the map frame. Other options: `--init-vel`, `--start`, `--end`, `--max-frames`, `--max-imu-gap` (default 0.05 s), `--on-imu-gap abort|reset`, `--min-tracking-ratio` (default 0.9), `--wheel-odom on|off` (feed `wheel_odom.csv`; default: `wheel_odom_enabled` of the config). Outputs: `traj_localization.txt` (TUM), `frames.csv`, `summary.json`, `replay_args.json`. Exit codes: 0 ok, 1 runtime failure (including LOST or a low tracking ratio), 2 bad arguments, config, map or initial pose, 3 invalid dataset (including IMU gaps), 4 no pose.
 - `evaluate.py`: ATE and RPE with evo (no realignment) and processing time statistics; writes `eval.json` and `eval.txt`, and exits 1 when a threshold or the pose coverage (`--min-coverage`, default 0.9) is not met.
 - Set `T_lidar_imu` in `config_sensors.json` of a copied config for your sensor; the shipped configs use identity. Then pass `--config` your copied config instead of `glim_localization/config`.
