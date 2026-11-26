@@ -519,6 +519,10 @@ TEST_F(LocalizationOdometryTest, RejectsInvalidResetRequests) {
   EXPECT_FALSE(odometry.reset(mirrored));
   EXPECT_FALSE(odometry.reset(Eigen::Isometry3d::Identity(), Eigen::Vector3d::Constant(nan)));
   EXPECT_FALSE(odometry.reset(Eigen::Isometry3d::Identity(), Eigen::Vector3d::Zero(), nan));
+  // Finite but huge velocities made the smoother throw IndeterminantLinearSystemException and abort the process
+  EXPECT_FALSE(odometry.reset(Eigen::Isometry3d::Identity(), Eigen::Vector3d(1e50, 0.0, 0.0)));
+  EXPECT_FALSE(odometry.reset(Eigen::Isometry3d::Identity(), Eigen::Vector3d(0.0, 0.0, OdometryEstimationLocalization::kMaxResetSpeed + 1.0)));
+  EXPECT_FALSE(odometry.reset_pending());
 
   size_t imu_cursor = 0;
   std::vector<glim::EstimationFrame::ConstPtr> marginalized;
@@ -589,6 +593,87 @@ TEST_F(LocalizationOdometryTest, RejectsNonPositiveDegradedWeight) {
   auto params = reset_test_params();
   params.degraded_weight_scale = 0.0;
   EXPECT_THROW(OdometryEstimationLocalizationCPU(params, *map_), std::invalid_argument);
+}
+
+TEST_F(LocalizationOdometryTest, AcceptsAResetAtTheSpeedLimit) {
+  OdometryEstimationLocalizationCPU odometry(reset_test_params(), *map_);
+  const double stamp = (*frames_)[0]->stamp;
+  EXPECT_TRUE(odometry.reset(synthetic_T_world_imu(stamp), Eigen::Vector3d(OdometryEstimationLocalization::kMaxResetSpeed, 0.0, 0.0), stamp));
+  EXPECT_TRUE(odometry.reset_pending());
+
+  // The limit itself must be safe to apply: the smoother solves the first frames without throwing
+  size_t imu_cursor = 0;
+  std::vector<glim::EstimationFrame::ConstPtr> marginalized;
+  for (size_t i = 0; i < 3; i++) {
+    feed_imu(odometry, *imu_, imu_cursor, (*frames_)[i]->stamp);
+    const auto estimate = odometry.insert_frame((*frames_)[i], marginalized);
+    ASSERT_TRUE(estimate) << "i=" << i;
+    EXPECT_TRUE(estimate->T_world_imu.matrix().allFinite()) << "i=" << i;
+  }
+  EXPECT_EQ(odometry.status().reset_count, 1);
+}
+
+TEST_F(LocalizationOdometryTest, RejectsInvalidConfiguredInitialState) {
+  {
+    auto params = reset_test_params();
+    params.init_v_without_pose = true;  // Upstream would start at the identity pose in the map
+    EXPECT_THROW(OdometryEstimationLocalizationCPU(params, *map_), std::invalid_argument);
+  }
+  {
+    auto params = reset_test_params();
+    params.estimate_init_state = false;
+    params.init_T_world_imu = synthetic_T_world_imu(0.0);
+    params.init_v_world_imu = Eigen::Vector3d(1e50, 0.0, 0.0);
+    EXPECT_THROW(OdometryEstimationLocalizationCPU(params, *map_), std::invalid_argument);
+  }
+  {
+    auto params = reset_test_params();
+    params.estimate_init_state = false;
+    params.init_T_world_imu = synthetic_T_world_imu(0.0);
+    params.init_T_world_imu.linear() *= 2.0;
+    params.init_v_world_imu.setZero();
+    EXPECT_THROW(OdometryEstimationLocalizationCPU(params, *map_), std::invalid_argument);
+  }
+}
+
+TEST_F(LocalizationOdometryTest, SecondResetBeforeAnyFrameKeepsTheEstimatedBias) {
+  auto params = reset_test_params();
+  params.estimate_init_state = false;
+  params.init_T_world_imu = synthetic_T_world_imu(0.0);
+  params.init_v_world_imu.setZero();
+  params.imu_bias.setZero();
+  params.imu_bias[0] = 0.02;  // A small wrong accelerometer bias, so the estimate moves away from it
+  const Eigen::Matrix<double, 6, 1> configured = params.imu_bias;
+  OdometryEstimationLocalizationCPU odometry(params, *map_);
+  EXPECT_EQ(odometry.start_imu_bias(), configured);
+  size_t imu_cursor = 0;
+  std::vector<glim::EstimationFrame::ConstPtr> marginalized;
+
+  constexpr size_t kFirstReset = 30;
+  for (size_t i = 0; i < kFirstReset; i++) {
+    feed_imu(odometry, *imu_, imu_cursor, (*frames_)[i]->stamp);
+    ASSERT_TRUE(odometry.insert_frame((*frames_)[i], marginalized)) << "i=" << i;
+  }
+
+  // The first reset applies at the next frame, which it drops (min_stamp is later): no frame of the new run is estimated
+  const double second_stamp = (*frames_)[kFirstReset + 1]->stamp;
+  ASSERT_TRUE(odometry.reset(synthetic_T_world_imu(second_stamp), Eigen::Vector3d::Zero(), second_stamp + 1e-3));
+  feed_imu(odometry, *imu_, imu_cursor, (*frames_)[kFirstReset]->stamp);
+  EXPECT_FALSE(odometry.insert_frame((*frames_)[kFirstReset], marginalized));
+  EXPECT_EQ(odometry.status().reset_count, 1);
+  const Eigen::Matrix<double, 6, 1> estimated = odometry.start_imu_bias();
+  ASSERT_TRUE(estimated.allFinite());
+  EXPECT_GT((estimated - configured).norm(), 1e-9) << "the first run did not move the bias, so this test checks nothing";
+
+  // The second reset comes before any frame of the first one's run: it must not fall back to the configured bias
+  ASSERT_TRUE(odometry.reset(synthetic_T_world_imu(second_stamp), Eigen::Vector3d::Zero(), second_stamp));
+  feed_imu(odometry, *imu_, imu_cursor, second_stamp);
+  const auto estimate = odometry.insert_frame((*frames_)[kFirstReset + 1], marginalized);
+  ASSERT_TRUE(estimate);
+  EXPECT_EQ(odometry.status().reset_count, 2);
+  EXPECT_EQ(odometry.start_imu_bias(), estimated);
+  // The smoother starts from it too: the first estimate of the new run is near the carried bias, not the configured one
+  EXPECT_LT((estimate->imu_bias - estimated).norm(), (estimate->imu_bias - configured).norm());
 }
 
 TEST_F(LocalizationOdometryTest, RejectsNullMap) {

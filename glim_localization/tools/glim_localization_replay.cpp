@@ -246,6 +246,7 @@ int main(int argc, char** argv) {
       params.init_T_world_imu.linear() = q.normalized().toRotationMatrix();
       params.init_T_world_imu.translation() = Eigen::Vector3d(v[0], v[1], v[2]);
       params.estimate_init_state = false;
+      params.init_v_without_pose = false;  // The pose comes from the command line, a configured velocity may go with it
       pose_source = "cli";
     }
     if (args.init_vel) {

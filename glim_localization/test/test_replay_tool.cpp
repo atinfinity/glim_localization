@@ -196,6 +196,28 @@ TEST_F(ReplayToolTest, RejectsBadConfigAndMap) {
   EXPECT_EQ(run(init_pose_args(), fs::path(), config), 2);
 }
 
+TEST_F(ReplayToolTest, ConfiguredVelocityNeedsAPose) {
+  const fs::path config = *root_ / "config_velocity_only";
+  fs::remove_all(config);
+  fs::copy(GLIM_LOCALIZATION_CONFIG_DIR, config, fs::copy_options::recursive);
+  {
+    const auto path = config / "config_odometry_localization_cpu.json";
+    std::ifstream ifs(path);
+    std::stringstream buffer;
+    buffer << ifs.rdbuf();
+    std::string text = buffer.str();
+    const std::string key = "\"on_imu_gap\": \"reset\",";
+    const auto pos = text.find(key);
+    ASSERT_NE(pos, std::string::npos);
+    text.insert(pos + key.size(), " \"init_v_world_imu\": [0.0, 0.0, 0.0],");
+    std::ofstream(path, std::ios::trunc) << text;
+  }
+  // Upstream would start at the identity pose in the map: rejected as a bad config
+  EXPECT_EQ(run("--max-frames 5", fs::path(), config), 2);
+  // With the pose from the command line, the configured velocity goes with it
+  EXPECT_EQ(run(init_pose_args() + " --max-frames 5", fs::path(), config), 0);
+}
+
 TEST_F(ReplayToolTest, RejectsInvalidDataWithExitCode3) {
   EXPECT_EQ(run(init_pose_args(), *root_ / "no_such_data"), 3);
 
