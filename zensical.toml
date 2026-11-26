@@ -37,3 +37,7 @@ nav = [
 
 [project.theme]
 features = ["navigation.sections", "content.code.copy"]
+
+# GitHub alerts (> [!NOTE], > [!WARNING], ...) render as admonitions, so the pages read the same on GitHub and on
+# the site. Zensical maps this plugin to pymdownx.quotes with callouts on; no extra package is needed.
+[project.plugins.gh-admonitions]
