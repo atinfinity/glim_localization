@@ -66,7 +66,21 @@ struct ReplayOptions {
   };
   /// Applied once before the first frame.
   std::optional<InitialReset> initial_reset;
+
+  /// Feed the dataset's wheel odometry (wheel_odom.csv) when the odometry has it enabled. Before each inserted frame,
+  /// every sample with stamp <= the frame stamp plus the next one; samples more than 1 s before the first frame are skipped.
+  bool feed_wheel_odom = true;
 };
+
+/// Wheel odometry outcome of one frame, from the odometry's counters
+enum class ReplayWheel {
+  NONE,     ///< No wheel factor decision (disabled, not estimated, or the first frame after a reset)
+  ADDED,    ///< A wheel relative pose factor was added
+  GATED,    ///< The consistency gate rejected the wheel motion
+  MISSING   ///< The wheel samples did not cover the frame interval
+};
+
+const char* to_string(ReplayWheel wheel);
 
 struct ReplayFrameRecord {
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW
@@ -79,6 +93,8 @@ struct ReplayFrameRecord {
   int num_points_raw = 0;
   int num_points_preprocessed = 0;
   int num_imu_fed = 0;
+  int num_wheel_fed = 0;  ///< Wheel odometry samples inserted before this frame
+  ReplayWheel wheel = ReplayWheel::NONE;
   double t_load_ms = 0.0;
   double t_preprocess_ms = 0.0;
   double t_odometry_ms = 0.0;  ///< insert_frame only
@@ -95,6 +111,15 @@ struct ReplaySummary {
   std::map<std::string, int> estimated_by_state;
   double wall_seconds = 0.0;
   int imu_gap_resets = 0;  ///< Resets the odometry made after an IMU gap (OnImuGap::RESET)
+  /// Wheel odometry totals over the run; set only if wheel odometry was fed
+  struct WheelOdom {
+    int fed = 0;  ///< Samples inserted
+    int rejected = 0;  ///< Samples the odometry did not take (non-finite or not newer)
+    int added = 0;
+    int gated = 0;
+    int missing = 0;
+  };
+  std::optional<WheelOdom> wheel_odom;
   /// The most recent initial pose search (init_yaw_search), if the odometry ran one
   struct InitSearch {
     InitSearchResult result = InitSearchResult::NONE;

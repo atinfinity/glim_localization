@@ -2028,3 +2028,126 @@ TEST_F(ReplayRunnerTest, ALostOdometryStaysLostUntilAnExternalResetClearsIt) {
     }
   }
 }
+
+namespace {
+
+OdometryEstimationLocalizationCPU::Params wheel_params() {
+  auto params = perturbed_start_params();
+  params.wheel_odom.enabled = true;  // The synthetic wheel base is the IMU frame (identity extrinsic)
+  return params;
+}
+
+/// Number of wheel samples with stamp in [from_ns, to_ns], plus the one after
+int expected_wheel_fed(const ReplayDataset& dataset, int64_t from_ns, int64_t to_ns) {
+  const auto& wheel = dataset.wheel_odom();
+  int count = 0;
+  size_t i = 0;
+  for (; i < wheel.size() && wheel[i].stamp_ns <= to_ns; i++) {
+    count += wheel[i].stamp_ns >= from_ns ? 1 : 0;
+  }
+  return count + (i < wheel.size() ? 1 : 0);
+}
+
+}  // namespace
+
+TEST_F(ReplayRunnerTest, FeedsWheelOdometryUpToFrameStampPlusOneSample) {
+  ASSERT_TRUE(dataset_->has_wheel_odom());
+  ReplayOptions options;
+  options.max_frames = 3;
+  const auto output = run(*dataset_, wheel_params(), options);
+  ASSERT_EQ(output.records.size(), 3u);
+  const auto& frames = dataset_->frames();
+  // The first frame gets the samples up to its stamp (none before 0 s) and the next one; later frames continue from there
+  EXPECT_EQ(output.records[0].num_wheel_fed, expected_wheel_fed(*dataset_, 0, frames[0].stamp_ns));
+  EXPECT_EQ(output.records[0].num_wheel_fed + output.records[1].num_wheel_fed, expected_wheel_fed(*dataset_, 0, frames[1].stamp_ns));
+  EXPECT_EQ(output.records[1].num_wheel_fed, 5);  // 50 Hz over 0.1 s
+  EXPECT_EQ(output.records[2].num_wheel_fed, 5);
+  EXPECT_EQ(output.records[0].wheel, ReplayWheel::NONE);  // No previous frame
+  EXPECT_EQ(output.records[1].wheel, ReplayWheel::ADDED);
+  EXPECT_EQ(output.records[2].wheel, ReplayWheel::ADDED);
+  ASSERT_TRUE(output.summary.wheel_odom);
+  EXPECT_EQ(output.summary.wheel_odom->fed, output.records[0].num_wheel_fed + 10);
+  EXPECT_EQ(output.summary.wheel_odom->added, 2);
+  EXPECT_EQ(output.summary.wheel_odom->gated, 0);
+  EXPECT_EQ(output.summary.wheel_odom->missing, 0);
+  EXPECT_EQ(output.summary.wheel_odom->rejected, 0);
+}
+
+TEST_F(ReplayRunnerTest, SkipsWheelOdometryLongBeforeTheFirstFrame) {
+  ReplayOptions options;
+  options.start = 5.0;
+  options.max_frames = 2;
+  const auto output = run(*dataset_, wheel_params(), options);
+  ASSERT_EQ(output.records.size(), 2u);
+  const int64_t first = output.records[0].stamp_ns;
+  EXPECT_EQ(output.records[0].num_wheel_fed, expected_wheel_fed(*dataset_, first - 1000000000, first));
+  EXPECT_GT(output.records[0].num_wheel_fed, 40);  // 1 s at 50 Hz
+  EXPECT_LT(output.records[0].num_wheel_fed, 60);
+}
+
+TEST_F(ReplayRunnerTest, WheelOdometryIsFedOnlyWhenEnabled) {
+  ReplayOptions options;
+  options.max_frames = 3;
+  const auto disabled = run(*dataset_, perturbed_start_params(), options);
+  options.feed_wheel_odom = false;
+  const auto not_fed = run(*dataset_, wheel_params(), options);
+  for (const auto* output : {&disabled, &not_fed}) {
+    EXPECT_FALSE(output->summary.wheel_odom);
+    for (const auto& record : output->records) {
+      EXPECT_EQ(record.num_wheel_fed, 0);
+      EXPECT_EQ(record.wheel, ReplayWheel::NONE);
+    }
+  }
+  // A dataset without wheel_odom.csv runs as before
+  Variant variant;
+  variant.num_frames = 3;
+  const auto without = run(make_variant("no_wheel", variant), wheel_params(), options);
+  EXPECT_FALSE(without.summary.wheel_odom);
+  EXPECT_EQ(without.summary.frames_by_result.at("estimated"), 3);
+}
+
+TEST_F(ReplayRunnerTest, WheelOdometryKeepsAccuracy) {
+  const auto output = run(*dataset_, wheel_params());
+  ASSERT_EQ(output.records.size(), dataset_->frames().size());
+  ASSERT_TRUE(output.summary.wheel_odom);
+  EXPECT_EQ(output.summary.wheel_odom->added, static_cast<int>(output.records.size()) - 1);
+  EXPECT_EQ(output.summary.wheel_odom->gated, 0);
+  EXPECT_EQ(output.summary.wheel_odom->missing, 0);
+  for (const auto& record : output.records) {
+    if (record.stamp_ns * 1e-9 < kSettleTime) {
+      continue;
+    }
+    ASSERT_TRUE(record.T_world_imu);
+    const Eigen::Isometry3d truth = synthetic_T_world_imu(record.stamp_ns * 1e-9);
+    EXPECT_LT((record.T_world_imu->translation() - truth.translation()).norm(), kMaxTranslationError) << record.stamp_ns;
+    const double angle = Eigen::AngleAxisd(record.T_world_imu->linear().transpose() * truth.linear()).angle();
+    EXPECT_LT(angle * 180.0 / M_PI, kMaxRotationErrorDeg) << record.stamp_ns;
+  }
+}
+
+TEST_F(ReplayRunnerTest, WriterReportsWheelOdometry) {
+  const fs::path out = *dir_ / "wheel_out";
+  ReplayOptions options;
+  options.max_frames = 3;
+  glim::CloudPreprocessor preprocessor;
+  OdometryEstimationLocalizationCPU odometry(wheel_params(), *map_);
+  ReplayRunner runner(*dataset_, odometry, preprocessor, options);
+  ReplayOutputWriter writer(out.string());
+  const auto summary = runner.run([&](const ReplayFrameRecord& record) { writer.write(record); });
+  writer.write_summary(summary, 0.0);
+
+  std::ifstream frames(out / "frames.csv");
+  std::string line;
+  std::getline(frames, line);
+  EXPECT_EQ(line.substr(line.size() - std::string(",num_wheel_fed,wheel").size()), ",num_wheel_fed,wheel");
+  std::vector<std::string> last_fields;
+  while (std::getline(frames, line)) {
+    last_fields.push_back(line.substr(line.rfind(',') + 1));
+  }
+  EXPECT_EQ(last_fields, (std::vector<std::string>{"none", "added", "added"}));
+
+  const auto json = nlohmann::json::parse(std::ifstream(out / "summary.json"));
+  EXPECT_EQ(json.at("wheel_odom").at("added"), 2);
+  EXPECT_EQ(json.at("wheel_odom").at("fed"), summary.wheel_odom->fed);
+  EXPECT_EQ(json.at("wheel_odom").at("gated"), 0);
+}

@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cinttypes>
 #include <cstdio>
 #include <filesystem>
@@ -41,6 +42,20 @@ const char* to_string(ReplayResult result) {
       return "diverged";
     case ReplayResult::SKIPPED_NO_IMU:
       return "skipped_no_imu";
+  }
+  return "unknown";
+}
+
+const char* to_string(ReplayWheel wheel) {
+  switch (wheel) {
+    case ReplayWheel::NONE:
+      return "none";
+    case ReplayWheel::ADDED:
+      return "added";
+    case ReplayWheel::GATED:
+      return "gated";
+    case ReplayWheel::MISSING:
+      return "missing";
   }
   return "unknown";
 }
@@ -128,6 +143,17 @@ ReplaySummary ReplayRunner::run(const std::function<void(const ReplayFrameRecord
   };
   size_t imu_fed = 0;  // Number of samples handed to the odometry
 
+  const auto& wheel = dataset_.wheel_odom();
+  const bool feed_wheel = options_.feed_wheel_odom && odometry_.wheel_odom_enabled() && !wheel.empty();
+  if (feed_wheel) {
+    summary.wheel_odom = ReplaySummary::WheelOdom();
+  }
+  std::optional<size_t> wheel_fed;  // Next wheel sample to insert; set at the first inserted frame
+  // Wheel counters of the odometry after the previous frame (they restart at 0 on a reset)
+  int last_wheel_factors = 0;
+  int last_wheel_gated = 0;
+  int last_wheel_missing = 0;
+
   int64_t processed = 0;
   for (size_t index = 0; index < dataset_.frames().size(); index++) {
     const auto& info = dataset_.frames()[index];
@@ -188,6 +214,30 @@ ReplaySummary ReplayRunner::run(const std::function<void(const ReplayFrameRecord
         record.num_imu_fed++;
       }
 
+      if (feed_wheel && preprocessed->size() > 0) {
+        const int64_t stamp_ns = static_cast<int64_t>(std::llround(preprocessed->stamp * 1e9));
+        if (!wheel_fed) {
+          // Skip what is long before the first frame: the buffer only needs the interval since the last frame
+          wheel_fed = std::lower_bound(
+                        wheel.begin(), wheel.end(), stamp_ns - 1000000000,
+                        [](const ReplayWheelOdom& sample, int64_t value) { return sample.stamp_ns < value; }) -
+                      wheel.begin();
+        }
+        // Every sample up to the frame stamp, then the one after it, so that the buffer covers the frame
+        const auto after = std::upper_bound(
+          wheel.begin(), wheel.end(), stamp_ns, [](int64_t value, const ReplayWheelOdom& sample) { return value < sample.stamp_ns; });
+        const size_t target = std::min(static_cast<size_t>(after - wheel.begin()) + 1, wheel.size());
+        for (; *wheel_fed < target; (*wheel_fed)++) {
+          const auto& sample = wheel[*wheel_fed];
+          if (odometry_.insert_wheel_odom(sample.stamp_ns * 1e-9, sample.linear, sample.angular)) {
+            record.num_wheel_fed++;
+          } else {
+            summary.wheel_odom->rejected++;
+          }
+        }
+        summary.wheel_odom->fed += record.num_wheel_fed;
+      }
+
       if (preprocessed->size() > 0) {
         std::vector<glim::EstimationFrame::ConstPtr> marginalized;
         const auto t_insert = Clock::now();
@@ -210,7 +260,22 @@ ReplaySummary ReplayRunner::run(const std::function<void(const ReplayFrameRecord
     if (status.reset_count > last_reset_count && status.last_reset_reason == ResetReason::IMU_GAP) {
       summary.imu_gap_resets += status.reset_count - last_reset_count;
     }
+    if (status.reset_count != last_reset_count) {
+      last_wheel_factors = last_wheel_gated = last_wheel_missing = 0;  // The counters restarted
+    }
     last_reset_count = status.reset_count;
+    if (feed_wheel) {
+      const int added = status.wheel_factors - last_wheel_factors;
+      const int gated = status.wheel_gated - last_wheel_gated;
+      const int missing = status.wheel_missing - last_wheel_missing;
+      record.wheel = added > 0 ? ReplayWheel::ADDED : gated > 0 ? ReplayWheel::GATED : missing > 0 ? ReplayWheel::MISSING : ReplayWheel::NONE;
+      summary.wheel_odom->added += std::max(added, 0);
+      summary.wheel_odom->gated += std::max(gated, 0);
+      summary.wheel_odom->missing += std::max(missing, 0);
+      last_wheel_factors = status.wheel_factors;
+      last_wheel_gated = status.wheel_gated;
+      last_wheel_missing = status.wheel_missing;
+    }
     if (status.init_search != InitSearchResult::NONE) {
       summary.init_search = ReplaySummary::InitSearch{
         status.init_search,
@@ -262,16 +327,16 @@ ReplayOutputWriter::ReplayOutputWriter(const std::string& out_dir) : out_dir_(ou
     throw std::runtime_error("cannot create output files in " + out_dir);
   }
   frames_ << "stamp_ns,result,frame_id,state,reset_count,num_points_raw,num_points_preprocessed,num_imu_fed,t_load_ms,t_preprocess_ms,t_odometry_ms,"
-             "inlier_ratio,residual,num_map_factors,num_tiles\n";
+             "inlier_ratio,residual,num_map_factors,num_tiles,num_wheel_fed,wheel\n";
   frames_.flush();
 }
 
 void ReplayOutputWriter::write(const ReplayFrameRecord& r) {
   char line[512];
   std::snprintf(
-    line, sizeof(line), "%" PRId64 ",%s,%d,%s,%d,%d,%d,%d,%.3f,%.3f,%.3f,%.6g,%.6g,%d,%d\n", r.stamp_ns, to_string(r.result), r.frame_id,
+    line, sizeof(line), "%" PRId64 ",%s,%d,%s,%d,%d,%d,%d,%.3f,%.3f,%.3f,%.6g,%.6g,%d,%d,%d,%s\n", r.stamp_ns, to_string(r.result), r.frame_id,
     to_string(r.state), r.reset_count, r.num_points_raw, r.num_points_preprocessed, r.num_imu_fed, r.t_load_ms, r.t_preprocess_ms, r.t_odometry_ms,
-    r.inlier_ratio, r.residual, r.num_map_factors, r.num_tiles);
+    r.inlier_ratio, r.residual, r.num_map_factors, r.num_tiles, r.num_wheel_fed, to_string(r.wheel));
   frames_ << line;
   frames_.flush();
 
@@ -298,6 +363,10 @@ void ReplayOutputWriter::write_summary(const ReplaySummary& summary, double map_
   json["map_load_seconds"] = map_load_seconds;
   json["wall_seconds"] = summary.wall_seconds;
   json["imu_gap_resets"] = summary.imu_gap_resets;
+  if (summary.wheel_odom) {
+    const auto& w = *summary.wheel_odom;
+    json["wheel_odom"] = {{"fed", w.fed}, {"rejected", w.rejected}, {"added", w.added}, {"gated", w.gated}, {"missing", w.missing}};
+  }
   if (summary.tracking_ratio) {
     json["tracking_ratio"] = *summary.tracking_ratio;
   }
