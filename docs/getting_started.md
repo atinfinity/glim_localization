@@ -208,4 +208,4 @@ The node also publishes `~/odometry`, the map once on `~/map` (latched) and `/di
 - [ROS 2](ros2.md): launch arguments, R1 (the GLIM extension for evaluation), R2 parameters and lifecycle, topics, services and TF.
 - [Status and limitations](status.md): what is verified, what is not, and the open issues.
 - [Design](DESIGN.md): the architecture and the design decisions.
-- [Contributing](../CONTRIBUTING.md): how to report issues and open pull requests.
+- [Contributing](https://github.com/atinfinity/glim_localization/blob/main/CONTRIBUTING.md): how to report issues and open pull requests.
