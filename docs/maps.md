@@ -47,6 +47,18 @@ By default, the per-point covariances of a GLIM dump or a compiled map are copie
 - **Errors:** `--recompute-covariances` with `.pcd` or `.ply` input, and `--k-neighbors` with map directory input but without `--recompute-covariances`, are rejected. A submap with fewer than k points fails the run, and nothing is written.
 - Points, poses and submap ids are unchanged, and `map_index.json` keeps the input's `source` (`glim_dump` for a dump, `pcd` for a map compiled from a PCD file, and so on).
 
+## Exporting a point cloud
+
+`--export-pcd <file>` also writes the points of the compiled map as one PCD file, from any input, for viewing or editing in other tools:
+
+```bash
+/ws/build/core/tools/map_compiler /ws/out/glim_dump /ws/out/map --export-pcd /ws/out/map_export.pcd
+```
+
+- **Format:** `DATA binary` with x, y, z as F8 (`double`) in the map frame, so UTM-sized coordinates keep their precision. Covariances, poses and other attributes are not written. The file is refused if it exists.
+- **Overlap:** GLIM submaps overlap, and a point that several submaps hold appears once per submap. Compile the export again with `--voxel-size` (about a quarter of the point spacing) or `--k-neighbors 20`: with the default k = 10, duplicated points give degenerate covariances and localization fails ([measurement](progress/2026-11-28-map-source-measurement.md)).
+- An export is not a lossless copy: keep the GLIM dump as the master (see [Which map to keep](getting_started.md#which-map-to-keep)).
+
 ## 2D occupancy grid for Nav2
 
 `--occupancy-grid <prefix>` also writes `<prefix>.pgm` and `<prefix>.yaml` in the `map_server` format, from any input. The obstacle band is required and is an absolute z in the map frame:

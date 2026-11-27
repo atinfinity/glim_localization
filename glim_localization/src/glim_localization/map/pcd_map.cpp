@@ -3,6 +3,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <limits>
 #include <map>
@@ -10,6 +11,8 @@
 #include <set>
 #include <sstream>
 #include <utility>
+
+#include <unistd.h>
 
 #include <spdlog/fmt/fmt.h>
 #include <spdlog/spdlog.h>
@@ -650,6 +653,65 @@ bool recompute_covariances(LoadedSubmaps& submaps, int k_neighbors, int num_thre
     submaps[i].points = clouds[i];
   }
   spdlog::info("recomputed the covariances of {} points in {} submaps (k_neighbors {})", total, submaps.size(), k_neighbors);
+  return true;
+}
+
+bool write_pcd(const std::string& path, const LoadedSubmaps& submaps) {
+  namespace fs = std::filesystem;
+  size_t num_points = 0;
+  for (const auto& submap : submaps) {
+    num_points += submap.points ? submap.points->size() : 0;
+  }
+  if (num_points == 0) {
+    spdlog::error("no points to write to {}", path);
+    return false;
+  }
+  const fs::path output(path);
+  std::error_code ec;
+  if (fs::exists(output, ec) || ec) {
+    spdlog::error("{} already exists", path);
+    return false;
+  }
+  if (output.has_parent_path()) {
+    fs::create_directories(output.parent_path(), ec);
+    if (ec) {
+      spdlog::error("failed to create {}: {}", output.parent_path().string(), ec.message());
+      return false;
+    }
+  }
+
+  // Written under a temporary name and renamed, so a failure does not leave a half-written file behind.
+  const fs::path temp = path + ".tmp." + std::to_string(::getpid());
+  {
+    std::ofstream ofs(temp, std::ios::binary | std::ios::trunc);
+    ofs << "# .PCD v0.7 - Point Cloud Data file format\n"
+        << "VERSION 0.7\nFIELDS x y z\nSIZE 8 8 8\nTYPE F F F\nCOUNT 1 1 1\n"
+        << "WIDTH " << num_points << "\nHEIGHT 1\nVIEWPOINT 0 0 0 1 0 0 0\nPOINTS " << num_points << "\nDATA binary\n";
+    std::vector<double> buffer;
+    for (const auto& submap : submaps) {
+      if (!submap.points) {
+        continue;
+      }
+      buffer.resize(submap.points->size() * 3);
+      for (size_t i = 0; i < submap.points->size(); i++) {
+        const Eigen::Vector3d p = submap.T_world_origin * submap.points->points[i].head<3>();
+        std::memcpy(&buffer[i * 3], p.data(), sizeof(double) * 3);
+      }
+      ofs.write(reinterpret_cast<const char*>(buffer.data()), static_cast<std::streamsize>(buffer.size() * sizeof(double)));
+    }
+    ofs.close();
+    if (!ofs) {
+      spdlog::error("failed to write {}", temp.string());
+      fs::remove(temp, ec);
+      return false;
+    }
+  }
+  fs::rename(temp, output, ec);
+  if (ec) {
+    spdlog::error("failed to rename {} to {}: {}", temp.string(), path, ec.message());
+    fs::remove(temp, ec);
+    return false;
+  }
   return true;
 }
 

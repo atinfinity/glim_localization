@@ -19,6 +19,7 @@
 
 #include <glim_localization/map/map_io.hpp>
 #include <glim_localization/map/map_manager.hpp>
+#include <glim_localization/map/pcd_map.hpp>
 
 #include "synthetic/synthetic_map.hpp"
 
@@ -645,4 +646,53 @@ TEST_F(MapCompilerTest, RejectsBrokenJson) {
   ASSERT_EQ(compile(input_, output_), 0);
   std::ofstream(output_ / "map_index.json", std::ios::trunc) << "{";
   expect_compiled_load_fails();
+}
+
+TEST_F(MapCompilerTest, ExportsTheMapAsPcd) {
+  // A GLIM dump: every submap point in the world frame, at full precision despite the large world offset.
+  const fs::path pcd = dir_ / "export" / "dump.pcd";
+  ASSERT_EQ(compile(input_, output_, "--export-pcd '" + pcd.string() + "'"), 0) << last_log();
+  LoadedSubmaps submaps;
+  ASSERT_TRUE(load_map(output_.string(), submaps));
+  PcdPoints expected;
+  for (const auto& submap : submaps) {
+    for (size_t i = 0; i < submap.points->size(); i++) {
+      expected.emplace_back((submap.T_world_origin * submap.points->points[i].head<3>()).homogeneous());
+    }
+  }
+  PcdPoints exported;
+  ASSERT_TRUE(read_pcd(pcd.string(), exported));
+  ASSERT_EQ(exported.size(), expected.size());
+  for (size_t i = 0; i < exported.size(); i++) {
+    ASSERT_LT((exported[i] - expected[i]).norm(), 1e-9) << i;
+  }
+  // The overlap of the submaps is kept, once per submap: more points than the scene has.
+  EXPECT_GT(exported.size(), make_synthetic_world_points(params_).size());
+
+  // The export compiles again, and a PCD compiled and exported again keeps its points.
+  const fs::path again_pcd = dir_ / "tiles.pcd";
+  ASSERT_EQ(compile(pcd, dir_ / "tiles", "--grid-size 15 --export-pcd '" + again_pcd.string() + "'"), 0) << last_log();
+  PcdPoints again;
+  ASSERT_TRUE(read_pcd(again_pcd.string(), again));
+  ASSERT_EQ(again.size(), exported.size());
+  const auto sorted = [](PcdPoints points) {
+    std::sort(points.begin(), points.end(), [](const Eigen::Vector4d& a, const Eigen::Vector4d& b) {
+      return std::make_tuple(a.x(), a.y(), a.z()) < std::make_tuple(b.x(), b.y(), b.z());
+    });
+    return points;
+  };
+  const PcdPoints a = sorted(exported), b = sorted(again);
+  for (size_t i = 0; i < a.size(); i++) {
+    ASSERT_LT((a[i] - b[i]).norm(), 1e-9) << i;
+  }
+}
+
+TEST_F(MapCompilerTest, ExportPcdRefusesAnExistingFile) {
+  const fs::path pcd = dir_ / "exists.pcd";
+  std::ofstream(pcd) << "keep";
+  EXPECT_EQ(compile(input_, output_, "--export-pcd '" + pcd.string() + "'"), 1);
+  EXPECT_NE(last_log().find("already exists"), std::string::npos) << last_log();
+  EXPECT_FALSE(fs::exists(output_));
+  std::ifstream ifs(pcd);
+  EXPECT_EQ(std::string(std::istreambuf_iterator<char>(ifs), std::istreambuf_iterator<char>()), "keep");
 }

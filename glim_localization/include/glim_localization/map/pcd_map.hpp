@@ -19,6 +19,12 @@ using PcdPoints = std::vector<Eigen::Vector4d, Eigen::aligned_allocator<Eigen::V
 /// On failure, `points` is unchanged.
 bool read_pcd(const std::string& path, PcdPoints& points);
 
+/// Write the points of every submap in the world frame as one PCD file: `DATA binary`, fields x y z as F8 (double),
+/// so UTM-sized coordinates keep their precision. Covariances and other attributes are not written. Points that
+/// several submaps hold (the overlap of GLIM submaps) appear once per submap. Parent directories are created.
+/// Fails without writing if `path` exists or the submaps hold no points. The file appears atomically.
+bool write_pcd(const std::string& path, const LoadedSubmaps& submaps);
+
 /// Decompress an LZF stream (the format of liblzf, which PCL uses for `binary_compressed`) into exactly `out_size` bytes.
 /// Returns false if the stream is malformed (a back reference before the start of the output, a run past the end of
 /// the input), or if it does not decompress to exactly `out_size` bytes. `out` is written up to the point of failure.

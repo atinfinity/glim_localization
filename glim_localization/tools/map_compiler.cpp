@@ -27,6 +27,10 @@ void print_usage() {
             << "  --recompute-covariances  re-estimate the per-point covariances from the k nearest neighbours within each\n"
             << "                           submap, as for .pcd and .ply input (default off: keep the stored ones)\n"
             << "  --k-neighbors <n>        with --recompute-covariances: neighbours, 5 to 1000 (default 10)\n"
+            << "point cloud export (any input):\n"
+            << "  --export-pcd <file>  also write the points of the compiled map in the map frame as one PCD file (binary,\n"
+            << "                       double x y z, no covariances), for viewing and editing. Points in the overlap of\n"
+            << "                       GLIM submaps appear once per submap; --voxel-size merges them when compiling it again\n"
             << "2D occupancy grid for Nav2 (any input; map_server PGM + YAML, heights in the map frame):\n"
             << "  --occupancy-grid <prefix>       write <prefix>.pgm and <prefix>.yaml\n"
             << "  --occupancy-resolution <m>      cell edge, at least 0.01 (default 0.05)\n"
@@ -85,6 +89,7 @@ int main(int argc, char** argv) {
   params.num_threads = std::max(1u, std::thread::hardware_concurrency());
   glim_localization::OccupancyGridParams grid_params;
   std::string grid_prefix;
+  std::string export_pcd;
   bool recompute_covariances = false;
   bool has_k_neighbors = false;
   bool has_tiling_options = false;  // --grid-size or --voxel-size
@@ -109,6 +114,9 @@ int main(int argc, char** argv) {
       ok = parse_double(value, params.voxel_size);
     } else if (option == "--k-neighbors") {
       ok = parse_int(value, params.k_neighbors);
+    } else if (option == "--export-pcd") {
+      export_pcd = value;
+      ok = !export_pcd.empty();
     } else if (option == "--occupancy-grid") {
       grid_prefix = value;
       ok = !grid_prefix.empty();
@@ -127,7 +135,9 @@ int main(int argc, char** argv) {
       std::cerr << "invalid value for " << option << ": " << value << std::endl;
       return 1;
     }
-    if (option.rfind("--occupancy-", 0) == 0) {
+    if (option == "--export-pcd") {
+      // Any input
+    } else if (option.rfind("--occupancy-", 0) == 0) {
       has_grid_options = true;
     } else if (option == "--k-neighbors") {
       has_k_neighbors = true;
@@ -143,6 +153,13 @@ int main(int argc, char** argv) {
     const std::filesystem::path output_path(output);
     if (std::filesystem::exists(output_path, ec) && (!std::filesystem::is_directory(output_path, ec) || !std::filesystem::is_empty(output_path, ec))) {
       std::cerr << "output exists and is not an empty directory: " << output << std::endl;
+      return 1;
+    }
+  }
+  if (!export_pcd.empty()) {
+    std::error_code ec;
+    if (std::filesystem::exists(export_pcd, ec)) {
+      std::cerr << export_pcd << " already exists" << std::endl;
       return 1;
     }
   }
@@ -229,6 +246,14 @@ int main(int argc, char** argv) {
     return 1;
   }
   spdlog::info("wrote {} submaps to {}", submaps.size(), output);
+
+  if (!export_pcd.empty()) {
+    if (!glim_localization::write_pcd(export_pcd, submaps)) {
+      spdlog::error("failed to write the point cloud {}; the compiled map in {} was written and is complete", export_pcd, output);
+      return 1;
+    }
+    spdlog::info("wrote the point cloud {}", export_pcd);
+  }
 
   if (!grid_prefix.empty()) {
     if (!glim_localization::save_occupancy_grid(grid_prefix, grid)) {
