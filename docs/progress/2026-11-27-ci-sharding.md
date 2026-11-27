@@ -33,7 +33,7 @@
   - Attempt 2 failed once in `rest` (amd64): `test_launch_r1.py` received an `/initialpose` from a test that ran in parallel. This is a test isolation problem that the parts do not change (the colcon tests run as before); it is followed up separately.
   - A failing shard (temporary PR #76, a deliberate `FAIL()`): it landed in `core-1/2` on both architectures. The other parts finished, and both required checks failed.
   - A cancelled run (#76 rerun): every part was cancelled, and both required checks failed rather than show as skipped.
+  - A docs-only PR ([#81](https://github.com/atinfinity/glim_localization/pull/81), run 46036961539): the check parts were skipped, and both required checks passed with `SKIPPED: docs-only change`.
 - **Open**:
-  - A docs-only PR: needs the new `ci.yml` on main, so it is checked on the first docs-only PR after the merge.
   - A push to main with a new image hash: one push per architecture, and the next push skips because the tag exists.
   - The next step for [#64](https://github.com/atinfinity/glim_localization/issues/64): a part selector that generalizes `scripts/is_docs_only.sh` and maps the changed paths to the parts to run. Expected from the measurements: a Python-only tier of about 100 s. A ros2-only tier (skip the core shards) saves runner minutes but no wall time, because `rest` already sets the wall time. Anything that touches the Dockerfile, CMake, `third_party/`, the workflows or the msgs keeps running everything.
