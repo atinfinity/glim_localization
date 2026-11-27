@@ -56,23 +56,27 @@ RUN if [ "$(dpkg --print-architecture)" != amd64 ]; then \
     && install -d -m 0755 /etc/apt/keyrings \
     && curl -fsSL --compressed https://koide3.github.io/ppa/ubuntu2404/KEY.gpg -o /tmp/koide3_ppa.asc \
     && export GNUPGHOME="$(mktemp -d)" \
-    && fprs="$(gpg --batch --show-keys --with-colons /tmp/koide3_ppa.asc \
-         | awk -F: '$1 == "pub" { p = 1; next } $1 == "fpr" && p { print $10; p = 0 }')" \
+    && { fprs="$(gpg --batch --show-keys --with-colons /tmp/koide3_ppa.asc \
+         | awk -F: '$1 == "pub" { p = 1; next } $1 == "fpr" && p { print $10; p = 0 }')" || fprs=""; } \
     && if [ "${fprs}" != "${KOIDE3_PPA_KEY_FPR}" ]; then \
          echo "koide3 PPA key mismatch: expected ${KOIDE3_PPA_KEY_FPR}, got: ${fprs:-none}" >&2; exit 1; \
        fi \
-    && gpg --batch --dearmor -o /etc/apt/keyrings/koide3_ppa.gpg /tmp/koide3_ppa.asc \
+    && gpg --batch --quiet --import /tmp/koide3_ppa.asc \
+    && gpg --batch --export "${KOIDE3_PPA_KEY_FPR}" > /etc/apt/keyrings/koide3_ppa.gpg \
+    && test -s /etc/apt/keyrings/koide3_ppa.gpg \
     && rm -rf /tmp/koide3_ppa.asc "${GNUPGHOME}" && unset GNUPGHOME \
     && echo "deb [signed-by=/etc/apt/keyrings/koide3_ppa.gpg] https://koide3.github.io/ppa/ubuntu2404 ./" \
          > /etc/apt/sources.list.d/koide3_ppa.list \
     && curl -fsSL "${CUDA_REPO}/3bf863cc.pub" -o /tmp/cuda_repo.asc \
     && export GNUPGHOME="$(mktemp -d)" \
-    && fprs="$(gpg --batch --show-keys --with-colons /tmp/cuda_repo.asc \
-         | awk -F: '$1 == "pub" { p = 1; next } $1 == "fpr" && p { print $10; p = 0 }')" \
+    && { fprs="$(gpg --batch --show-keys --with-colons /tmp/cuda_repo.asc \
+         | awk -F: '$1 == "pub" { p = 1; next } $1 == "fpr" && p { print $10; p = 0 }')" || fprs=""; } \
     && if [ "${fprs}" != "${CUDA_REPO_KEY_FPR}" ]; then \
          echo "CUDA repository key mismatch: expected ${CUDA_REPO_KEY_FPR}, got: ${fprs:-none}" >&2; exit 1; \
        fi \
-    && gpg --batch --dearmor -o /etc/apt/keyrings/cuda_repo.gpg /tmp/cuda_repo.asc \
+    && gpg --batch --quiet --import /tmp/cuda_repo.asc \
+    && gpg --batch --export "${CUDA_REPO_KEY_FPR}" > /etc/apt/keyrings/cuda_repo.gpg \
+    && test -s /etc/apt/keyrings/cuda_repo.gpg \
     && rm -rf /tmp/cuda_repo.asc "${GNUPGHOME}" && unset GNUPGHOME \
     && echo "deb [signed-by=/etc/apt/keyrings/cuda_repo.gpg] ${CUDA_REPO}/ /" \
          > /etc/apt/sources.list.d/cuda_repo.list \

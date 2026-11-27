@@ -21,12 +21,14 @@ RUN apt-get update \
     && install -d -m 0755 /etc/apt/keyrings \
     && curl -fsSL --compressed https://koide3.github.io/ppa/ubuntu2404/KEY.gpg -o /tmp/koide3_ppa.asc \
     && export GNUPGHOME="$(mktemp -d)" \
-    && fprs="$(gpg --batch --show-keys --with-colons /tmp/koide3_ppa.asc \
-         | awk -F: '$1 == "pub" { p = 1; next } $1 == "fpr" && p { print $10; p = 0 }')" \
+    && { fprs="$(gpg --batch --show-keys --with-colons /tmp/koide3_ppa.asc \
+         | awk -F: '$1 == "pub" { p = 1; next } $1 == "fpr" && p { print $10; p = 0 }')" || fprs=""; } \
     && if [ "${fprs}" != "${KOIDE3_PPA_KEY_FPR}" ]; then \
          echo "koide3 PPA key mismatch: expected ${KOIDE3_PPA_KEY_FPR}, got: ${fprs:-none}" >&2; exit 1; \
        fi \
-    && gpg --batch --dearmor -o /etc/apt/keyrings/koide3_ppa.gpg /tmp/koide3_ppa.asc \
+    && gpg --batch --quiet --import /tmp/koide3_ppa.asc \
+    && gpg --batch --export "${KOIDE3_PPA_KEY_FPR}" > /etc/apt/keyrings/koide3_ppa.gpg \
+    && test -s /etc/apt/keyrings/koide3_ppa.gpg \
     && rm -rf /tmp/koide3_ppa.asc "${GNUPGHOME}" && unset GNUPGHOME \
     && echo "deb [signed-by=/etc/apt/keyrings/koide3_ppa.gpg] https://koide3.github.io/ppa/ubuntu2404 ./" \
          > /etc/apt/sources.list.d/koide3_ppa.list \
