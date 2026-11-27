@@ -43,6 +43,23 @@ services:
       - build:/ws/build
       - ../../out:/ws/out
 
+  # The baseline of the benchmark (scripts/sim_benchmark.sh, docs/benchmark.md): lidar_localization_ros2 (NDT)
+  # at a pinned commit (docker/baseline/Dockerfile). Only scripts/sim_benchmark.sh uses it.
+  baseline:
+    image: ${GLIM_LOC_BASELINE_IMAGE:-glim_localization:baseline-lidarloc}
+    build:
+      context: ../baseline
+      dockerfile: Dockerfile
+      args:
+        JOBS: ${JOBS:-4}
+    working_dir: /ws/src/glim_localization
+    environment:
+      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-42}
+      - ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST
+    volumes:
+      - ../..:/ws/src/glim_localization
+      - ../../out:/ws/out
+
 volumes:
   build:
   sim_build:
