@@ -58,23 +58,55 @@ LocalizationPublisherParams read_publisher_params(const glim::Config & config)
   return params;
 }
 
-void EstimateBridge::connect(const std::shared_ptr<EstimateBridge> & bridge)
+void EstimateBridge::connect(
+  const std::shared_ptr<EstimateBridge> & bridge,
+  const std::string & owner)
 {
+  std::lock_guard<std::mutex> lock(bridge->connection_mutex_);
+  if (bridge->claim_) {
+    throw std::logic_error("the estimate bridge of " + owner + " is already connected");
+  }
+  // First: a second localization is refused before it touches the slots, which the odometry thread
+  // of the first one may be dispatching
+  auto claim = glim_localization::ProcessClaim::acquire(owner);
+
   // The IMU, frame and status callbacks all run on the thread of AsyncOdometryEstimation
   // (insert_imu, insert_frame and the reset applied there); the mutex also covers attach, detach
   // and the pose conversion, which run on other threads.
-  glim::OdometryEstimationCallbacks::on_insert_imu.add(
+  bridge->imu_callback_id_ = glim::OdometryEstimationCallbacks::on_insert_imu.add(
     [bridge](const double stamp, const Eigen::Vector3d &, const Eigen::Vector3d & angular_vel) {
       bridge->add_imu(stamp, angular_vel);
     });
-  glim::OdometryEstimationCallbacks::on_update_new_frame.add(
+  bridge->frame_callback_id_ = glim::OdometryEstimationCallbacks::on_update_new_frame.add(
     [bridge](const glim::EstimationFrame::ConstPtr & frame) {
       if (frame) {
         bridge->add_frame(*frame);
       }
   });
-  glim_localization::LocalizationCallbacks::on_status.add(
+  bridge->status_callback_id_ = glim_localization::LocalizationCallbacks::on_status.add(
     [bridge](const glim_localization::LocalizationStatus & status) {bridge->add_status(status);});
+  bridge->claim_.emplace(std::move(claim));
+}
+
+void EstimateBridge::disconnect()
+{
+  std::lock_guard<std::mutex> lock(connection_mutex_);
+  if (!claim_) {
+    return;
+  }
+  // CallbackSlot::remove sets the entry to an empty function (the ids stay valid), which destroys
+  // the lambdas and their references to this bridge. The caller is still holding one.
+  glim::OdometryEstimationCallbacks::on_insert_imu.remove(imu_callback_id_);
+  glim::OdometryEstimationCallbacks::on_update_new_frame.remove(frame_callback_id_);
+  glim_localization::LocalizationCallbacks::on_status.remove(status_callback_id_);
+  imu_callback_id_ = frame_callback_id_ = status_callback_id_ = -1;
+  claim_.reset();
+}
+
+bool EstimateBridge::connected() const
+{
+  std::lock_guard<std::mutex> lock(connection_mutex_);
+  return claim_.has_value();
 }
 
 void EstimateBridge::attach(

@@ -119,6 +119,11 @@ if(BUILD_TESTING)
     ENV ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST)
   target_link_libraries(test_map_publisher localization_publisher)
 
+  # One localization per process: the process claim and the static slots of EstimateBridge
+  ament_add_ros_isolated_gtest(test_estimate_bridge test/test_estimate_bridge.cpp
+    ENV ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST)
+  target_link_libraries(test_estimate_bridge localization_publisher)
+
   # No ROS spin: the gyro buffer of the R1 extension is plain C++
   ament_add_gtest(test_gyro_buffer test/test_gyro_buffer.cpp)
   target_link_libraries(test_gyro_buffer Eigen3::Eigen)

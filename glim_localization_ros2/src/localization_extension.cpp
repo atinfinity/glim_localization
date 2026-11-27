@@ -51,8 +51,8 @@ public:
   LocalizationExtension()
   : bridge_(std::make_shared<EstimateBridge>()) {}
 
-  // The callbacks stay registered in the static slots after the extension is destroyed (see
-  // EstimateBridge)
+  // The callbacks and the process claim stay in the static slots after the extension is destroyed
+  // (see EstimateBridge)
   ~LocalizationExtension() override
   {
     bridge_->detach();
@@ -78,8 +78,18 @@ public:
       params);
 
     // The slots are not thread-safe: register before the first frame, which cannot come before this
-    // constructor chain is done.
-    EstimateBridge::connect(bridge_);
+    // constructor chain is done. One localization per process (see EstimateBridge): the claim is
+    // held for the rest of the process, the extension never disconnects. If another localization
+    // holds it, the exception leaves GlimROS's constructor, which does not catch it: glim_rosnode
+    // ends through std::terminate, a component container answers LoadNode with the message. Logged
+    // here too, so it is in GLIM's log either way.
+    try {
+      EstimateBridge::connect(bridge_,
+          std::string("R1 extension of ") + node.get_fully_qualified_name());
+    } catch (const std::exception & e) {
+      spdlog::error("[glim_localization] {}", e.what());
+      throw;
+    }
 
     // ~/map: glim_ros2 creates the odometry module (which loads the map) before the extensions, so
     // the map is there
