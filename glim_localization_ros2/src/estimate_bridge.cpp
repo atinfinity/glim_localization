@@ -123,6 +123,11 @@ void EstimateBridge::add_frame(const glim::EstimationFrame & frame)
   // frame when frame_id is IMU, as in GLIM's IMU odometry and in this core
   if (frame.frame_id == glim::FrameID::IMU) {
     estimate.points_imu = frame.frame;
+  } else if (frame.frame && !warned_non_imu_frame_.exchange(true)) {
+    spdlog::warn(
+      "[glim_localization] a frame has its points in frame_id {}, not IMU: "
+      "~/aligned_points is not published for such frames",
+      static_cast<int>(frame.frame_id));
   }
 
   std::lock_guard<std::mutex> lock(mutex_);

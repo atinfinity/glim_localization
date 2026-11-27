@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include <atomic>
 #include <cstddef>
 #include <memory>
 #include <mutex>
@@ -97,6 +98,8 @@ private:
   Eigen::Isometry3d T_base_imu_ = Eigen::Isometry3d::Identity();
   GyroBuffer gyro_;
   size_t frames_without_gyro_ = 0;
+  // A frame with points not in the IMU frame was seen (warned once; no ~/aligned_points then)
+  std::atomic_bool warned_non_imu_frame_{false};
 };
 
 }  // namespace glim_localization_ros2
