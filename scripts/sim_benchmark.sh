@@ -11,7 +11,8 @@
 #               <runs> times each (default 3), one at a time: run 1 of every method, then run 2, ...
 #   5. compare  (dev image) scripts/compare_methods.py -> bench/benchmark.json, benchmark.md, benchmark.svg
 # Every run plays the bag at 1x with its node, the recorder and the player in one container
-# (ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST). bench/host.json records the CPU, nproc and the image IDs.
+# (ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST). bench/host.json records the CPU, nproc, the image IDs,
+# their ROS and Fast DDS package versions and the commit.
 # COMPOSE_PROJECT_NAME selects the compose project (its volumes); the default is glim_localization_sim.
 set -euo pipefail
 
@@ -43,18 +44,30 @@ echo "sim_benchmark: 3/5 build the core and the ROS packages (bench/build.log)"
 run loc bash -c '{ scripts/build_core.sh && scripts/build_colcon.sh; } > "$1/bench/build.log" 2>&1' _ "${out}" \
   || { echo "FAIL: build (out/${name}/bench/build.log)" >&2; exit 1; }
 
-# The machine and the images, written inside a container: out/ belongs to the container user.
+# The machine, the images, their ROS and DDS packages and the commit (with "dirty": uncommitted changes),
+# written inside a container: out/ belongs to the container user.
 image_id() { docker image inspect --format '{{.Id}}' "$1"; }
+packages() {  # <image>: "package version" lines
+  docker run --rm --entrypoint dpkg-query "$1" -W -f '${Package} ${Version}\n' ros-jazzy-rclcpp \
+    ros-jazzy-fastrtps ros-jazzy-rmw-fastrtps-cpp ros-jazzy-rosbag2 2> /dev/null || true
+}
 dev_image="${GLIM_LOC_IMAGE:-glim_localization:dev}"
 baseline_image="${GLIM_LOC_BASELINE_IMAGE:-glim_localization:baseline-lidarloc}"
-python3 - "$(nproc)" "$(LC_ALL=C lscpu | sed -n 's/^Model name: *//p' | head -n 1)" "${dev_image}" "$(image_id "${dev_image}")" \
-  "${baseline_image}" "$(image_id "${baseline_image}")" "$(git -C "${repo_root}" rev-parse HEAD)" "${runs}" <<'PY' \
+dirty=false
+[[ -n "$(git -C "${repo_root}" status --porcelain)" ]] && dirty=true
+python3 - "$(nproc)" "$(LC_ALL=C lscpu | sed -n 's/^Model name: *//p' | head -n 1)" \
+  "${dev_image}" "$(image_id "${dev_image}")" "$(packages "${dev_image}")" \
+  "${baseline_image}" "$(image_id "${baseline_image}")" "$(packages "${baseline_image}")" \
+  "$(git -C "${repo_root}" rev-parse HEAD)" "${dirty}" "${runs}" <<'PY' \
   | run sim bash -c 'cat > "$1/bench/host.json"' _ "${out}"
 import json
 import sys
-nproc, cpu, dev, dev_id, base, base_id, commit, runs = sys.argv[1:]
-print(json.dumps({"cpu": cpu, "nproc": int(nproc), "images": {dev: dev_id, base: base_id}, "commit": commit,
-                  "runs": int(runs)}, indent=2))
+nproc, cpu, dev, dev_id, dev_pkgs, base, base_id, base_pkgs, commit, dirty, runs = sys.argv[1:]
+def packages(lines):
+    return dict(line.split(" ", 1) for line in lines.splitlines() if " " in line)
+print(json.dumps({"cpu": cpu, "nproc": int(nproc), "images": {dev: dev_id, base: base_id},
+                  "packages": {dev: packages(dev_pkgs), base: packages(base_pkgs)},
+                  "commit": commit, "dirty": dirty == "true", "runs": int(runs)}, indent=2))
 PY
 
 echo "sim_benchmark: 4/5 runs (${runs} per method, one at a time)"
