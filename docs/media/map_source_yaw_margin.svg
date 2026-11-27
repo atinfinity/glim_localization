@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="362" viewBox="0 0 760 362" font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif" role="img" aria-label="Initial yaw search margin by map source">
+<rect width="760" height="362" fill="#fcfcfb"/>
+<text x="16" y="24" font-size="15" font-weight="600" fill="#0b0b0b">Initial yaw search margin by map source</text>
+<text x="16" y="42" font-size="12" fill="#52514e">Smallest margin over 3 seeds: inlier ratio of the true yaw minus the best other yaw, 60 deg initial yaw error.</text>
+<line x1="230.0" y1="68" x2="230.0" y2="312" stroke="#e4e3df" stroke-width="1"/>
+<text x="230.0" y="328" font-size="11" fill="#52514e" text-anchor="middle">-0.04</text>
+<line x1="322.5" y1="68" x2="322.5" y2="312" stroke="#e4e3df" stroke-width="1"/>
+<text x="322.5" y="328" font-size="11" fill="#52514e" text-anchor="middle">0</text>
+<line x1="415.0" y1="68" x2="415.0" y2="312" stroke="#e4e3df" stroke-width="1"/>
+<text x="415.0" y="328" font-size="11" fill="#52514e" text-anchor="middle">0.04</text>
+<line x1="507.5" y1="68" x2="507.5" y2="312" stroke="#e4e3df" stroke-width="1"/>
+<text x="507.5" y="328" font-size="11" fill="#52514e" text-anchor="middle">0.08</text>
+<line x1="600.0" y1="68" x2="600.0" y2="312" stroke="#e4e3df" stroke-width="1"/>
+<text x="600.0" y="328" font-size="11" fill="#52514e" text-anchor="middle">0.12</text>
+<text x="415" y="348" font-size="12" fill="#52514e" text-anchor="middle">inlier ratio margin (negative: another yaw scored higher)</text>
+<line x1="438.1" y1="68" x2="438.1" y2="312" stroke="#eb6834" stroke-width="1.5" stroke-dasharray="4 3"/>
+<text x="442.1" y="64" font-size="11" fill="#52514e">min_score_gap 0.05</text>
+<text x="220" y="87" font-size="12" fill="#0b0b0b" text-anchor="end">GLIM dump</text>
+<rect x="322.5" y="77" width="241.1" height="14" rx="3" fill="#2a78d6"><title>GLIM dump: +0.104 (accepted 3/3)</title></rect>
+<text x="569.6" y="88" font-size="11" fill="#52514e">+0.104 (accepted 3/3)</text>
+<text x="220" y="111" font-size="12" fill="#0b0b0b" text-anchor="end">PCD, grid 20, k 10 (defaults)</text>
+<rect x="322.5" y="101" width="151.1" height="14" rx="3" fill="#2a78d6"><title>PCD, grid 20, k 10 (defaults): +0.065 (accepted 3/3)</title></rect>
+<text x="479.6" y="112" font-size="11" fill="#52514e">+0.065 (accepted 3/3)</text>
+<text x="220" y="135" font-size="12" fill="#0b0b0b" text-anchor="end">PCD, grid 10, k 10</text>
+<rect x="322.5" y="125" width="158.2" height="14" rx="3" fill="#2a78d6"><title>PCD, grid 10, k 10: +0.068 (accepted 3/3)</title></rect>
+<text x="486.7" y="136" font-size="11" fill="#52514e">+0.068 (accepted 3/3)</text>
+<text x="220" y="159" font-size="12" fill="#0b0b0b" text-anchor="end">PCD, grid 50, k 10</text>
+<rect x="322.5" y="149" width="146.8" height="14" rx="3" fill="#2a78d6"><title>PCD, grid 50, k 10: +0.063 (accepted 3/3)</title></rect>
+<text x="475.3" y="160" font-size="11" fill="#52514e">+0.063 (accepted 3/3)</text>
+<text x="220" y="183" font-size="12" fill="#0b0b0b" text-anchor="end">PCD, grid 20, k 20</text>
+<rect x="322.5" y="173" width="151.1" height="14" rx="3" fill="#2a78d6"><title>PCD, grid 20, k 20: +0.065 (accepted 3/3)</title></rect>
+<text x="479.6" y="184" font-size="11" fill="#52514e">+0.065 (accepted 3/3)</text>
+<text x="220" y="207" font-size="12" fill="#0b0b0b" text-anchor="end">PCD, grid 50, k 20</text>
+<rect x="269.3" y="197" width="53.2" height="14" rx="3" fill="#2a78d6"><title>PCD, grid 50, k 20: -0.023 (accepted 1/3)</title></rect>
+<text x="328.5" y="208" font-size="11" fill="#52514e">-0.023 (accepted 1/3)</text>
+<text x="220" y="231" font-size="12" fill="#0b0b0b" text-anchor="end">Dump export, defaults</text>
+<rect x="322.5" y="221" width="175.5" height="14" rx="3" fill="#2a78d6"><title>Dump export, defaults: +0.076 (accepted 3/3)</title></rect>
+<text x="504.0" y="232" font-size="11" fill="#52514e">+0.076 (accepted 3/3)</text>
+<text x="220" y="255" font-size="12" fill="#0b0b0b" text-anchor="end">Dump export, k 20</text>
+<rect x="322.5" y="245" width="176.6" height="14" rx="3" fill="#2a78d6"><title>Dump export, k 20: +0.076 (accepted 3/3)</title></rect>
+<text x="505.1" y="256" font-size="11" fill="#52514e">+0.076 (accepted 3/3)</text>
+<text x="220" y="279" font-size="12" fill="#0b0b0b" text-anchor="end">Dump export, voxel 0.05</text>
+<rect x="322.5" y="269" width="154.9" height="14" rx="3" fill="#2a78d6"><title>Dump export, voxel 0.05: +0.067 (accepted 3/3)</title></rect>
+<text x="483.4" y="280" font-size="11" fill="#52514e">+0.067 (accepted 3/3)</text>
+<text x="220" y="303" font-size="12" fill="#0b0b0b" text-anchor="end">Dump export, voxel 0.05, grid 50</text>
+<rect x="322.5" y="293" width="152.8" height="14" rx="3" fill="#2a78d6"><title>Dump export, voxel 0.05, grid 50: +0.066 (accepted 3/3)</title></rect>
+<text x="481.3" y="304" font-size="11" fill="#52514e">+0.066 (accepted 3/3)</text>
+<line x1="322.5" y1="68" x2="322.5" y2="312" stroke="#52514e" stroke-width="1"/>
+</svg>
