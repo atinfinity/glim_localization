@@ -6,6 +6,10 @@ set -euo pipefail
 GLIM_COMMIT=1a197c999e4865f5cab7c9cd25474128413ebbca
 GTSAM_VERSION=4.3.0
 GTSAM_POINTS_VERSION=1.2.2
+# The deb version 4.3.0 is the GTSAM 4.3a1 pre-release (docs/DEPENDENCIES.md), so the version string
+# the headers report differs from the deb version.
+GTSAM_VERSION_STRING=4.3a1
+GTSAM_POINTS_VERSION_STRING=1.2.2
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 build_dir=/ws/build/check_deps
@@ -17,7 +21,7 @@ fail() {
 
 echo "== Pinned versions"
 actual="$(dpkg-query -W -f='${Version}' libgtsam-notbb-dev)"
-[[ "${actual}" == "${GTSAM_VERSION}"* ]] || fail "libgtsam-notbb-dev is ${actual}"
+[[ "${actual}" == "${GTSAM_VERSION}" ]] || fail "libgtsam-notbb-dev is ${actual}, expected ${GTSAM_VERSION}"
 echo "libgtsam-notbb-dev ${actual}"
 # The CUDA image (GLIM_LOC_BUILD_WITH_CUDA=ON, docker/Dockerfile.cuda) installs the PPA's CUDA 13.1 build
 # of gtsam_points instead of libgtsam-points-dev; both install the same files, so exactly one may be present.
@@ -29,11 +33,20 @@ if [[ "${with_cuda}" == ON ]]; then
   other_package=libgtsam-points-dev
 fi
 actual="$(dpkg-query -W -f='${Version}' "${gtsam_points_package}")"
-[[ "${actual}" == "${GTSAM_POINTS_VERSION}"* ]] || fail "${gtsam_points_package} is ${actual}"
+[[ "${actual}" == "${GTSAM_POINTS_VERSION}" ]] || fail "${gtsam_points_package} is ${actual}, expected ${GTSAM_POINTS_VERSION}"
 echo "${gtsam_points_package} ${actual}"
 if dpkg-query -W -f='${db:Status-Abbrev}' "${other_package}" 2>/dev/null | grep -q '^ii'; then
   fail "${other_package} is installed next to ${gtsam_points_package}"
 fi
+# The version strings of the installed headers, as exact lines.
+check_define() {
+  local header="$1" line="$2"
+  grep -Fxq "${line}" "${header}" \
+    || fail "${header} has no line '${line}' (found: $(grep -F "$(cut -d ' ' -f 2 <<<"${line}")" "${header}" || echo none))"
+  echo "${header}: ${line}"
+}
+check_define /usr/local/include/gtsam/config.h "#define GTSAM_VERSION_STRING \"${GTSAM_VERSION_STRING}\""
+check_define /usr/local/include/gtsam_points/config.hpp "#define GTSAM_POINTS_VERSION_STRING \"${GTSAM_POINTS_VERSION_STRING}\""
 if [[ "${with_cuda}" == ON ]]; then
   CUDA_VERSION=13.1
   grep -Eq '^#define GTSAM_POINTS_USE_CUDA$|^#define GTSAM_POINTS_USE_CUDA 1$' /usr/local/include/gtsam_points/config.hpp \
