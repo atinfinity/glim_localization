@@ -66,6 +66,24 @@ export ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST
 # ROS_DOMAIN_ID that is already set, so it must not be set here.
 unset ROS_DOMAIN_ID
 jobs="${CTEST_JOBS:-$(nproc)}"
+# Every test of glim_localization_ros2 that is not a linter must run through run_test_isolated.py, except the gtests
+# that use no ROS graph (listed here). A new ROS test registered without the runner would share domain 0 with the
+# others under ctest -j.
+no_ros_tests=(test_gyro_buffer test_init_pose_delay test_wheel_odom_input)
+ctest --test-dir "${pkg_build}" --show-only=json-v1 | python3 -c '
+import json, sys
+no_ros = set(sys.argv[1:])
+bad = []
+for test in json.load(sys.stdin)["tests"]:
+    props = {p["name"]: p["value"] for p in test.get("properties", [])}
+    if "linter" in props.get("LABELS", []) or test["name"] in no_ros:
+        continue
+    if not any(arg.endswith("/run_test_isolated.py") for arg in test.get("command", [])):
+        bad.append(test["name"])
+if bad:
+    sys.exit("FAIL: not run through run_test_isolated.py (no ROS_DOMAIN_ID of their own): " + " ".join(bad))
+' "${no_ros_tests[@]}"
+echo "ok: every ROS test of glim_localization_ros2 runs through run_test_isolated.py"
 # ament_cppcheck skips cppcheck 2.x (Jazzy: 2.13) for its run time unless this is set; it takes seconds here.
 export AMENT_CPPCHECK_ALLOW_SLOW_VERSIONS=1
 
