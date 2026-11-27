@@ -31,6 +31,8 @@
 
 - **Results: totals** (quiet host; median, with p95 in parentheses):
 
+  ![Per-frame time, CPU module vs GPU module](../media/gpu_profile_cpu_vs_gpu.svg)
+
   | | CPU module | GPU module |
   | --- | --- | --- |
   | Preprocessing per frame (GLIM, outside the odometry) | 1.96 (2.08) ms | 1.95 (2.10) ms |
@@ -42,6 +44,8 @@
   The yaw search accepted -3.0 deg in every run. With a 90 deg initial error it accepted -90.0 deg in the same time: 1.89 to 1.95 s on the CPU and 1.98 to 2.05 s on the GPU (first batch).
 
 - **Results: where the GPU-mode frame goes** (about 5.1 ms per frame: 1.95 ms preprocessing plus 3.17 ms odometry):
+
+  ![Where a GPU-mode frame goes](../media/gpu_profile_frame_breakdown.svg)
 
   | Part | Share of odometry samples | Approx. ms per frame | Runs on |
   | --- | --- | --- | --- |
@@ -76,6 +80,9 @@
   - **CPU module, for comparison**: CPU VGICP linearization is 75.5 % of the odometry samples. Of the odometry time, the smoother update is 48.0 % and `evaluate_map_quality` 35.9 %, since it linearizes the CPU factors again. `gtsam_points::overlap` is 9.6 %.
 
 - **Results: the yaw search** (nsys, GPU module):
+
+  ![Yaw search time against num_threads](../media/gpu_profile_yaw_search_threads.svg)
+
   - The shares below are of the 384 samples whose stack contains `score_candidate`, on all threads (the main thread and its OpenMP workers). Inclusive shares of nested functions overlap; shares of disjoint functions add up.
     - 95.8 % are inside `LevenbergMarquardtOptimizerExt::optimize`, and 97.9 % have a CPU `IntegratedVGICPFactor` frame. The second can be larger because some broken stacks lose the optimizer frame.
     - That 97.9 % splits into two disjoint parts (no sample has both): `evaluate` 74.5 % and `update_correspondences` 23.4 % (inclusive).
@@ -109,6 +116,7 @@
   5. **Tile upload**: 75 us per 0.57 MB tile, partly prefetched, and not visible per frame. **Not a kernel target**, as the issue already says. Real tiles of tens of MB would take a few ms per upload at this bandwidth. That belongs to pinned memory and streaming in [#23](https://github.com/atinfinity/glim_localization/issues/23).
   6. **One-time startup** (147 ms of stream creation, and a 22 ms first frame): **not a kernel target**.
 
+- **Charts**: the three SVGs in `docs/media/gpu_profile_*.svg` plot the medians of the tables above (the yaw search at the middle of each measured range). They are plain SVG, written by hand from the tables, not by a tool in the repo.
 - **Open**:
   - **Real data**: not measured. Real data has more points per frame and larger tiles, and both move items 2 and 5.
   - **Global search**: [#3](https://github.com/atinfinity/glim_localization/issues/3) is not implemented, so a batched search could not be measured.
