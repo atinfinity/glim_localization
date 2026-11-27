@@ -313,10 +313,16 @@ glim::EstimationFrame::ConstPtr OdometryEstimationLocalization::insert_frame(
     trim_imu_stamps(frame->stamp - kImuHistoryWhileWaiting);
     return nullptr;
   }
-  if (imu_lost_ || handle_imu_gap(frame)) {
+  const GapVerdict verdict = imu_lost_ ? GapVerdict::DROP : handle_imu_gap(frame);
+  if (verdict == GapVerdict::DROP) {
     trim_imu_queue(frame->stamp);
     // While lost or in a gap episode the window restarts at the next frame, so older stamps are not needed
     trim_imu_stamps(frame->stamp);
+    return nullptr;
+  }
+  if (verdict == GapVerdict::DROP_KEEP) {
+    // The last pose stays the reference: the queue and the history keep everything since it, so the next frame is
+    // judged (and integrated) over the whole interval, including the data before this frame
     return nullptr;
   }
   if (init_search_pending_ && frames.empty() && frame->size() < localization_params().init_yaw_search.min_points) {
@@ -394,10 +400,10 @@ void OdometryEstimationLocalization::trim_imu_stamps(const double keep_from) {
   }
 }
 
-bool OdometryEstimationLocalization::handle_imu_gap(const glim::PreprocessedFrame::Ptr& frame) {
+OdometryEstimationLocalization::GapVerdict OdometryEstimationLocalization::handle_imu_gap(const glim::PreprocessedFrame::Ptr& frame) {
   const auto& p = localization_params();
   if (p.on_imu_gap != "reset" || frames.empty()) {
-    return false;
+    return GapVerdict::PROCEED;
   }
 
   if (frame->stamp <= frames.back()->stamp) {
@@ -406,7 +412,7 @@ bool OdometryEstimationLocalization::handle_imu_gap(const glim::PreprocessedFram
     imu_lost_ = true;
     gap_pending_ = false;
     publish_lost();
-    return true;
+    return GapVerdict::DROP;
   }
 
   // The whole interval since the last pose counts, also when no LiDAR frame fell into it (a stall drops both topics).
@@ -420,7 +426,31 @@ bool OdometryEstimationLocalization::handle_imu_gap(const glim::PreprocessedFram
   const auto around_frame = gap_pending_ ? check(std::nullopt) : ImuCoverageResult();
 
   if (since_last_pose.kind == ImuCoverage::INCOMPLETE) {
-    return gap_pending_;  // Cannot tell yet: keep dropping during an episode, otherwise proceed as before
+    if (gap_pending_) {
+      return GapVerdict::DROP;  // Cannot tell yet: keep dropping during the episode
+    }
+    // No sample reaches the scan end: the IMU data ended (the end_of_sequence flush, a stalled IMU, or last_imu_time
+    // advanced by a sample the gate dropped). Upstream holds the last sample up to the frame, so measure that on its
+    // real queue. A short tail (a normal shutdown) proceeds; a longer one is not a pose, but not yet a gap either:
+    // the data may still come, so the frame is dropped and the last pose stays the reference.
+    const auto& queue = imu_integration->imu_data_in_queue();
+    const double hold = longest_imu_hold(queue.size(), [&](size_t k) { return queue[k][0]; }, frames.back()->stamp, frame->stamp);
+    if (hold <= p.max_imu_gap) {
+      return GapVerdict::PROCEED;
+    }
+    if (hold > p.imu_gap_reset_max) {
+      spdlog::error(
+        "the IMU data ends before the scan, and upstream would hold a sample for {:.3f} s since the last pose at {:.3f} s (limit {:.3f} s): the localization is lost until it is initialized again",
+        hold,
+        frames.back()->stamp,
+        p.imu_gap_reset_max);
+      imu_lost_ = true;
+      publish_lost();
+      return GapVerdict::DROP;
+    }
+    incomplete_drops_++;
+    spdlog::warn("dropping the frame at {:.3f} s: the IMU data ends before the scan, and upstream would hold a sample for {:.3f} s", frame->stamp, hold);
+    return GapVerdict::DROP_KEEP;
   }
   const auto lose = [&]() {
     spdlog::error("IMU gap of {:.3f} s exceeds {:.3f} s: the localization is lost until it is initialized again", gap_longest_, p.imu_gap_reset_max);
@@ -437,7 +467,7 @@ bool OdometryEstimationLocalization::handle_imu_gap(const glim::PreprocessedFram
     } else {
       spdlog::warn("dropping the frame at {:.3f} s: IMU gap of {:.3f} s", frame->stamp, gap_longest_);
     }
-    return true;
+    return GapVerdict::DROP;
   }
   if (!gap_pending_) {
     // The history says the interval since the last pose is clean. Check that upstream's real queue agrees, because
@@ -454,14 +484,14 @@ bool OdometryEstimationLocalization::handle_imu_gap(const glim::PreprocessedFram
       imu_lost_ = true;
       gap_pending_ = false;
       publish_lost();
-      return true;
+      return GapVerdict::DROP;
     }
-    return false;
+    return GapVerdict::PROCEED;
   }
   gap_longest_ = std::max(gap_longest_, gap_since_last_pose);
   if (gap_longest_ > p.imu_gap_reset_max) {
     lose();  // Clean around this frame, but the outage before it was too long
-    return true;
+    return GapVerdict::DROP;
   }
 
   // The first clean frame after a gap: restart from the last pose moved by the last velocity.
@@ -475,11 +505,11 @@ bool OdometryEstimationLocalization::handle_imu_gap(const glim::PreprocessedFram
   if (!queue_reset(T, v, frame->stamp, ResetReason::IMU_GAP)) {
     imu_lost_ = true;  // A non-finite state or one above kMaxResetSpeed cannot be recovered
     publish_lost();
-    return true;
+    return GapVerdict::DROP;
   }
   // Applies the self-reset, or the external reset that arrived first and won (see queue_reset)
   apply_pending_reset(frame->stamp);
-  return frame->stamp < min_stamp_;
+  return frame->stamp < min_stamp_ ? GapVerdict::DROP : GapVerdict::PROCEED;
 }
 
 void OdometryEstimationLocalization::set_candidate_generator(std::unique_ptr<PoseCandidateGenerator> generator) {
