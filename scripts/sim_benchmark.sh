@@ -47,7 +47,7 @@ run loc bash -c '{ scripts/build_core.sh && scripts/build_colcon.sh; } > "$1/ben
 image_id() { docker image inspect --format '{{.Id}}' "$1"; }
 dev_image="${GLIM_LOC_IMAGE:-glim_localization:dev}"
 baseline_image="${GLIM_LOC_BASELINE_IMAGE:-glim_localization:baseline-lidarloc}"
-python3 - "$(nproc)" "$(lscpu | sed -n 's/^Model name: *//p' | head -n 1)" "${dev_image}" "$(image_id "${dev_image}")" \
+python3 - "$(nproc)" "$(LC_ALL=C lscpu | sed -n 's/^Model name: *//p' | head -n 1)" "${dev_image}" "$(image_id "${dev_image}")" \
   "${baseline_image}" "$(image_id "${baseline_image}")" "$(git -C "${repo_root}" rev-parse HEAD)" "${runs}" <<'PY' \
   | run sim bash -c 'cat > "$1/bench/host.json"' _ "${out}"
 import json
