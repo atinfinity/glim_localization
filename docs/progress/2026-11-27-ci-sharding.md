@@ -34,3 +34,4 @@
   - A cancelled run: the required checks report failure, not skipped.
   - A push to main with a new image hash: one push per architecture, and the next push skips because the tag exists.
   - The next step for [#64](https://github.com/atinfinity/glim_localization/issues/64): a part selector that generalizes `scripts/is_docs_only.sh` and maps the changed paths to the parts to run. Expected from the measurements: a Python-only tier of about 100 s. A ros2-only tier (skip the core shards) saves runner minutes but no wall time, because `rest` already sets the wall time. Anything that touches the Dockerfile, CMake, `third_party/`, the workflows or the msgs keeps running everything.
+
