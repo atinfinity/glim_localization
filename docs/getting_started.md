@@ -98,7 +98,7 @@ PCD input reads `DATA ascii`, `binary` and `binary_compressed` with x, y, z as F
 Localization loads a GLIM dump directly or a compiled map from `map_compiler`; a point cloud always goes through `map_compiler` first. Whichever you run, keep the input as the master copy, and compile again when you change options:
 
 - **Map built with GLIM:** keep the GLIM dump. It has the per-submap structure, with each submap's points, covariances and pose, and also the pose graph (`graph.bin`, `values.bin`) and the trajectories, which a compiled map leaves out. Compiling a dump copies the points, poses and covariances as they are, so it can be compiled again at any time without loss.
-- **Any other map** (another SLAM, a survey, [sdf2map](sim_eval.md)): keep the PCD or PLY file. Those tools can read and edit it, and a compiled map cannot be exported back to a point cloud.
+- **Any other map** (another SLAM, a survey, [sdf2map](sim_eval.md)): keep the PCD or PLY file. Those tools can read and edit it. `map_compiler --export-pcd` writes a compiled map back to a PCD file, without covariances ([Map preparation](maps.md#exporting-a-point-cloud)).
 
 What the point cloud path changes, compared with a GLIM dump:
 
@@ -109,7 +109,7 @@ What the point cloud path changes, compared with a GLIM dump:
 | Size limit | - | The whole cloud in memory, at most 2^31 - 1 points after `--voxel-size` |
 
 - **Large coordinates:** `map_compiler` reads x, y and z as doubles and stores each tile relative to its centroid, so F8 (`double`) input at UTM-sized coordinates keeps its precision. F4 (`float`) input has already lost it in the file: a float has a step of about 3 cm at 500 km and 0.25 m at 3,000 km. Export such maps with double xyz, or shift them to a local origin first.
-- **Accuracy:** the difference between the two paths on the same scene has not been measured yet ([#61](https://github.com/atinfinity/glim_localization/issues/61)).
+- **Accuracy:** measured only on a synthetic corridor, with 3 noise draws of one geometry ([measurement](progress/2026-11-28-map-source-measurement.md), [#61](https://github.com/atinfinity/glim_localization/issues/61)). The GLIM dump tracked 9 of 9 runs at 5 mm ATE rmse. The same scene as a PCD at the defaults tracked at about 14 mm and failed 1 of 9 runs, from a 1.1 m, 8 deg initial error. 50 m tiles brought the ATE to about 5 mm, but still passed only 8 of 9 at k 10, and did not help the initial yaw search: its margin was 0.063 to 0.076 on most PCD maps against 0.104 on the dump, and with 50 m tiles the search failed more often: 2 of 3 searches on the PCD at k 20 (margin -0.023) and 1 of 3 on the export at k 10 (margin -0.010) were not accepted. The cause is not isolated, since the dump also has more points and overlapping full-range submaps. Keep the dump when the map was built with GLIM. A PCD exported from a dump repeats the overlap points of its submaps; see [Exporting a point cloud](maps.md#exporting-a-point-cloud).
 - `map_index.json` of a compiled map records its `source` (`glim_dump`, `pcd` or `ply`), so you can tell which kind of master it came from. Compiling a compiled map again keeps the recorded value.
 
 ## 6. Replay a real bag and evaluate it

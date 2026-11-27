@@ -15,7 +15,7 @@ LiDAR-IMU localization on a prebuilt 3D map, built on top of [GLIM](https://gith
 ## Features
 
 - Replaces GLIM's odometry module with a localization module that adds scan-to-map VGICP factors (unary factors against fixed map submaps) to GLIM's tightly coupled LiDAR-IMU fixed-lag smoother.
-- Loads maps directly from GLIM dump directories, or from maps compiled by `map_compiler` (from a GLIM dump, a PCD file or a PLY file). `map_compiler` can also export a 2D occupancy grid (map_server PGM + YAML) for Nav2.
+- Loads maps directly from GLIM dump directories, or from maps compiled by `map_compiler` (from a GLIM dump, a PCD file or a PLY file). `map_compiler` can also export a 2D occupancy grid (map_server PGM + YAML) for Nav2, and the map as a PCD file.
 - ROS 2 integration via a GLIM extension module (R1, for evaluation) and a dedicated lifecycle node (R2, for deployment).
 - GLIM itself is not modified; this repository links against it.
 - Quality monitoring with the states INITIALIZING, TRACKING, DEGRADED and LOST, published on `~/status` and `/diagnostics`.
