@@ -27,10 +27,13 @@
 - **Review** (agent): no high or medium findings. Fixed: `ci.sh` now unsets `GLIM_LOC_CTEST_SHARD` and `GLIM_LOC_CORE_TESTS`, so an exported value cannot make `all` skip tests; the stale `ci_local.sh` comment. Left as they are:
   - the publish jobs now start on every main push (with `packages: write`) and skip the push after `docker manifest inspect` finds the tag;
   - when the image is missing, all three parts of an architecture build it (six builds instead of two). This happens only on Dockerfile changes.
-- **Open** (pending, to check on GitHub after the push):
-  - A normal PR: six check parts plus `build-and-test` and `build-and-test-arm64` green, and wall times close to the target.
-  - A docs-only PR: the check jobs are skipped, and the two required checks pass with `SKIPPED: docs-only change`.
-  - A failing shard: the other parts finish (`fail-fast: false`), and the required check of that architecture fails.
-  - A cancelled run: the required checks report failure, not skipped.
+- **GitHub** (PR #75, run 46022296142):
+  - Attempt 1 built the image in every part, because the image of the #73 merge was not yet published: the parts took 8 to 20 min, of which "Run checks" took 132 to 177 s on amd64.
+  - Attempt 3, with the published image: the whole run took 4 min 45 s (amd64 parts 3.4 to 4.5 min, arm64 2.2 to 3.4 min), against about 9 min before. That is slower than the 240 s estimate, mostly from the image pull and the job overhead per part.
+  - Attempt 2 failed once in `rest` (amd64): `test_launch_r1.py` received an `/initialpose` from a test that ran in parallel. This is a test isolation problem that the parts do not change (the colcon tests run as before); it is followed up separately.
+  - A failing shard (temporary PR #76, a deliberate `FAIL()`): it landed in `core-1/2` on both architectures. The other parts finished, and both required checks failed.
+  - A cancelled run (#76 rerun): every part was cancelled, and both required checks failed rather than show as skipped.
+- **Open**:
+  - A docs-only PR: needs the new `ci.yml` on main, so it is checked on the first docs-only PR after the merge.
   - A push to main with a new image hash: one push per architecture, and the next push skips because the tag exists.
   - The next step for [#64](https://github.com/atinfinity/glim_localization/issues/64): a part selector that generalizes `scripts/is_docs_only.sh` and maps the changed paths to the parts to run. Expected from the measurements: a Python-only tier of about 100 s. A ros2-only tier (skip the core shards) saves runner minutes but no wall time, because `rest` already sets the wall time. Anything that touches the Dockerfile, CMake, `third_party/`, the workflows or the msgs keeps running everything.
