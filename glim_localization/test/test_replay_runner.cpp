@@ -2076,6 +2076,8 @@ TEST_F(ReplayRunnerTest, AShutdownFlushThroughTheAsyncWrapperDoesNotGoLost) {
   async.get_results(results, marginalized);
 
   ASSERT_EQ(results.size(), num_frames);
+  // Needs a scan shorter than about 0.095 s (the synthetic scan ends at its stamp): a longer scan of the frame before
+  // would end after imu_end too, so the wrapper would hold it back and the flush would release three frames.
   EXPECT_NE(results[num_frames - 2], nullptr);
   EXPECT_EQ(results[num_frames - 1], nullptr);
   EXPECT_NE(odometry->status().state, LocalizationState::LOST);
@@ -2084,6 +2086,32 @@ TEST_F(ReplayRunnerTest, AShutdownFlushThroughTheAsyncWrapperDoesNotGoLost) {
   EXPECT_LE(odometry->max_uncovered_hold, 0.05 + 1e-6);
   EXPECT_LE(odometry->max_hold, 0.05 + 1e-6);
   EXPECT_EQ(odometry->hold_check_trips(), 0u);
+}
+
+TEST_F(ReplayRunnerTest, AnUncoveredFrameWithFewerThanTwoSamplesIsDropped) {
+  // The frame at 4.1 s is moved to 4.03 s, and no sample arrives in (4.00, 4.115): upstream would hold 4.00 s for only
+  // 0.03 s (within max_imu_gap), but with no sample since the last pose. The 2-sample rule drops it as INCOMPLETE; the
+  // frame at 4.2 s then sees the hole from 4.00 s and the gap policy takes over.
+  const auto run = run_probe(*dataset_, [](ProbeOdometry& o) {
+    o.imu_hook = swallow({{4.005, 4.115}});
+    o.frame_hook = [](const glim::PreprocessedFrame::Ptr& frame) {
+      if (std::abs(frame->stamp - 4.1) < 1e-6) {
+        frame->stamp = 4.03;
+        frame->scan_end_time = 4.03;
+      }
+    };
+  });
+  for (const auto& record : run.records) {
+    EXPECT_NE(record.state, LocalizationState::LOST) << record.stamp_ns;
+  }
+  const auto* record = record_at(run.records, 4.1);
+  ASSERT_NE(record, nullptr);
+  EXPECT_NE(record->result, ReplayResult::ESTIMATED);
+  EXPECT_EQ(run.odometry->incomplete_drops(), 1u);
+  EXPECT_EQ(run.odometry->uncovered_integrations, 0);
+  EXPECT_EQ(run.odometry->hold_check_trips(), 0u);
+  EXPECT_EQ(run.records.back().result, ReplayResult::ESTIMATED);
+  EXPECT_TRUE(queue_and_history_agree(*run.odometry));
 }
 
 TEST_F(ReplayRunnerTest, AFrameWithANonFiniteStampOrScanEndIsDroppedWithoutLost) {

@@ -445,13 +445,19 @@ OdometryEstimationLocalization::GapVerdict OdometryEstimationLocalization::handl
     if (gap_pending_) {
       return GapVerdict::DROP;  // Cannot tell yet: keep dropping during the episode
     }
-    // No sample reaches the scan end: the IMU data ended (the end_of_sequence flush, a stalled IMU, or last_imu_time
-    // advanced by a sample the gate dropped). Upstream holds the last sample up to the frame, so measure that on its
-    // real queue. A short tail (a normal shutdown) proceeds; a longer one is not a pose, but not yet a gap either:
-    // the data may still come, so the frame is dropped and the last pose stays the reference.
+    // No sample reaches the scan end. Online the async wrapper releases such a frame only in the end_of_sequence
+    // flush, or when last_imu_time is NaN (a non-finite IMU stamp, which the gate drops). Upstream holds the last
+    // sample up to the frame, so measure that on its real queue. A short tail (a normal shutdown) proceeds; a longer
+    // one is not a pose, but not yet a gap either: the data may still come, so the frame is dropped and the last pose
+    // stays the reference.
     const auto& queue = imu_integration->imu_data_in_queue();
     const double hold = longest_imu_hold(queue.size(), [&](size_t k) { return queue[k][0]; }, frames.back()->stamp, frame->stamp);
-    if (hold <= p.max_imu_gap) {
+    // The 2-sample rule of the covered path, over (last pose, frame]: the hold limit alone allows a single sample (or
+    // none, for a frame interval of at most max_imu_gap), and upstream then predicts without an IMU factor
+    const auto in_interval = std::count_if(queue.begin(), queue.end(), [&](const auto& imu) {
+      return imu[0] > frames.back()->stamp && imu[0] <= frame->stamp;
+    });
+    if (hold <= p.max_imu_gap && in_interval >= 2) {
       return GapVerdict::PROCEED;
     }
     if (hold > p.imu_gap_reset_max) {
@@ -465,7 +471,11 @@ OdometryEstimationLocalization::GapVerdict OdometryEstimationLocalization::handl
       return GapVerdict::DROP;
     }
     incomplete_drops_++;
-    spdlog::warn("dropping the frame at {:.3f} s: the IMU data ends before the scan, and upstream would hold a sample for {:.3f} s", frame->stamp, hold);
+    spdlog::warn(
+      "dropping the frame at {:.3f} s: the IMU data ends before the scan, and upstream would hold a sample for {:.3f} s with {} samples since the last pose",
+      frame->stamp,
+      hold,
+      in_interval);
     return GapVerdict::DROP_KEEP;
   }
   const auto lose = [&]() {
