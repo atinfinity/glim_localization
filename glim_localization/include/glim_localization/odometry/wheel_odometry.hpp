@@ -50,6 +50,11 @@ struct WheelOdometryParams {
   /// the two cases cannot be told apart, so a slip longer than this many frames lets one slipping factor through: keep
   /// it above the longest expected slip (the default is 2 s at 10 Hz).
   int gate_readmit_frames = 20;
+  /// IMU gap self-reset: move the last pose to the reset frame with the wheel motion and take the velocity from the
+  /// wheel twist, instead of the constant velocity and held orientation. Falls back to those (with a warning) when the
+  /// samples do not cover the interval within max_gap, the result is not a valid reset, or the wheels disagree with
+  /// the last estimate (see the slip check in OdometryEstimationLocalization). No effect unless enabled.
+  bool reset_extrapolation = false;
 
   /// @throw std::invalid_argument if a value is invalid
   void validate() const;
@@ -61,6 +66,15 @@ struct WheelOdometrySample {
   double stamp = 0.0;
   Eigen::Vector3d linear = Eigen::Vector3d::Zero();   ///< Linear velocity of the base in the base frame [m/s]
   Eigen::Vector3d angular = Eigen::Vector3d::Zero();  ///< Angular velocity of the base in the base frame [rad/s]
+};
+
+/// The wheel motion over [t0, t1] and the twists at both ends, read under one lock (WheelOdometryBuffer::motion)
+struct WheelOdometryMotion {
+  EIGEN_MAKE_ALIGNED_OPERATOR_NEW
+
+  Eigen::Isometry3d T_base = Eigen::Isometry3d::Identity();  ///< T_base(t0)_base(t1), as integrate() gives it
+  WheelOdometrySample twist0;                                  ///< Twist at t0, as twist_at() gives it
+  WheelOdometrySample twist1;                                  ///< Twist at t1
 };
 
 /// Time-ordered buffer of wheel twists. Thread-safe: samples may come from another thread than the frames.
@@ -82,6 +96,14 @@ public:
   /// samples and held constant past the ends. Empty if the samples do not cover [t0, t1] within max_gap.
   std::optional<Eigen::Isometry3d> integrate(double t0, double t1) const;
 
+  /// Twist at t, linearly interpolated between samples (as integrate() uses it; stamp is t). Empty if t is more than
+  /// max_gap outside the samples or inside a hole longer than max_gap.
+  std::optional<WheelOdometrySample> twist_at(double t) const;
+
+  /// integrate(t0, t1), twist_at(t0) and twist_at(t1) from the same samples (one lock, so a sample inserted or a
+  /// clock restart from another thread cannot fall between them). Empty if any of them is.
+  std::optional<WheelOdometryMotion> motion(double t0, double t1) const;
+
   /// Drop samples before the last one at or before keep_from
   void trim(double keep_from);
 
@@ -91,13 +113,19 @@ public:
   size_t size() const;
 
 private:
-  WheelOdometrySample interpolate(double t) const;  ///< Caller holds mutex_
+  WheelOdometrySample interpolate(double t) const;                          ///< Caller holds mutex_
+  std::optional<Eigen::Isometry3d> integrate_locked(double t0, double t1) const;  ///< Caller holds mutex_
+  std::optional<WheelOdometrySample> twist_at_locked(double t) const;         ///< Caller holds mutex_
 
   WheelOdometryParams params_;
   mutable std::mutex mutex_;
   std::deque<WheelOdometrySample, Eigen::aligned_allocator<WheelOdometrySample>> samples_;
   int rejected_ = 0;  ///< Consecutive samples not newer than the last one
 };
+
+/// Velocity of the IMU origin in the IMU frame for a twist of the base: R_imu_base * (v + w x p), with p the IMU origin
+/// in the base frame (the lever arm of params.T_imu_base)
+Eigen::Vector3d wheel_velocity_in_imu(const WheelOdometryParams& params, const WheelOdometrySample& twist);
 
 /// Why no wheel factor was added for a frame
 enum class WheelFactorResult { ADDED, NO_DATA, GATED };

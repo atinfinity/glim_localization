@@ -29,6 +29,18 @@ enum class ResetReason : uint8_t {
   IMU_GAP = 2    ///< The odometry reset itself after an IMU gap
 };
 
+/// How the last IMU gap self-reset extrapolated the pose (wheel_odom_reset_extrapolation). Every value but WHEEL used
+/// the constant velocity with the orientation held; the others than NONE name why the wheels were not used.
+enum class ResetExtrapolation : uint8_t {
+  NONE = 0,          ///< Not an IMU gap reset, or the wheels were not tried (key off or wheel odometry disabled)
+  WHEEL = 1,         ///< The wheel motion and twist
+  NO_COVERAGE = 2,   ///< The wheel samples do not cover the gap or its ends within wheel_odom_max_gap
+  INVALID = 3,       ///< The wheel state is not a valid reset (non-finite, or faster than kMaxResetSpeed)
+  SLIP_START = 4,    ///< The wheel velocity at the last estimate disagrees with the estimated one
+  SLIP_ANGULAR = 5,  ///< The wheel angular velocity at the last estimate disagrees with the bias-corrected gyro
+  SLIP_GAP = 6       ///< The wheel displacement over the gap disagrees with the velocities at both ends
+};
+
 const char* to_string(ResetReason reason);
 
 /// Outcome of the yaw search on the first frame after a given pose. The values are part of the ROS message
@@ -240,6 +252,12 @@ public:
   size_t incomplete_drops() const { return incomplete_drops_; }
   /// Frames dropped without a pose because their stamp or scan end time is not finite (for tests and logs, not thread-safe)
   size_t nonfinite_frame_drops() const { return nonfinite_frame_drops_; }
+  /// true if the last applied reset was an IMU gap self-reset extrapolated with wheel odometry
+  /// (wheel_odom_reset_extrapolation), false after any other reset and before the first (for tests and logs, not thread-safe)
+  bool last_reset_used_wheel() const { return last_reset_extrapolation_ == ResetExtrapolation::WHEEL; }
+  /// How the last applied reset was extrapolated, NONE before the first and after any reset that is not an IMU gap
+  /// (for tests and logs, not thread-safe)
+  ResetExtrapolation last_reset_extrapolation() const { return last_reset_extrapolation_; }
 
 protected:
   /// @throw std::invalid_argument if the map is null or a shared parameter is invalid
@@ -284,9 +302,20 @@ private:
     ResetReason reason;
     bool from_current = false;  ///< relocalize(): the pose and velocity are taken from the newest frame when applied
     double max_age = 0.0;       ///< relocalize(): the newest estimate may be at most this much older than the frame
+    ResetExtrapolation extrapolation = ResetExtrapolation::NONE;  ///< IMU gap: how the pose and velocity were extrapolated
   };
 
-  bool queue_reset(const Eigen::Isometry3d& T_world_imu, const Eigen::Vector3d& v_world_imu, double min_stamp, ResetReason reason);
+  bool queue_reset(
+    const Eigen::Isometry3d& T_world_imu,
+    const Eigen::Vector3d& v_world_imu,
+    double min_stamp,
+    ResetReason reason,
+    ResetExtrapolation extrapolation = ResetExtrapolation::NONE);
+  /// The IMU gap self-reset state at stamp from the wheel motion since the last estimate (wheel_odom_reset_extrapolation):
+  /// T = last.T_world_imu * T_imu_base * T_base * T_imu_base^-1, v = R * wheel_velocity_in_imu(twist at stamp).
+  /// @return WHEEL, or why the wheels cannot be used (with a warning; T and v are then unchanged): the samples do not
+  ///         cover [last.stamp, stamp] within max_gap, the result is not a valid reset, or a slip check fails
+  ResetExtrapolation extrapolate_with_wheel(const glim::EstimationFrame& last, double stamp, Eigen::Isometry3d& T_world_imu, Eigen::Vector3d& v_world_imu) const;
   /// @param frame_stamp  the frame the reset applies at
   void apply_pending_reset(double frame_stamp);
   /// What insert_frame does with a frame after the IMU gap policy
@@ -324,6 +353,7 @@ private:
   size_t incomplete_drops_ = 0;  ///< See incomplete_drops()
   size_t nonfinite_frame_drops_ = 0;  ///< See nonfinite_frame_drops()
   bool imu_lost_ = false;     ///< The gap was too long to recover; frames are dropped until reset()
+  ResetExtrapolation last_reset_extrapolation_ = ResetExtrapolation::NONE;  ///< See last_reset_extrapolation()
   Eigen::Matrix<double, 6, 1> start_imu_bias_;  ///< See start_imu_bias()
 
   // Initial pose search (init_yaw_search)
