@@ -235,6 +235,11 @@ public:
   const std::deque<double>& imu_stamp_history() const { return imu_stamps_; }
   /// How often the hold check on upstream's queue disagreed with the gap history (0 on any legal stream; for tests and logs)
   size_t hold_check_trips() const { return hold_check_trips_; }
+  /// Frames dropped without a pose because the IMU data ended before them and upstream would hold the last sample
+  /// for more than max_imu_gap (an INCOMPLETE frame outside a gap episode; for tests and logs, not thread-safe)
+  size_t incomplete_drops() const { return incomplete_drops_; }
+  /// Frames dropped without a pose because their stamp or scan end time is not finite (for tests and logs, not thread-safe)
+  size_t nonfinite_frame_drops() const { return nonfinite_frame_drops_; }
 
 protected:
   /// @throw std::invalid_argument if the map is null or a shared parameter is invalid
@@ -284,8 +289,13 @@ private:
   bool queue_reset(const Eigen::Isometry3d& T_world_imu, const Eigen::Vector3d& v_world_imu, double min_stamp, ResetReason reason);
   /// @param frame_stamp  the frame the reset applies at
   void apply_pending_reset(double frame_stamp);
-  /// @return true if the frame must be dropped because of an IMU gap
-  bool handle_imu_gap(const glim::PreprocessedFrame::Ptr& frame);
+  /// What insert_frame does with a frame after the IMU gap policy
+  enum class GapVerdict {
+    PROCEED,     ///< Integrate the frame
+    DROP,        ///< Drop the frame; the IMU window restarts at it (a gap episode, or LOST)
+    DROP_KEEP,   ///< Drop the frame and keep the IMU data since the last pose: the next frame integrates from that pose
+  };
+  GapVerdict handle_imu_gap(const glim::PreprocessedFrame::Ptr& frame);
   void trim_imu_stamps(double keep_from);
   void publish_lost();
   void trim_imu_queue(double stamp);
@@ -311,6 +321,8 @@ private:
   bool gap_pending_ = false;  ///< A frame was dropped for a gap and no clean frame has come since
   double gap_longest_ = 0.0;  ///< Longest gap seen in this episode [s]
   size_t hold_check_trips_ = 0;  ///< Frames dropped as LOST by the hold check
+  size_t incomplete_drops_ = 0;  ///< See incomplete_drops()
+  size_t nonfinite_frame_drops_ = 0;  ///< See nonfinite_frame_drops()
   bool imu_lost_ = false;     ///< The gap was too long to recover; frames are dropped until reset()
   Eigen::Matrix<double, 6, 1> start_imu_bias_;  ///< See start_imu_bias()
 

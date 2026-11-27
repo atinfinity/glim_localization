@@ -131,7 +131,7 @@ public:
           boundary_holds.push_back(*hold);
         }
       } else {
-        // The queue ends before the scan end (the INCOMPLETE tail, a known limit): counted, not judged
+        // The queue ends before the scan end (INCOMPLETE): judged with max_uncovered_hold, kept apart from max_hold
         uncovered_integrations++;
         max_uncovered_hold = std::max(max_uncovered_hold, *hold);
         if (*hold > 0.05 - 1e-6 && *hold <= 0.05 + 1e-6) {
@@ -145,7 +145,7 @@ public:
   double max_hold = 0.0;  ///< The longest hold upstream integrated across, over the poses published so far (covered integrations only)
   int covered_integrations = 0;
   int uncovered_integrations = 0;  ///< Poses integrated while the queue ended before the scan end: not part of max_hold
-  double max_uncovered_hold = 0.0;
+  double max_uncovered_hold = 0.0;  ///< The longest hold over the uncovered integrations (also at most max_imu_gap)
   std::vector<double> uncovered_boundary_holds;  ///< Uncovered holds within 1e-6 of max_imu_gap (the tail ends exactly one interval before the frame)
   std::vector<double> boundary_holds;  ///< Covered holds within 1e-6 of max_imu_gap or above
 
@@ -1315,6 +1315,40 @@ TEST_F(ReplayRunnerTest, IMUStampGateRejectsNonFiniteStamps) {
   }
 }
 
+TEST_F(ReplayRunnerTest, IMUStampGateFiveNonFiniteStampsInARowGoLostWithoutClearingTheQueue) {
+  for (const int count : {4, 5}) {
+    SCOPED_TRACE(count);
+    const auto run = run_probe(*dataset_, [&](ProbeOdometry& o) {
+      o.imu_hook = at_four_seconds([count](double stamp, const Forward& forward) {
+        forward(stamp);
+        for (int k = 0; k < count; k++) {
+          forward(std::numeric_limits<double>::quiet_NaN());
+        }
+      });
+    });
+    EXPECT_TRUE(queue_and_history_agree(*run.odometry));
+    if (count < 5) {
+      expect_untouched(run.records, *run.odometry);
+    } else {
+      expect_fails_closed(run.records, run.summary, *run.odometry);
+      EXPECT_EQ(run.odometry->incomplete_drops(), 0u);  // The fault, not the INCOMPLETE escalation
+    }
+  }
+}
+
+TEST_F(ReplayRunnerTest, IMUStampGateAllNonFiniteStampsNeverGiveAPoseAfterTheFirst) {
+  // Upstream's async wrapper releases every frame (scan_end > NaN is false) and no sample reaches the queue
+  const auto run = run_probe(*dataset_, [](ProbeOdometry& o) {
+    o.imu_hook = [](double, const Forward& forward) { forward(std::numeric_limits<double>::quiet_NaN()); };
+  });
+  ASSERT_FALSE(run.records.empty());
+  for (size_t i = 1; i < run.records.size(); i++) {
+    EXPECT_NE(run.records[i].result, ReplayResult::ESTIMATED) << run.records[i].stamp_ns;
+  }
+  EXPECT_EQ(run.records.back().state, LocalizationState::LOST);
+  EXPECT_TRUE(run.odometry->queue_stamps().empty());
+}
+
 TEST_F(ReplayRunnerTest, IMUStampGateAnExternalResetRecoversAfterAFault) {
   const auto dataset = make_variant("imu_fault_then_reset", Variant());
   auto reset_done = std::make_shared<bool>(false);
@@ -1817,6 +1851,7 @@ TEST_P(ReplayRunnerRandomStreamsTest, RandomGapsResetsAndReplayedFramesNeverMake
       },
       init_stamp_options(3.8));
     EXPECT_LE(run.odometry->max_hold, 0.05 + 1e-6) << "seed " << seed;
+    EXPECT_LE(run.odometry->max_uncovered_hold, 0.05 + 1e-6) << "seed " << seed;  // An INCOMPLETE frame gets the hold check too
     EXPECT_EQ(run.odometry->hold_check_trips(), 0u) << "seed " << seed;
     EXPECT_TRUE(queue_and_history_agree(*run.odometry)) << "seed " << seed;
     streams++;
@@ -1832,7 +1867,8 @@ TEST_P(ReplayRunnerRandomStreamsTest, RandomGapsResetsAndReplayedFramesNeverMake
   EXPECT_EQ(streams, static_cast<int>(kRandomStreams / kRandomStreamChunks));
   EXPECT_GE(two_old_frames, static_cast<int>(kMinTwoOldFramesPerCase)) << "streams that took the two-old-frames path";
   EXPECT_GE(covered, 3 * streams) << "covered integrations: the oracle must not be vacuous";
-  std::cout << "covered integrations: " << covered << ", uncovered (INCOMPLETE tail, not judged): " << uncovered << ", longest uncovered hold " << max_uncovered << " s" << std::endl;
+  EXPECT_LE(max_uncovered, 0.05 + 1e-6);
+  std::cout << "covered integrations: " << covered << ", uncovered (INCOMPLETE tail): " << uncovered << ", longest uncovered hold " << max_uncovered << " s" << std::endl;
   std::cout << std::setprecision(17);
   for (const double hold : boundary) {
     std::cout << "boundary hold (covered) " << hold << std::endl;
@@ -1933,6 +1969,179 @@ TEST_F(ReplayRunnerTest, AForwardJumpThroughTheAsyncWrapperFailsClosed) {
     }
   }
   EXPECT_TRUE(queue_and_history_agree(*odometry));
+}
+
+namespace {
+
+/// Forwards every sample except those with a stamp in one of the open intervals
+std::function<void(double, const Forward&)> swallow(std::vector<std::pair<double, double>> intervals) {
+  return [intervals](double stamp, const Forward& forward) {
+    for (const auto& [from, to] : intervals) {
+      if (stamp > from && stamp < to) {
+        return;
+      }
+    }
+    forward(stamp);
+  };
+}
+
+const ReplayFrameRecord* record_at(const Records& records, double t) {
+  for (const auto& record : records) {
+    if (std::abs(record.stamp_ns * 1e-9 - t) < 1e-6) {
+      return &record;
+    }
+  }
+  return nullptr;
+}
+
+}  // namespace
+
+// The runner feeds the IMU up to the first sample after the scan end (4.11 s for the frame at 4.1 s): swallowing 4.10 s and
+// 4.11 s leaves that frame uncovered (INCOMPLETE) while the next frame's samples, from 4.12 s, arrive as usual.
+
+TEST_F(ReplayRunnerTest, AnUncoveredFrameWithinTheLimitStillGivesAPose) {
+  const auto run = run_probe(*dataset_, [](ProbeOdometry& o) { o.imu_hook = swallow({{4.095, 4.115}}); });
+  expect_untouched(run.records, *run.odometry);  // Upstream holds 4.09 s for 0.01 s
+  EXPECT_EQ(run.odometry->uncovered_integrations, 1);
+  EXPECT_LE(run.odometry->max_uncovered_hold, 0.05 + 1e-6);
+  EXPECT_EQ(run.odometry->incomplete_drops(), 0u);
+  EXPECT_EQ(run.odometry->hold_check_trips(), 0u);
+}
+
+TEST_F(ReplayRunnerTest, AnUncoveredFrameAboveTheLimitIsDroppedAndTheNextFrameFollowsTheGapPolicy) {
+  // No sample in (4.00, 4.08) and none at 4.10 and 4.11 s: the frame at 4.1 s is uncovered and upstream would hold 4.08 s
+  // across 0.08 s. It is dropped without a pose and without LOST. The frame at 4.2 s still sees the hole from the last
+  // pose at 4.0 s, because the dropped frame kept the IMU data since that pose (the 0.03 s from 4.09 s to 4.12 s alone is
+  // clean): a gap episode, then a self-reset at 4.3 s.
+  const auto run = run_probe(*dataset_, [](ProbeOdometry& o) { o.imu_hook = swallow({{4.005, 4.075}, {4.095, 4.115}}); });
+  for (const auto& record : run.records) {
+    EXPECT_NE(record.state, LocalizationState::LOST) << record.stamp_ns;
+  }
+  for (const double t : {4.1, 4.2}) {
+    const auto* record = record_at(run.records, t);
+    ASSERT_NE(record, nullptr) << t;
+    EXPECT_NE(record->result, ReplayResult::ESTIMATED) << t;
+  }
+  EXPECT_EQ(run.odometry->incomplete_drops(), 1u);
+  EXPECT_EQ(run.odometry->hold_check_trips(), 0u);
+  EXPECT_EQ(run.records.back().result, ReplayResult::ESTIMATED);
+  EXPECT_EQ(run.records.back().reset_count, 1);
+  EXPECT_EQ(run.odometry->status().last_reset_reason, ResetReason::IMU_GAP);
+  EXPECT_LE(run.odometry->max_hold, 0.05 + 1e-6);
+  EXPECT_EQ(run.odometry->uncovered_integrations, 0);
+  EXPECT_TRUE(queue_and_history_agree(*run.odometry));
+}
+
+TEST_F(ReplayRunnerTest, UncoveredFramesBeyondTheResetLimitGoLost) {
+  // The IMU stops after 4.01 s: the frames at 4.1 to 4.5 s would hold it for up to 0.49 s and are dropped, the frame at
+  // 4.6 s (0.59 s, over imu_gap_reset_max 0.5 s) goes LOST
+  const auto run = run_probe(*dataset_, [](ProbeOdometry& o) { o.imu_hook = swallow({{4.015, 1e9}}); });
+  expect_fails_closed(run.records, run.summary, *run.odometry);
+  EXPECT_EQ(run.odometry->incomplete_drops(), 5u);
+  const auto* lost = record_at(run.records, 4.6);
+  ASSERT_NE(lost, nullptr);
+  EXPECT_EQ(lost->state, LocalizationState::LOST);
+  const auto* before = record_at(run.records, 4.5);
+  ASSERT_NE(before, nullptr);
+  EXPECT_NE(before->state, LocalizationState::LOST);
+  EXPECT_EQ(run.odometry->uncovered_integrations, 0);
+  EXPECT_TRUE(queue_and_history_agree(*run.odometry));
+}
+
+TEST_F(ReplayRunnerTest, AShutdownFlushThroughTheAsyncWrapperDoesNotGoLost) {
+  // The IMU ends just before the second-to-last frame, as when the sensors stop together: join() releases the last two
+  // frames uncovered. The first is 0.01 s past the last sample and gets a pose; the last is 0.11 s past it and is dropped.
+  auto odometry = std::make_shared<ProbeOdometry>(perturbed_start_params(), *map_);
+  glim::AsyncOdometryEstimation async(odometry, true);
+  glim::CloudPreprocessor preprocessor;
+  const auto& imu = dataset_->imu();
+  const size_t num_frames = dataset_->frames().size();
+  ASSERT_GE(num_frames, 3u);
+  const double imu_end = dataset_->frames()[num_frames - 2].stamp_ns * 1e-9 - 0.005;
+  size_t fed = 0;
+  for (size_t index = 0; index < num_frames; index++) {
+    const auto frame = preprocessor.preprocess(dataset_->load_cloud(index));
+    size_t target = 0;
+    while (target < imu.size() && imu[target].stamp_ns * 1e-9 <= frame->scan_end_time) {
+      target++;
+    }
+    target = std::min(target + 1, imu.size());
+    for (; fed < target && imu[fed].stamp_ns * 1e-9 < imu_end; fed++) {
+      async.insert_imu(imu[fed].stamp_ns * 1e-9, imu[fed].acc, imu[fed].gyro);
+    }
+    async.insert_frame(frame);
+  }
+  async.join();
+  std::vector<glim::EstimationFrame::ConstPtr> results, marginalized;
+  async.get_results(results, marginalized);
+
+  ASSERT_EQ(results.size(), num_frames);
+  // Needs a scan shorter than about 0.095 s (the synthetic scan ends at its stamp): a longer scan of the frame before
+  // would end after imu_end too, so the wrapper would hold it back and the flush would release three frames.
+  EXPECT_NE(results[num_frames - 2], nullptr);
+  EXPECT_EQ(results[num_frames - 1], nullptr);
+  EXPECT_NE(odometry->status().state, LocalizationState::LOST);
+  EXPECT_EQ(odometry->incomplete_drops(), 1u);
+  EXPECT_EQ(odometry->uncovered_integrations, 1);
+  EXPECT_LE(odometry->max_uncovered_hold, 0.05 + 1e-6);
+  EXPECT_LE(odometry->max_hold, 0.05 + 1e-6);
+  EXPECT_EQ(odometry->hold_check_trips(), 0u);
+}
+
+TEST_F(ReplayRunnerTest, AnUncoveredFrameWithFewerThanTwoSamplesIsDropped) {
+  // The frame at 4.1 s is moved to 4.03 s, and no sample arrives in (4.00, 4.115): upstream would hold 4.00 s for only
+  // 0.03 s (within max_imu_gap), but with no sample since the last pose. The 2-sample rule drops it as INCOMPLETE; the
+  // frame at 4.2 s then sees the hole from 4.00 s and the gap policy takes over.
+  const auto run = run_probe(*dataset_, [](ProbeOdometry& o) {
+    o.imu_hook = swallow({{4.005, 4.115}});
+    o.frame_hook = [](const glim::PreprocessedFrame::Ptr& frame) {
+      if (std::abs(frame->stamp - 4.1) < 1e-6) {
+        frame->stamp = 4.03;
+        frame->scan_end_time = 4.03;
+      }
+    };
+  });
+  for (const auto& record : run.records) {
+    EXPECT_NE(record.state, LocalizationState::LOST) << record.stamp_ns;
+  }
+  const auto* record = record_at(run.records, 4.1);
+  ASSERT_NE(record, nullptr);
+  EXPECT_NE(record->result, ReplayResult::ESTIMATED);
+  EXPECT_EQ(run.odometry->incomplete_drops(), 1u);
+  EXPECT_EQ(run.odometry->uncovered_integrations, 0);
+  EXPECT_EQ(run.odometry->hold_check_trips(), 0u);
+  EXPECT_EQ(run.records.back().result, ReplayResult::ESTIMATED);
+  EXPECT_TRUE(queue_and_history_agree(*run.odometry));
+}
+
+TEST_F(ReplayRunnerTest, AFrameWithANonFiniteStampOrScanEndIsDroppedWithoutLost) {
+  // A NaN compares false and vanishes in std::max, so neither the gap check nor the hold check can judge such a frame.
+  // It is dropped like a missing frame; the next frame is integrated over the whole interval since the last pose.
+  for (const bool stamp : {true, false}) {
+    SCOPED_TRACE(stamp ? "stamp" : "scan_end_time");
+    const auto run = run_probe(*dataset_, [stamp](ProbeOdometry& o) {
+      o.frame_hook = [stamp](const glim::PreprocessedFrame::Ptr& frame) {
+        if (std::abs(frame->stamp - 4.1) < 1e-6) {
+          (stamp ? frame->stamp : frame->scan_end_time) = std::nan("");
+        }
+      };
+    });
+    for (const auto& record : run.records) {
+      EXPECT_NE(record.state, LocalizationState::LOST) << record.stamp_ns;
+    }
+    const auto* dropped = record_at(run.records, 4.1);
+    ASSERT_NE(dropped, nullptr);
+    EXPECT_NE(dropped->result, ReplayResult::ESTIMATED);
+    const auto* next = record_at(run.records, 4.2);
+    ASSERT_NE(next, nullptr);
+    EXPECT_EQ(next->result, ReplayResult::ESTIMATED);
+    EXPECT_EQ(run.odometry->nonfinite_frame_drops(), 1u);
+    EXPECT_EQ(run.records.back().reset_count, 0);
+    EXPECT_EQ(run.odometry->incomplete_drops(), 0u);
+    EXPECT_EQ(run.odometry->hold_check_trips(), 0u);
+    EXPECT_LE(run.odometry->max_hold, 0.05 + 1e-6);
+    EXPECT_TRUE(queue_and_history_agree(*run.odometry));
+  }
 }
 
 TEST_F(ReplayRunnerTest, AnExternalResetWinsOverASelfReset) {

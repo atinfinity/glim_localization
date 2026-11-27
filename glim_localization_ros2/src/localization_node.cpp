@@ -305,6 +305,13 @@ private:
     input_.points_topic = config_ros.param<std::string>("glim_ros", "points_topic", "");
     input_.imu_time_offset = config_ros.param<double>("glim_ros", "imu_time_offset", 0.0);
     input_.points_time_offset = config_ros.param<double>("glim_ros", "points_time_offset", 0.0);
+    if (!std::isfinite(input_.imu_time_offset) || !std::isfinite(input_.points_time_offset)) {
+      // A non-finite offset would make every stamp non-finite: the IMU gate would drop every
+      // sample, and upstream would release every frame
+      RCLCPP_ERROR(get_logger(),
+          "glim_ros.imu_time_offset and glim_ros.points_time_offset must be finite");
+      return false;
+    }
     input_.acc_scale = config_ros.param<double>("glim_ros", "acc_scale", 0.0);
     input_.ang_scale = config_ros.param<double>("glim_ros", "ang_scale", 1.0);
     input_.intensity_field = config_sensors.param<std::string>("sensors", "intensity_field",
