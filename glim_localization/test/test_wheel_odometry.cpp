@@ -1139,3 +1139,20 @@ TEST_F(WheelGapResetTest, FallsBackOnAWheelSlippingBeforeTheGap) {
   print("wheel x2 from 5 s, key on", on);
   expect_slip_fallback(off, on, ResetExtrapolation::SLIP_START);
 }
+
+// A wheel that reports no turn from 5 s while turning: its linear velocity is right, and the straight displacement
+// matches the unturned end velocity, so only the angular velocity against the gyro at the last estimate shows it
+TEST_F(WheelGapResetTest, FallsBackOnAWrongWheelYawRate) {
+  const Trajectory trajectory = turning_T_world_imu;
+  WheelSamples wheel = make_trajectory_wheel(trajectory, kGapStartTime - 0.2, kGapEndTime + 0.05, test_T_imu_base());
+  for (auto& sample : wheel) {
+    if (sample.stamp >= 5.0) {
+      sample.angular.setZero();
+    }
+  }
+  const GapRun off = run_gap(gap_params(trajectory, false, 1), trajectory, &wheel);
+  const GapRun on = run_gap(gap_params(trajectory, true, 1), trajectory, &wheel);
+  print("no wheel turn from 5 s, key off", off);
+  print("no wheel turn from 5 s, key on", on);
+  expect_slip_fallback(off, on, ResetExtrapolation::SLIP_ANGULAR);
+}

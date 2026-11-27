@@ -577,7 +577,8 @@ ResetExtrapolation OdometryEstimationLocalization::extrapolate_with_wheel(
   // Slip check. The reset velocity also becomes the IMU prediction of the next frames, so the wheel factor gate would
   // agree with a slipping wheel from then on: check the wheels here, with the thresholds of that gate.
   // 1. At the last estimate, the wheel velocity must agree with the estimated one (a wheel already slipping).
-  // 2. Over the gap, the wheel displacement must agree with the trapezoid of the estimated velocity at the start and the
+  // 2. At the last estimate, the wheel angular velocity must agree with the bias-corrected gyro around it.
+  // 3. Over the gap, the wheel displacement must agree with the trapezoid of the estimated velocity at the start and the
   //    wheel velocity at the end (a wheel that locks, or slips and recovers, inside the gap). A smooth brake or turn is
   //    close to linear over the gap; a step in the speed is not, and then the constant velocity reset is used.
   // Not caught: a scale slip that starts in the gap and lasts through the reset frame. The end velocity is then wrong
@@ -593,6 +594,32 @@ ResetExtrapolation OdometryEstimationLocalization::extrapolate_with_wheel(
       start_diff,
       start_gate);
     return ResetExtrapolation::SLIP_START;
+  }
+
+  if (params.gate_angular_velocity > 0.0) {
+    // The upstream queue still holds the samples since the last estimate; without one near it there is no reference
+    const double window = localization_params().max_imu_gap;
+    Eigen::Vector3d gyro_sum = Eigen::Vector3d::Zero();
+    int count = 0;
+    for (const auto& imu : imu_integration->imu_data_in_queue()) {
+      if (std::abs(imu[0] - last.stamp) <= window) {
+        gyro_sum += imu.tail<3>();
+        count++;
+      }
+    }
+    if (count > 0) {
+      const Eigen::Vector3d gyro = gyro_sum / count - last.imu_bias.tail<3>();
+      const Eigen::Vector3d w_wheel = params.T_imu_base.linear() * motion->twist0.angular;
+      const double angular_diff = (w_wheel - gyro).norm();
+      if (angular_diff > params.gate_angular_velocity) {
+        spdlog::warn(
+          "the wheel angular velocity disagrees with the gyro at {:.3f} s by {:.3f} rad/s (gate {:.3f}): resetting with the last velocity instead",
+          last.stamp,
+          angular_diff,
+          params.gate_angular_velocity);
+        return ResetExtrapolation::SLIP_ANGULAR;
+      }
+    }
   }
 
   const double dt = stamp - last.stamp;

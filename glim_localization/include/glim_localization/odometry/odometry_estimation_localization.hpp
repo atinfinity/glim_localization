@@ -37,7 +37,8 @@ enum class ResetExtrapolation : uint8_t {
   NO_COVERAGE = 2,   ///< The wheel samples do not cover the gap or its ends within wheel_odom_max_gap
   INVALID = 3,       ///< The wheel state is not a valid reset (non-finite, or faster than kMaxResetSpeed)
   SLIP_START = 4,    ///< The wheel velocity at the last estimate disagrees with the estimated one
-  SLIP_GAP = 5       ///< The wheel displacement over the gap disagrees with the velocities at both ends
+  SLIP_ANGULAR = 5,  ///< The wheel angular velocity at the last estimate disagrees with the bias-corrected gyro
+  SLIP_GAP = 6       ///< The wheel displacement over the gap disagrees with the velocities at both ends
 };
 
 const char* to_string(ResetReason reason);
