@@ -848,9 +848,13 @@ protected:
     return params;
   }
 
-  /// Feed the frames in [kGapStartTime, kGapEndTime] with the trajectory's IMU (none in [kGapBegin, kGapEnd)) and the
-  /// given wheel samples, as feed() does
-  static GapRun run_gap(const OdometryEstimationLocalizationCPU::Params& params, const Trajectory& T_world_imu, const WheelSamples* wheel) {
+  /// Feed the frames in [kGapStartTime, kGapEndTime] with the trajectory's IMU (none in [kGapBegin, kGapEnd) unless
+  /// drop_imu is false) and the given wheel samples, as feed() does
+  static GapRun run_gap(
+    const OdometryEstimationLocalizationCPU::Params& params,
+    const Trajectory& T_world_imu,
+    const WheelSamples* wheel,
+    bool drop_imu = true) {
     const auto imu = make_trajectory_imu(T_world_imu, kGapStartTime - 0.2, kGapEndTime + 0.05);
     OdometryEstimationLocalizationCPU odometry(params, *far_map_);
     GapRun run;
@@ -870,7 +874,7 @@ protected:
       }
       for (; imu_cursor < imu.size() && imu[imu_cursor].stamp <= frame->stamp + 0.02; imu_cursor++) {
         const auto& sample = imu[imu_cursor];
-        if (sample.stamp < kGapBegin - 1e-9 || sample.stamp >= kGapEnd - 1e-9) {
+        if (!drop_imu || sample.stamp < kGapBegin - 1e-9 || sample.stamp >= kGapEnd - 1e-9) {
           odometry.insert_imu(sample.stamp, sample.linear_acc, sample.angular_vel);
         }
       }
@@ -947,6 +951,31 @@ protected:
     EXPECT_LT(on.velocity_error, 0.25 * off.velocity_error);
     EXPECT_LT(on.yaw_error, 0.5);
     EXPECT_LT(on.max_error_after, 0.5 * off.max_error_after);
+  }
+
+  /// The wheel samples of the trajectory with the linear velocity scaled by scale(stamp)
+  static WheelSamples scaled_wheel(const Trajectory& T_world_imu, const std::function<double(double)>& scale) {
+    WheelSamples wheel = make_trajectory_wheel(T_world_imu, kGapStartTime - 0.2, kGapEndTime + 0.05, test_T_imu_base());
+    for (auto& sample : wheel) {
+      sample.linear *= scale(sample.stamp);
+      if (scale(sample.stamp) == 0.0) {
+        sample.angular.setZero();  // A locked wheel reports no turn either
+      }
+    }
+    return wheel;
+  }
+
+  /// The slip check rejected the wheel motion: the key on resets as the key off does, from the same samples (one
+  /// thread, so the runs are deterministic). Not compared with the constant velocity prior: the wheel factors after
+  /// the reset are the same bad ones in both runs and may pull the reset frame.
+  static void expect_slip_fallback(const GapRun& off, const GapRun& on) {
+    expect_one_gap_reset(off);
+    expect_one_gap_reset(on);
+    EXPECT_FALSE(off.used_wheel);
+    EXPECT_FALSE(on.used_wheel);
+    EXPECT_NEAR(on.translation_error, off.translation_error, 1e-9);
+    EXPECT_NEAR(on.velocity_error, off.velocity_error, 1e-9);
+    EXPECT_NEAR(on.max_error_after, off.max_error_after, 1e-9);
   }
 };
 
@@ -1026,4 +1055,77 @@ TEST_F(WheelGapResetTest, FallsBackOnAnInvalidWheelState) {
   expect_one_gap_reset(run);
   EXPECT_FALSE(run.used_wheel);
   expect_constant_velocity_reset(run);
+}
+
+// With wheel odometry on and no IMU gap, no reset happens, so the key changes nothing: bit-identical estimates
+TEST_F(WheelGapResetTest, KeyWithoutGapIsIdentical) {
+  const Trajectory trajectory = turning_T_world_imu;
+  const WheelSamples wheel = make_trajectory_wheel(trajectory, kGapStartTime - 0.2, kGapEndTime + 0.05, test_T_imu_base());
+  const GapRun off = run_gap(gap_params(trajectory, false, 1), trajectory, &wheel, false);
+  const GapRun on = run_gap(gap_params(trajectory, true, 1), trajectory, &wheel, false);
+  EXPECT_EQ(off.dropped, 0);
+  EXPECT_EQ(off.status.reset_count, 0);
+  EXPECT_EQ(on.status.reset_count, 0);
+  EXPECT_GT(on.status.wheel_factors, 0);
+  ASSERT_EQ(on.estimates.size(), off.estimates.size());
+  for (size_t i = 0; i < off.estimates.size(); i++) {
+    EXPECT_EQ(on.estimates[i]->T_world_imu.matrix(), off.estimates[i]->T_world_imu.matrix()) << "i=" << i;
+    EXPECT_EQ(on.estimates[i]->v_world_imu, off.estimates[i]->v_world_imu) << "i=" << i;
+  }
+}
+
+// An IMU_GAP reset keeps the wheel sample at or before the reset frame, so the first interval after it gets its factor.
+// wheel_odom_max_gap is just above the 50 Hz period: with the buffer cleared, the first interval would not be covered.
+TEST_F(WheelGapResetTest, KeepsTheWheelSamplesAcrossTheGapReset) {
+  const Trajectory trajectory = braking_T_world_imu;
+  const WheelSamples wheel = make_trajectory_wheel(trajectory, kGapStartTime - 0.2, kGapEndTime + 0.05, test_T_imu_base());
+  for (const bool key : {false, true}) {
+    auto params = gap_params(trajectory, key);
+    params.wheel_odom.max_gap = 1.5 / kWheelRate;
+    const GapRun run = run_gap(params, trajectory, &wheel);
+    expect_one_gap_reset(run);
+    EXPECT_EQ(run.used_wheel, key);
+    EXPECT_EQ(run.status.wheel_missing, 0) << "key " << key;
+    // The status counts restart at the reset: every frame after the reset frame has a wheel interval
+    ASSERT_TRUE(run.after);
+    const auto after_reset = std::count_if(run.estimates.begin(), run.estimates.end(), [&run](const auto& e) { return e->stamp > run.after->stamp + 1e-6; });
+    EXPECT_EQ(after_reset, 13);
+    EXPECT_EQ(run.status.wheel_factors + run.status.wheel_gated, after_reset) << "key " << key;
+  }
+}
+
+// A wheel that locks at the start of the gap while braking: the wheels say the vehicle stopped at once. The
+// displacement over the gap does not match the trapezoid of the speeds at both ends, so the reset falls back.
+TEST_F(WheelGapResetTest, FallsBackOnAWheelLockedInTheGap) {
+  const Trajectory trajectory = braking_T_world_imu;
+  const WheelSamples wheel = scaled_wheel(trajectory, [](double t) { return t >= kGapBegin ? 0.0 : 1.0; });
+  const GapRun off = run_gap(gap_params(trajectory, false, 1), trajectory, &wheel);
+  const GapRun on = run_gap(gap_params(trajectory, true, 1), trajectory, &wheel);
+  print("locked wheel, key off", off);
+  print("locked wheel, key on", on);
+  expect_slip_fallback(off, on);
+}
+
+// A wheel spinning at twice the speed inside the gap while turning, right again at the reset frame: only the
+// displacement over the gap shows it
+TEST_F(WheelGapResetTest, FallsBackOnAWheelSlippingInTheGap) {
+  const Trajectory trajectory = turning_T_world_imu;
+  const WheelSamples wheel = scaled_wheel(trajectory, [](double t) { return t >= kGapBegin && t < kGapEnd ? 2.0 : 1.0; });
+  const GapRun off = run_gap(gap_params(trajectory, false, 1), trajectory, &wheel);
+  const GapRun on = run_gap(gap_params(trajectory, true, 1), trajectory, &wheel);
+  print("wheel x2 in the gap, key off", off);
+  print("wheel x2 in the gap, key on", on);
+  expect_slip_fallback(off, on);
+}
+
+// A wheel already spinning at twice the speed before the gap: its velocity at the last estimate disagrees with the
+// estimated one
+TEST_F(WheelGapResetTest, FallsBackOnAWheelSlippingBeforeTheGap) {
+  const Trajectory trajectory = braking_T_world_imu;
+  const WheelSamples wheel = scaled_wheel(trajectory, [](double t) { return t >= 5.0 ? 2.0 : 1.0; });
+  const GapRun off = run_gap(gap_params(trajectory, false, 1), trajectory, &wheel);
+  const GapRun on = run_gap(gap_params(trajectory, true, 1), trajectory, &wheel);
+  print("wheel x2 from 5 s, key off", off);
+  print("wheel x2 from 5 s, key on", on);
+  expect_slip_fallback(off, on);
 }
