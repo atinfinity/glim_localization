@@ -19,6 +19,7 @@
 
 #include <glim_localization/map/map_manager.hpp>
 #include <glim_localization/odometry/odometry_estimation_localization_cpu.hpp>
+#include <glim_localization/odometry/weighted_factor.hpp>
 
 #include "synthetic/synthetic_map.hpp"
 #include "synthetic/synthetic_scene.hpp"
@@ -498,12 +499,27 @@ glim::PreprocessedFrame::Ptr with_structure_off_the_map(const glim::Preprocessed
   return result;
 }
 
-// Exposes the protected weight of the next frame's map factors
-class WeightProbe : public OdometryEstimationLocalizationCPU {
+// Exposes the protected map factors built for the newest frame
+class FactorProbe : public OdometryEstimationLocalizationCPU {
 public:
   using OdometryEstimationLocalizationCPU::OdometryEstimationLocalizationCPU;
-  using OdometryEstimationLocalizationCPU::map_factor_weight;
+  using OdometryEstimationLocalizationCPU::current_map_factors_;
 };
+
+// The weight of every map factor in the graph: 1 for a bare factor (create_map_factors wraps only a weight other than
+// 1), the WeightedFactor weight otherwise. -1 if the factors disagree or the graph is empty.
+double map_factor_weight_of(const gtsam::NonlinearFactorGraph& factors) {
+  double weight = -1.0;
+  for (const auto& factor : factors) {
+    const auto weighted = std::dynamic_pointer_cast<WeightedFactor>(factor);
+    const double w = weighted ? weighted->weight() : 1.0;
+    if (weight >= 0.0 && w != weight) {
+      return -1.0;
+    }
+    weight = w;
+  }
+  return weight;
+}
 
 }  // namespace
 
@@ -514,17 +530,21 @@ TEST_F(LocalizationOdometryTest, EntersAndRecoversFromDegraded) {
   params.init_v_world_imu.setZero();
   const QualityMonitorParams quality = params.quality;
   ASSERT_LT(quality.degraded_frames, quality.lost_frames);
-  WeightProbe odometry(params, *map_);
+  FactorProbe odometry(params, *map_);
 
-  constexpr size_t kBadBegin = 30;
-  constexpr size_t kBadEnd = 45;  // 15 bad frames: DEGRADED after degraded_frames of them, far from lost_frames
-  constexpr size_t kEnd = 70;
+  // The bad window starts 1 s after kSettleTime (t = 4 s), so the estimate has settled at full map weight before the
+  // weight drops, and the error bound below is checked on a settled estimate under the 0.1 weight, not on the tail of
+  // the convergence.
+  constexpr size_t kBadBegin = 40;
+  constexpr size_t kBadEnd = 55;  // 15 bad frames: DEGRADED after degraded_frames of them, far from lost_frames
+  constexpr size_t kEnd = 80;
   ASSERT_LE(kEnd, frames_->size());
   ASSERT_LT(kBadEnd - kBadBegin, static_cast<size_t>(quality.lost_frames));
 
   size_t imu_cursor = 0;
   std::vector<glim::EstimationFrame::ConstPtr> marginalized;
   bool degraded_seen = false;
+  LocalizationState previous = LocalizationState::INITIALIZING;
   for (size_t i = 0; i < kEnd; i++) {
     const bool bad = i >= kBadBegin && i < kBadEnd;
     const auto frame = bad ? with_structure_off_the_map((*frames_)[i], 4) : (*frames_)[i];
@@ -553,9 +573,13 @@ TEST_F(LocalizationOdometryTest, EntersAndRecoversFromDegraded) {
     EXPECT_EQ(status.state, expected) << "i=" << i << ": " << to_string(status.state) << ", inlier_ratio=" << status.inlier_ratio;
     degraded_seen |= status.state == LocalizationState::DEGRADED;
 
-    // DEGRADED lowers the map factor weight of the next frame, and TRACKING restores it
-    const bool reduced = status.state == LocalizationState::DEGRADED;
-    EXPECT_DOUBLE_EQ(odometry.map_factor_weight(), params.map_factor_weight * (reduced ? params.degraded_weight_scale : 1.0)) << "i=" << i;
+    // The factors of this frame were built under the state of the previous one: DEGRADED wraps them at
+    // degraded_weight_scale, and TRACKING (or INITIALIZING) leaves them bare at the full weight
+    const bool reduced = previous == LocalizationState::DEGRADED;
+    ASSERT_FALSE(odometry.current_map_factors_.factors.empty()) << "i=" << i;
+    EXPECT_DOUBLE_EQ(map_factor_weight_of(odometry.current_map_factors_.factors), params.map_factor_weight * (reduced ? params.degraded_weight_scale : 1.0))
+      << "i=" << i << ", previous state " << to_string(previous);
+    previous = status.state;
 
     // The odometry and the weaker map factors carry the pose through DEGRADED, and it stays accurate after it
     if (frame->stamp >= kSettleTime) {
