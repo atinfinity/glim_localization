@@ -106,6 +106,7 @@ TEST_F(LocalizationOdometryTest, ConvergesFromPerturbedInitialPose) {
   double sum_sq_translation = 0.0;
   int num_tail = 0;
   std::vector<double> latencies;
+  int max_map_factors = 0;
 
   for (const auto& frame : *frames_) {
     while (imu_cursor < imu_->size() && (*imu_)[imu_cursor].stamp <= frame->stamp + 0.02) {
@@ -118,6 +119,7 @@ TEST_F(LocalizationOdometryTest, ConvergesFromPerturbedInitialPose) {
     ASSERT_TRUE(estimate) << "t=" << frame->stamp;
     ASSERT_TRUE(estimate->T_world_imu.matrix().allFinite()) << "t=" << frame->stamp;
     latencies.push_back(odometry.status().processing_time);
+    max_map_factors = std::max(max_map_factors, odometry.status().num_map_factors);
 
     const Eigen::Isometry3d error = synthetic_T_world_imu(frame->stamp).inverse() * estimate->T_world_imu;
     const double translation = error.translation().norm();
@@ -153,7 +155,13 @@ TEST_F(LocalizationOdometryTest, ConvergesFromPerturbedInitialPose) {
   EXPECT_EQ(status.state, LocalizationState::TRACKING) << to_string(status.state);
   EXPECT_GT(status.inlier_ratio, 0.5);
   EXPECT_GT(status.num_map_factors, 0);
-  EXPECT_LT(elapsed, 60.0);  // Only flags gross slowness (it runs after the loop; ctest's TIMEOUT catches a hang). Parallel ctest and other containers slow this test.
+  // No wall-clock bound: it depends on the machine and on what runs beside the test, so it either flakes or checks
+  // nothing. The elapsed time and latencies above are printed for comparison, and ctest's TIMEOUT catches a hang. The
+  // work per frame is bounded instead: at most one factor per level of each of max_submaps tiles.
+  const auto tiles = (*map_)->tiles();
+  ASSERT_FALSE(tiles.empty());
+  EXPECT_GT(max_map_factors, 0);
+  EXPECT_LE(max_map_factors, params.map_factors.max_submaps * static_cast<int>(tiles.front()->voxelmaps.size()));
 }
 
 namespace {
