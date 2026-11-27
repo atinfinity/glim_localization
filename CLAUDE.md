@@ -24,7 +24,7 @@ scripts/docker_run.sh scripts/ci.sh  # build, tests, dependency checks
 scripts/ci_local.sh [--force]        # optional, host side. Reuses a pass for the same tree and image; skips docs-only changes
 ```
 
-CI is GitHub Actions: `build-and-test` (amd64) and `build-and-test-arm64` run `scripts/ci.sh` on every non-draft PR and on a push to main that changes code (docs-only pushes are ignored). Running `scripts/ci_local.sh` before a PR is optional, not required.
+CI is GitHub Actions: on every non-draft PR and on a push to main that changes code (docs-only pushes are ignored), the jobs `checks` (amd64) and `checks-arm64` run `scripts/ci.sh --part` as parallel parts (`core-1/2`, `core-2/2`, `rest`), and the required checks `build-and-test` and `build-and-test-arm64` pass only when every part of their architecture passed. Running `scripts/ci_local.sh` before a PR is optional, not required.
 
 Offline replay (inside the container; design in section 6.5 of `docs/DESIGN.md`):
 

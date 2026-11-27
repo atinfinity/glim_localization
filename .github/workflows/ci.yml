@@ -14,7 +14,7 @@ on:
       - 'scripts/docs_site_index.py'
       - '.github/workflows/docs.yml'
   # Runs for every non-draft PR, including docs-only ones, so each PR gets a CI check (the required
-  # checks build-and-test and build-and-test-arm64 report even when their steps are skipped). No
+  # checks build-and-test and build-and-test-arm64 report even when the check parts are skipped). No
   # paths filter here: a filtered-out PR would never report them. Marking a draft ready for review
   # runs it.
   pull_request:
@@ -30,32 +30,22 @@ permissions:
   contents: read
 
 jobs:
-  # amd64. The repository ruleset requires this check by its name, so the job id stays as is.
-  # build-and-test-arm64 runs the same steps (YAML anchor build-and-test-steps) on an arm64 runner;
-  # the per-architecture values come from the job environment:
-  #   IMAGE_TAG_SUFFIX    appended to the GHCR tag (the amd64 tag has none, as before)
-  #   BUILDX_CACHE_SCOPE  scope of the buildx layer cache in the GitHub Actions cache
-  # The ccache keys start with runner.arch.
-  build-and-test:
+  # Decides once per run what the check jobs need: whether a PR is docs-only, and the hash of the
+  # image inputs (the prebuilt image tag, the same for both architectures; each adds its own suffix).
+  changes:
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    permissions:
-      contents: read
-      packages: read  # pull the prebuilt image while the package is private
-    env:
-      IMAGE_TAG_SUFFIX: ''
-      BUILDX_CACHE_SCOPE: image-amd64
+    timeout-minutes: 5
     outputs:
-      image: ${{ steps.image.outputs.ref }}
-      missing: ${{ steps.pull.outputs.missing }}
-    steps: &build-and-test-steps
+      docs_only: ${{ steps.changes.outputs.docs_only }}
+      hash: ${{ steps.hash.outputs.hash }}
+    steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           fetch-depth: 2  # The PR merge commit and its parents.
       # Docs-only PRs (scripts/is_docs_only.sh: Markdown, docs/, LICENSE, the docs site inputs) still
-      # report this check, but skip the build. --no-renames lists both paths of a rename, so moving
-      # code into docs/ runs the full checks.
+      # report the required checks, but skip the build. --no-renames lists both paths of a rename, so
+      # moving code into docs/ runs the full checks.
       - name: Detect docs-only PR
         id: changes
         if: github.event_name == 'pull_request'
@@ -69,20 +59,53 @@ jobs:
           echo "docs_only=${docs_only}" >> "${GITHUB_OUTPUT}"
           echo "docs_only=${docs_only}"
       # The prebuilt image is tagged with the hash of the files it bakes in (the same list that
-      # scripts/ci_local.sh checks), so a pulled image always matches this tree. Each architecture
-      # has its own single-platform tag (suffix IMAGE_TAG_SUFFIX), so a pull never gets the other one.
-      - name: Resolve the prebuilt image
-        id: image
-        if: steps.changes.outputs.docs_only != 'true'
+      # scripts/ci_local.sh checks), so a pulled image always matches this tree.
+      - name: Hash the image inputs
+        id: hash
         run: |
           hash="$(scripts/image_inputs_hash.sh)"
-          ref="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/glim_localization:${hash}${IMAGE_TAG_SUFFIX}"
           echo "hash=${hash}" >> "${GITHUB_OUTPUT}"
+          echo "hash: ${hash}"
+
+  # amd64 checks, split into parallel parts of scripts/ci.sh (--part): the two halves of the core
+  # ctest (core-1/2 also runs the dependency check) and everything else (rest). Together they run
+  # what `scripts/ci.sh` runs alone; scripts/tests/test_ci_parts.py checks that the matrix lists
+  # every shard. Each part builds the core itself (from the shared ccache), so no build output moves
+  # between jobs. checks-arm64 runs the same steps (YAML anchor check-steps) on an arm64 runner; the
+  # per-architecture values come from the job environment:
+  #   IMAGE_TAG_SUFFIX    appended to the GHCR tag (the amd64 tag has none)
+  #   BUILDX_CACHE_SCOPE  scope of the buildx layer cache in the GitHub Actions cache
+  # The ccache keys start with runner.arch. The architectures are two jobs, not one matrix, so each
+  # required check and each publish job waits only for its own architecture.
+  checks:
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false  # A failing part does not cancel the others, so one run shows every failure.
+      matrix:
+        part: [core-1/2, core-2/2, rest]
+    permissions:
+      contents: read
+      packages: read  # pull the prebuilt image while the package is private
+    env:
+      IMAGE_TAG_SUFFIX: ''
+      BUILDX_CACHE_SCOPE: image-amd64
+      IMAGE_HASH: ${{ needs.changes.outputs.hash }}
+      PART: ${{ matrix.part }}
+    steps: &check-steps
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      # Each architecture has its own single-platform tag (suffix IMAGE_TAG_SUFFIX), so a pull never
+      # gets the other one.
+      - name: Resolve the prebuilt image
+        id: image
+        run: |
+          ref="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/glim_localization:${IMAGE_HASH}${IMAGE_TAG_SUFFIX}"
           echo "ref=${ref}" >> "${GITHUB_OUTPUT}"
           echo "image: ${ref}"
       # A public image needs no login; a failed login only means building the image here.
       - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550  # v4.8.0
-        if: steps.changes.outputs.docs_only != 'true'
         continue-on-error: true
         with:
           registry: ghcr.io
@@ -90,15 +113,13 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Pull the prebuilt image
         id: pull
-        if: steps.changes.outputs.docs_only != 'true'
         env:
           IMAGE: ${{ steps.image.outputs.ref }}
-        # missing=true only when the registry says the image is absent: "manifest unknown" for a
-        # missing tag, "denied" for a package that does not exist (or cannot be read). Other errors
-        # are retried; if they persist, the image is built here but not published.
+        # Stops retrying when the registry says the image is absent: "manifest unknown" for a missing
+        # tag, "denied" for a package that does not exist (or cannot be read). Other errors are
+        # retried. Without a pulled image it is built here; the publish jobs decide what to push.
         run: |
           pulled=false
-          missing=false
           for attempt in 1 2 3; do
             if docker pull "${IMAGE}"; then
               docker tag "${IMAGE}" glim_localization:dev
@@ -106,22 +127,22 @@ jobs:
               break
             fi
             if docker manifest inspect "${IMAGE}" 2>&1 | grep -qiE 'manifest unknown|no such manifest|not found|denied'; then
-              missing=true
+              echo "No prebuilt image ${IMAGE}; building it"
               break
             fi
-            [[ "${attempt}" -eq 3 ]] || sleep $((attempt * 15))
+            if [[ "${attempt}" -eq 3 ]]; then
+              echo "::warning::Cannot pull ${IMAGE}; building it here"
+            else
+              sleep $((attempt * 15))
+            fi
           done
-          if [[ "${missing}" == true ]]; then
-            echo "No prebuilt image ${IMAGE}; building it"
-          elif [[ "${pulled}" != true ]]; then
-            echo "::warning::Cannot pull ${IMAGE}; building it here, not publishing"
-          fi
           echo "pulled=${pulled}" >> "${GITHUB_OUTPUT}"
-          echo "missing=${missing}" >> "${GITHUB_OUTPUT}"
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069  # v4.4.1
-        if: steps.changes.outputs.docs_only != 'true' && steps.pull.outputs.pulled != 'true'
+        if: steps.pull.outputs.pulled != 'true'
+      # Without a prebuilt image every part builds it, in parallel from the same layer cache. Only
+      # rest exports the layer cache, so the parts do not all write the same scope.
       - name: Build image
-        if: steps.changes.outputs.docs_only != 'true' && steps.pull.outputs.pulled != 'true'
+        if: steps.pull.outputs.pulled != 'true'
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc  # v7.4.0
         with:
           context: .
@@ -130,31 +151,31 @@ jobs:
           tags: glim_localization:dev
           build-args: JOBS=2
           cache-from: type=gha,scope=${{ env.BUILDX_CACHE_SCOPE }}
-          cache-to: type=gha,scope=${{ env.BUILDX_CACHE_SCOPE }},mode=max
+          cache-to: ${{ matrix.part == 'rest' && format('type=gha,scope={0},mode=max', env.BUILDX_CACHE_SCOPE) || '' }}
       # Only pushes to main save the compiler cache; PRs restore main's (same image, nearest sources).
+      # Every part restores it, and only rest saves it: rest compiles everything the core parts do
+      # (the core with its tests) and the colcon packages.
       - name: Restore ccache
         id: ccache
-        if: steps.changes.outputs.docs_only != 'true'
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
         with:
           path: ${{ runner.temp }}/ccache
-          key: ccache-${{ runner.arch }}-${{ steps.image.outputs.hash }}-${{ hashFiles('glim_localization/**', 'glim_localization_msgs/**', 'glim_localization_ros2/**') }}
+          key: ccache-${{ runner.arch }}-${{ env.IMAGE_HASH }}-${{ hashFiles('glim_localization/**', 'glim_localization_msgs/**', 'glim_localization_ros2/**') }}
           # ccache checks the compiler and hashes the headers itself, so another image's cache is
           # safe. Another architecture's cache would only miss, so it is never restored.
           restore-keys: |
-            ccache-${{ runner.arch }}-${{ steps.image.outputs.hash }}-
+            ccache-${{ runner.arch }}-${{ env.IMAGE_HASH }}-
             ccache-${{ runner.arch }}-
       - name: Run checks
-        if: steps.changes.outputs.docs_only != 'true'
         env:
           GLIM_LOC_CCACHE_DIR: ${{ runner.temp }}/ccache
           # Keeps the saved cache small: the 10 GB Actions cache of the repository holds two buildx
           # layer caches (scopes image-amd64, image-arm64) and two ccaches (one per architecture).
           CCACHE_MAXSIZE: 500M
-        run: scripts/docker_run.sh scripts/ci.sh
+        run: scripts/docker_run.sh scripts/ci.sh --part "${PART}"
       - name: Save ccache
         if: >-
-          !cancelled() && steps.changes.outputs.docs_only != 'true'
+          !cancelled() && matrix.part == 'rest'
           && github.event_name == 'push' && github.ref == 'refs/heads/main'
           && steps.ccache.outputs.cache-hit != 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
@@ -163,22 +184,68 @@ jobs:
           key: ${{ steps.ccache.outputs.cache-primary-key }}
 
   # The same checks on arm64 (GitHub-hosted arm64 runner, free for public repositories), with the
-  # steps of build-and-test. The first run with an uncached image build and no ccache took 14 min
+  # steps of checks. The first unsharded run with an uncached image build and no ccache took 14 min
   # (image 6 min, checks 7.5 min); the timeout leaves room for slower runners.
-  build-and-test-arm64:
-    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+  checks-arm64:
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        part: [core-1/2, core-2/2, rest]
     permissions:
       contents: read
       packages: read
     env:
       IMAGE_TAG_SUFFIX: -arm64
       BUILDX_CACHE_SCOPE: image-arm64
-    outputs:
-      image: ${{ steps.image.outputs.ref }}
-      missing: ${{ steps.pull.outputs.missing }}
-    steps: *build-and-test-steps
+      IMAGE_HASH: ${{ needs.changes.outputs.hash }}
+      PART: ${{ matrix.part }}
+    steps: *check-steps
+
+  # The required checks. The repository ruleset requires these two by name, so the job ids stay as
+  # they are; each one sums up the parts of its architecture. always() makes them report on every
+  # non-draft run (a skipped required check would count as passing). They pass only when the
+  # changes job passed and the parts all passed, or were skipped because the PR is docs-only. A
+  # failed or cancelled part fails them.
+  build-and-test:
+    needs: [changes, checks]
+    if: always() && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    env:
+      CHANGES: ${{ needs.changes.result }}
+      CHECKS: ${{ needs.checks.result }}
+      DOCS_ONLY: ${{ needs.changes.outputs.docs_only }}
+    steps: &result-steps
+      - name: Check the results of the parts
+        run: |
+          echo "changes: ${CHANGES}, checks: ${CHECKS}, docs_only: ${DOCS_ONLY:-false}"
+          if [[ "${CHANGES}" != success ]]; then
+            echo "::error::The changes job did not succeed (${CHANGES})"
+            exit 1
+          fi
+          if [[ "${CHECKS}" == success ]]; then
+            echo "PASS: every part"
+          elif [[ "${CHECKS}" == skipped && "${DOCS_ONLY}" == true ]]; then
+            echo "SKIPPED: docs-only change"
+          else
+            echo "::error::The checks did not pass (${CHECKS})"
+            exit 1
+          fi
+
+  build-and-test-arm64:
+    needs: [changes, checks-arm64]
+    if: always() && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    env:
+      CHANGES: ${{ needs.changes.result }}
+      CHECKS: ${{ needs.checks-arm64.result }}
+      DOCS_ONLY: ${{ needs.changes.outputs.docs_only }}
+    steps: *result-steps
 
   # The CUDA image needs an NVIDIA GPU machine to build and test (docs/build.md, "CUDA variant").
   # Here only docker/Dockerfile.cuda is parsed and linted (its check directive turns warnings into
@@ -192,60 +259,92 @@ jobs:
       - name: Check the CUDA Dockerfile
         run: docker build --check -f docker/Dockerfile.cuda .
 
-  # Pushes the image only after the checks passed on main, and only when it was not on GHCR yet.
+  # Pushes the image only after the checks passed on main, and only when the tag is not on GHCR yet.
   # Never runs for PRs or forks, so only the publish jobs get packages: write. publish-image-arm64
   # runs the same steps for the arm64 image, built natively on an arm64 runner. Each publish job is
   # gated only on the checks of its own architecture, so one failing architecture does not hold
-  # back the other's image.
+  # back the other's image. The tag comes from the changes job, not from a check job: the outputs
+  # of a matrix job are those of whichever part wrote them last.
   publish-image:
-    needs: build-and-test
+    needs: [changes, build-and-test]
     if: >-
       github.event_name == 'push' && github.ref == 'refs/heads/main' && !github.event.repository.fork
-      && needs.build-and-test.outputs.missing == 'true'
+      && needs.changes.result == 'success' && needs.build-and-test.result == 'success'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
       contents: read
       packages: write
     env:
-      IMAGE: ${{ needs.build-and-test.outputs.image }}
+      IMAGE_HASH: ${{ needs.changes.outputs.hash }}
+      IMAGE_TAG_SUFFIX: ''
       BUILDX_CACHE_SCOPE: image-amd64
     steps: &publish-image-steps
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069  # v4.4.1
       - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550  # v4.8.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      # This is a rebuild, not the image build-and-test ran: same build arguments, so every layer
-      # normally comes from the GitHub Actions layer cache. If the base image tag moved or the cache
-      # was evicted in between, the pushed image is a fresh build. The tag identifies the
-      # repository's image inputs, not the image content: base image and apt updates reach the
-      # published image only when an input changes, or by deleting the tag on GHCR so that the next
-      # push to main rebuilds it.
+      # missing=true only when the registry says the image is absent: "manifest unknown" for a
+      # missing tag, "denied" for a package that does not exist yet. An existing tag is not pushed
+      # again. Other errors are retried; if they persist, nothing is published (as before, when a
+      # check job that could not reach the registry did not publish).
+      - name: Check the registry
+        id: registry
+        run: |
+          image="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/glim_localization:${IMAGE_HASH}${IMAGE_TAG_SUFFIX}"
+          echo "image=${image}" >> "${GITHUB_OUTPUT}"
+          missing=false
+          for attempt in 1 2 3; do
+            if output="$(docker manifest inspect "${image}" 2>&1)"; then
+              echo "${image} is already published"
+              break
+            fi
+            if grep -qiE 'manifest unknown|no such manifest|not found|denied' <<< "${output}"; then
+              echo "${image} is not published yet"
+              missing=true
+              break
+            fi
+            if [[ "${attempt}" -eq 3 ]]; then
+              echo "::warning::Cannot check ${image} on the registry; not publishing"
+            else
+              sleep $((attempt * 15))
+            fi
+          done
+          echo "missing=${missing}" >> "${GITHUB_OUTPUT}"
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069  # v4.4.1
+        if: steps.registry.outputs.missing == 'true'
+      # This is a rebuild, not the image the checks ran: same build arguments, so every layer
+      # normally comes from the GitHub Actions layer cache (written by the rest part). If the base
+      # image tag moved or the cache was evicted in between, the pushed image is a fresh build. The
+      # tag identifies the repository's image inputs, not the image content: base image and apt
+      # updates reach the published image only when an input changes, or by deleting the tag on GHCR
+      # so that the next push to main rebuilds it.
       - name: Push image
+        if: steps.registry.outputs.missing == 'true'
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc  # v7.4.0
         with:
           context: .
           file: docker/Dockerfile
           push: true
-          tags: ${{ env.IMAGE }}
+          tags: ${{ steps.registry.outputs.image }}
           labels: org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
           build-args: JOBS=2
           cache-from: type=gha,scope=${{ env.BUILDX_CACHE_SCOPE }}
 
   publish-image-arm64:
-    needs: build-and-test-arm64
+    needs: [changes, build-and-test-arm64]
     if: >-
       github.event_name == 'push' && github.ref == 'refs/heads/main' && !github.event.repository.fork
-      && needs.build-and-test-arm64.outputs.missing == 'true'
+      && needs.changes.result == 'success' && needs.build-and-test-arm64.result == 'success'
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 30
     permissions:
       contents: read
       packages: write
     env:
-      IMAGE: ${{ needs.build-and-test-arm64.outputs.image }}
+      IMAGE_HASH: ${{ needs.changes.outputs.hash }}
+      IMAGE_TAG_SUFFIX: -arm64
       BUILDX_CACHE_SCOPE: image-arm64
     steps: *publish-image-steps

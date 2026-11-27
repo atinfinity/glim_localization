@@ -14,7 +14,7 @@
 #   site inputs) skips build and tests and records nothing. The docs site, its generator tests and the
 #   detector tests are not run here either; the Docs workflow (docs.yml) runs them.
 # --force wipes the build volume and ignores every recorded pass.
-# GitHub Actions runs scripts/ci.sh directly and always does a full run.
+# GitHub Actions runs scripts/ci.sh directly, split into parts (--part); the parts together are a full run.
 #
 # Test hooks (environment): CI_LOCAL_DOCKER (docker command), CI_LOCAL_IMAGE, CI_LOCAL_BASE_REF,
 # CI_LOCAL_POLL (lock poll interval in seconds).
