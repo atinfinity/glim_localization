@@ -470,6 +470,102 @@ TEST_F(LocalizationOdometryTest, BecomesLostWhenMapIsFarAway) {
   fs::remove_all(far_dir);
 }
 
+namespace {
+
+// The frame with `copies` copies of its points raised by 10, 20, ... m in the world: static structure above the map, as
+// a scene that grew since the map was made. The copies hold no map points, so the inlier ratio falls to about
+// 1 / (copies + 1), while the original points still overlap the map and keep the map factors.
+glim::PreprocessedFrame::Ptr with_structure_off_the_map(const glim::PreprocessedFrame::ConstPtr& frame, int copies) {
+  auto result = std::make_shared<glim::PreprocessedFrame>(*frame);
+  const size_t n = frame->points.size();
+  // Global shutter: every point is at the scan stamp
+  const Eigen::Matrix3d R_imu_world = synthetic_T_world_imu(frame->stamp).linear().transpose();
+  for (int c = 1; c <= copies; c++) {
+    const Eigen::Vector3d offset = R_imu_world * Eigen::Vector3d(0.0, 0.0, 10.0 * c);
+    for (size_t i = 0; i < n; i++) {
+      result->points.push_back(frame->points[i] + (Eigen::Vector4d() << offset, 0.0).finished());
+      result->times.push_back(frame->times[i]);
+      if (!frame->intensities.empty()) {
+        result->intensities.push_back(frame->intensities[i]);
+      }
+    }
+    for (size_t i = 0; i < frame->neighbors.size(); i++) {
+      result->neighbors.push_back(frame->neighbors[i] + static_cast<int>(c * n));
+    }
+  }
+  return result;
+}
+
+// Exposes the protected weight of the next frame's map factors
+class WeightProbe : public OdometryEstimationLocalizationCPU {
+public:
+  using OdometryEstimationLocalizationCPU::OdometryEstimationLocalizationCPU;
+  using OdometryEstimationLocalizationCPU::map_factor_weight;
+};
+
+}  // namespace
+
+TEST_F(LocalizationOdometryTest, EntersAndRecoversFromDegraded) {
+  auto params = reset_test_params();
+  params.estimate_init_state = false;
+  params.init_T_world_imu = synthetic_T_world_imu(0.0);
+  params.init_v_world_imu.setZero();
+  const QualityMonitorParams quality = params.quality;
+  ASSERT_LT(quality.degraded_frames, quality.lost_frames);
+  WeightProbe odometry(params, *map_);
+
+  constexpr size_t kBadBegin = 30;
+  constexpr size_t kBadEnd = 45;  // 15 bad frames: DEGRADED after degraded_frames of them, far from lost_frames
+  constexpr size_t kEnd = 70;
+  ASSERT_LE(kEnd, frames_->size());
+  ASSERT_LT(kBadEnd - kBadBegin, static_cast<size_t>(quality.lost_frames));
+
+  size_t imu_cursor = 0;
+  std::vector<glim::EstimationFrame::ConstPtr> marginalized;
+  bool degraded_seen = false;
+  for (size_t i = 0; i < kEnd; i++) {
+    const bool bad = i >= kBadBegin && i < kBadEnd;
+    const auto frame = bad ? with_structure_off_the_map((*frames_)[i], 4) : (*frames_)[i];
+    feed_imu(odometry, *imu_, imu_cursor, frame->stamp);
+    const auto estimate = odometry.insert_frame(frame, marginalized);
+    ASSERT_TRUE(estimate) << "i=" << i;
+    ASSERT_TRUE(estimate->T_world_imu.matrix().allFinite()) << "i=" << i;
+    const auto status = odometry.status();
+
+    // Each frame must be on the intended side of the threshold, or the expected states below do not follow
+    if (bad) {
+      ASSERT_LT(status.inlier_ratio, quality.degraded_inlier_ratio) << "i=" << i;
+      ASSERT_GT(status.num_map_factors, 0) << "i=" << i << ": the original points must still reach the map";
+    } else {
+      ASSERT_GE(status.inlier_ratio, quality.degraded_inlier_ratio) << "i=" << i;
+    }
+
+    const size_t tracking_frames = static_cast<size_t>(quality.tracking_frames);
+    const size_t degraded_frames = static_cast<size_t>(quality.degraded_frames);
+    LocalizationState expected = LocalizationState::TRACKING;
+    if (i + 1 < tracking_frames) {
+      expected = LocalizationState::INITIALIZING;
+    } else if (i + 1 >= kBadBegin + degraded_frames && i + 1 < kBadEnd + tracking_frames) {
+      expected = LocalizationState::DEGRADED;  // From the degraded_frames-th bad frame to before the tracking_frames-th good one
+    }
+    EXPECT_EQ(status.state, expected) << "i=" << i << ": " << to_string(status.state) << ", inlier_ratio=" << status.inlier_ratio;
+    degraded_seen |= status.state == LocalizationState::DEGRADED;
+
+    // DEGRADED lowers the map factor weight of the next frame, and TRACKING restores it
+    const bool reduced = status.state == LocalizationState::DEGRADED;
+    EXPECT_DOUBLE_EQ(odometry.map_factor_weight(), params.map_factor_weight * (reduced ? params.degraded_weight_scale : 1.0)) << "i=" << i;
+
+    // The odometry and the weaker map factors carry the pose through DEGRADED, and it stays accurate after it
+    if (frame->stamp >= kSettleTime) {
+      EXPECT_LT(translation_error(estimate), kMaxTranslationError) << "i=" << i;
+      EXPECT_LT(rotation_error_deg(estimate), kMaxRotationErrorDeg) << "i=" << i;
+    }
+  }
+  EXPECT_TRUE(degraded_seen);
+  EXPECT_EQ(odometry.status().state, LocalizationState::TRACKING);
+  EXPECT_EQ(odometry.status().reset_count, 0);  // Recovered by itself, without a reset
+}
+
 TEST_F(LocalizationOdometryTest, ConvergesWithLocalModel) {
   auto params = reset_test_params();
   params.use_keyframes = true;
