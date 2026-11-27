@@ -3,7 +3,8 @@
 #   sim/scripts/viz_capture.sh <out dir> <seconds> <speed-up>
 # Starts Xvfb, rviz2 (sim/rviz/sim_viz.rviz) and viz_paths.py, waits for /clock (the bag playback of
 # ros_localize.sh), records the screen for <seconds> and writes <out>/viz/sim_viz.webp (<speed-up>
-# times faster than recorded, 5 fps, 640 px wide: about 3 MB for 60 s), sim_viz.png (the last frame) and logs/. Renders with llvmpipe, no GPU.
+# times faster than recorded, 5 fps, 640 px wide: about 3 MB for 60 s), sim_viz.png (the last frame)
+# and logs/. Renders with llvmpipe, no GPU. Fails when rviz2 or viz_paths.py exits before the end.
 set -eo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -32,6 +33,14 @@ timeout "${SIM_VIZ_WAIT:-1800}" ros2 topic echo --once /clock > /dev/null \
 echo "viz_capture: recording ${seconds} s"
 ffmpeg -loglevel error -f x11grab -draw_mouse 0 -framerate 10 -video_size "${size}" -i "${DISPLAY}" -t "${seconds}" \
   -c:v libx264 -preset veryfast -crf 18 -pix_fmt yuv420p "${viz}/raw.mp4"
+# A crashed rviz2 leaves a black screen in the recording, and a crashed viz_paths.py leaves no paths.
+for i in 1 2; do
+  kill -0 "${pids[i]}" 2>/dev/null || {
+    log=("" rviz2 viz_paths)
+    echo "FAIL: ${log[i]} exited during the capture (${viz}/logs/${log[i]}.log)" >&2
+    exit 1
+  }
+done
 # Only the 3D view: the rviz2 window (960x720 at the origin) has the menu and tool bars above it, the
 # status bar below it and the handles of the hidden docks at its sides (w:h:x:y for ffmpeg crop).
 crop="crop=${SIM_VIZ_CROP:-928:628:16:62}"

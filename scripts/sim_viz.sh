@@ -42,15 +42,18 @@ run sim bash -c 'rm -rf "$1/viz/bag" && mkdir -p "$1/viz" && python3 sim/scripts
 
 echo "sim_viz: 2/3 start the capture (${seconds} s)"
 docker rm -f "${capture}" > /dev/null 2>&1 || true
-"${compose[@]}" run -d --name "${capture}" "${ros_env[@]}" \
-  -e SIM_VIZ_CROP -e SIM_VIZ_QUALITY \
-  sim sim/scripts/viz_capture.sh "${out}" "${seconds}" "${speedup}" > /dev/null
 trap 'docker rm -f "${capture}" > /dev/null 2>&1 || true' EXIT
+"${compose[@]}" run -d --name "${capture}" "${ros_env[@]}" \
+  -e SIM_VIZ_CROP -e SIM_VIZ_QUALITY -e SIM_VIZ_WAIT \
+  sim sim/scripts/viz_capture.sh "${out}" "${seconds}" "${speedup}" > /dev/null
 
 echo "sim_viz: 3/3 localize with glim_localization_node (rate ${rate})"
 run "${ros_env[@]}" -e SIM_VIZ_SETTLE loc sim/scripts/ros_localize.sh "${out}" "${rate}"
 
-status="$(docker wait "${capture}")"
+# The playback is over: the capture needs its recording time and the encoding, not the /clock wait.
+# Without a limit, a capture that never saw /clock (no discovery) would block for SIM_VIZ_WAIT.
+status="$(timeout "$(python3 -c 'import sys; print(int(float(sys.argv[1])) + 300)' "${seconds}")" \
+  docker wait "${capture}")" || { echo "FAIL: the capture did not finish (out/${name}/viz/logs)" >&2; exit 1; }
 docker logs "${capture}" 2>&1 | tail -n 5
 [[ "${status}" == 0 ]] || { echo "FAIL: the capture exited with ${status} (out/${name}/viz/logs)" >&2; exit 1; }
 echo "sim_viz: done in $((SECONDS - start)) s; out/${name}/viz/sim_viz.webp"

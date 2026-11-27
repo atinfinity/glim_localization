@@ -57,6 +57,8 @@ ros2 launch glim_localization_ros2 localization.launch.py use_sim_time:=true \
   config_path:="${viz}/config" map_path:="${out}/map" > "${viz}/logs/node.log" 2>&1 &
 node=$!
 trap 'kill -TERM ${node} 2>/dev/null || true' EXIT
+# bash is PID 1 in the container, which ignores signals without a handler: exit so that the trap runs.
+trap 'exit 130' INT TERM
 for _ in $(seq 120); do
   grep -q "active: waiting for" "${viz}/logs/node.log" && break
   kill -0 ${node} 2>/dev/null || { cat "${viz}/logs/node.log" >&2; exit 1; }
@@ -68,5 +70,6 @@ sleep "${SIM_VIZ_SETTLE:-5}"
 echo "ros_localize: playing the bag at rate ${rate}"
 ros2 bag play "${viz}/bag" --clock 100 --rate "${rate}" > "${viz}/logs/play.log" 2>&1
 sleep 2
+kill -0 ${node} 2>/dev/null || { tail -n 20 "${viz}/logs/node.log" >&2; echo "FAIL: the node exited" >&2; exit 1; }
 grep -E "\[glim_localization\]: (state|LOST|reset)" "${viz}/logs/node.log" | tail -n 5 || true
 echo "ros_localize: done"
