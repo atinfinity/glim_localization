@@ -1,0 +1,13 @@
+# QoS of `ros2 bag play` in sim/scripts/bench_run.sh (the benchmark, docs/benchmark.md): reliable writers with
+# deep queues, so that a cloud is not dropped by the player while the previous one is still in flight. The
+# subscribers keep their own QoS. The same for every method.
+/sim_eval/lidar/points:
+  history: keep_last
+  depth: 100
+  reliability: reliable
+  durability: volatile
+/sim_eval/imu:
+  history: keep_last
+  depth: 1000
+  reliability: reliable
+  durability: volatile
