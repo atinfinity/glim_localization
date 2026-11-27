@@ -43,7 +43,8 @@ import launch_testing.asserts
 import launch_testing.markers
 import pytest
 import rclpy
-from rclpy.qos import QoSProfile, ReliabilityPolicy
+from rclpy.qos import qos_profile_sensor_data, QoSProfile, ReliabilityPolicy
+from sensor_msgs.msg import PointCloud2
 from tf2_msgs.msg import TFMessage
 
 # Acceptance bounds for the ROS 2 interface
@@ -166,6 +167,12 @@ class TestR1Extension(unittest.TestCase):
             LocalizationStatus, f'/{NODE_NAME}/status', cls.statuses.append, qos)
         cls.node.create_subscription(
             TFMessage, '/tf', lambda m: cls.transforms.extend(m.transforms), qos)
+        # ~/aligned_points of the extension, on GLIM's node; header and number of points only
+        cls.aligned_points = []
+        cls.node.create_subscription(
+            PointCloud2, f'/{NODE_NAME}/aligned_points',
+            lambda m: cls.aligned_points.append((m.header, m.width * m.height)),
+            qos_profile_sensor_data)
         cls.gt = read_tum(os.path.join(require_env('GLIM_R1_DATA'), 'traj_gt.txt'))
         cls.gt_stamps = [row[0] for row in cls.gt]
 
@@ -241,6 +248,17 @@ class TestR1Extension(unittest.TestCase):
             'too few poses after the settling time')
         self.assertLessEqual(worst_trans, MAX_TRANS_M, f'translation error {worst_trans:.3f} m')
         self.assertLessEqual(worst_rot, MAX_ROT_DEG, f'rotation error {worst_rot:.3f} deg')
+
+        # ~/aligned_points: the scan of a published frame, in the map frame at a pose stamp (best
+        # effort, so not every frame is required)
+        self.assertTrue(self.aligned_points, 'no ~/aligned_points message')
+        pose_stamps = {(p.header.stamp.sec, p.header.stamp.nanosec) for p in self.poses}
+        for header, num_points in self.aligned_points:
+            self.assertEqual(header.frame_id, 'map')
+            self.assertGreater(num_points, 0)
+            self.assertIn(
+                (header.stamp.sec, header.stamp.nanosec), pose_stamps,
+                'an ~/aligned_points stamp is not a ~/pose stamp')
 
         # TF: map->odom and odom->base_link at (nearly) every frame, composing to the published
         # pose

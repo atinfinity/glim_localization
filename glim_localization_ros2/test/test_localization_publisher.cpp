@@ -11,6 +11,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstring>
+#include <fstream>
 #include <map>
 #include <thread>
 
@@ -23,6 +24,8 @@
 #include "tf2_msgs/msg/tf_message.hpp"
 #include "tf2_ros/transform_broadcaster.h"
 
+#include "glim/util/config.hpp"
+#include "glim_localization_ros2/estimate_bridge.hpp"
 #include "glim_localization_ros2/localization_publisher.hpp"
 
 namespace
@@ -193,9 +196,9 @@ public:
     spin_for(200ms);
   }
 
-  /// Subscribe to ~/aligned_points (not by default: the cloud is built only for a subscriber) and
-  /// wait until the publisher sees the subscription
-  void subscribe_aligned_points()
+  /// Subscribe to ~/aligned_points (not by default: the cloud is built only for a subscriber) and,
+  /// with wait, wait until the publisher sees the subscription
+  void subscribe_aligned_points(bool wait = true)
   {
     const std::string topic = std::string("/") + node_->get_name() + "/aligned_points";
     const auto on_cloud = [this](sensor_msgs::msg::PointCloud2::ConstSharedPtr msg) {
@@ -203,6 +206,9 @@ public:
       };
     aligned_points_sub_ = observer_->create_subscription<sensor_msgs::msg::PointCloud2>(topic,
         rclcpp::SensorDataQoS(), on_cloud);
+    if (!wait) {
+      return;
+    }
     ASSERT_TRUE(spin_until([&] {return node_->count_subscribers(topic) >= 1;}))
       << "discovery timed out";
     spin_for(200ms);
@@ -1211,10 +1217,39 @@ TEST(LocalizationPublisher, AlignedPointsAreBuiltOnlyForASubscriber) {
     Fixture fixture(params, "publisher_aligned_off");
     fixture.wait_for_discovery(1);
     EXPECT_EQ(fixture.node_->count_publishers("/publisher_aligned_off/aligned_points"), 0u);
+    // A listener gets nothing, while ~/pose is published
+    fixture.subscribe_aligned_points(false);
+    fixture.spin_for(200ms);
     fixture.feed(make_frame_with_points(0));
     ASSERT_TRUE(fixture.spin_until([&] {return fixture.poses.size() >= 1;}));
+    fixture.spin_for(300ms);
+    EXPECT_TRUE(fixture.aligned_points.empty());
     EXPECT_EQ(fixture.publisher->aligned_clouds(), 0u);
   }
+}
+
+// read_publisher_params reads both keys from localization_ros and rejects a negative voxel
+TEST(LocalizationPublisher, AlignedPointsKeysAreReadFromTheConfig) {
+  const auto config_for = [](const std::string & name, const std::string & section) {
+      const std::string path = testing::TempDir() + name;
+      std::ofstream(path) << "{\"localization_ros\": {" << section << "}}";
+      return glim::Config(path);
+    };
+  const auto defaults = glim_localization_ros2::read_publisher_params(
+    config_for("aligned_points_default.json", ""));
+  EXPECT_TRUE(defaults.publish_aligned_points);
+  EXPECT_EQ(defaults.aligned_points_voxel, 0.0);
+
+  const auto params = glim_localization_ros2::read_publisher_params(
+    config_for("aligned_points_set.json",
+    "\"publish_aligned_points\": false, \"aligned_points_voxel\": 0.3"));
+  EXPECT_FALSE(params.publish_aligned_points);
+  EXPECT_DOUBLE_EQ(params.aligned_points_voxel, 0.3);
+
+  EXPECT_THROW(
+    glim_localization_ros2::read_publisher_params(
+      config_for("aligned_points_negative.json", "\"aligned_points_voxel\": -1")),
+    std::invalid_argument);
 }
 
 TEST(LocalizationPublisher, NegativeAlignedPointsVoxelIsRejected) {

@@ -30,8 +30,9 @@ from lifecycle_msgs.srv import ChangeState, GetState
 from rcl_interfaces.msg import Parameter, ParameterType, ParameterValue
 from rcl_interfaces.srv import SetParameters
 import rclpy
-from rclpy.qos import QoSProfile, ReliabilityPolicy
+from rclpy.qos import qos_profile_sensor_data, QoSProfile, ReliabilityPolicy
 from rosbag2_interfaces.srv import Resume
+from sensor_msgs.msg import PointCloud2
 from tf2_msgs.msg import TFMessage
 
 NODE = '/glim_localization'
@@ -161,11 +162,14 @@ def stamp_s(t):
 class R2Client:
     """A test node that drives the lifecycle of glim_localization and records its outputs."""
 
-    def __init__(self, name, data_dir, target=NODE):
+    def __init__(self, name, data_dir, target=NODE, aligned_points=False):
         """
         Create the client node.
 
         `target` is the fully qualified name of the node under test (GLIM's R1 node is /glim_ros).
+        With `aligned_points`, ~/aligned_points is subscribed (sensor data QoS) and the header and
+        width of each cloud are kept in `aligned_points`; off by default, since the node builds the
+        cloud only for a subscriber.
         """
         self.node = rclpy.create_node(name)
         qos = QoSProfile(depth=5000, reliability=ReliabilityPolicy.RELIABLE)
@@ -176,6 +180,12 @@ class R2Client:
             LocalizationStatus, f'{target}/status', self.statuses.append, qos)
         self.node.create_subscription(
             TFMessage, '/tf', lambda m: self.transforms.extend(m.transforms), qos)
+        self.aligned_points = []
+        if aligned_points:
+            self.node.create_subscription(
+                PointCloud2, f'{target}/aligned_points',
+                lambda m: self.aligned_points.append((m.header, m.width * m.height)),
+                qos_profile_sensor_data)
         self.change_state = self.node.create_client(ChangeState, f'{target}/change_state')
         self.get_state = self.node.create_client(GetState, f'{target}/get_state')
         self.set_parameters = self.node.create_client(SetParameters, f'{target}/set_parameters')
