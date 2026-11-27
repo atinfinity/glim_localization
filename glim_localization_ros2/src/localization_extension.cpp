@@ -206,6 +206,8 @@ private:
       spdlog::warn("[glim_localization] ignoring /initialpose: {}", error);
       return;
     }
+    // The stamp is frame time, like the GlimROS frames (cloud header + points_time_offset), so it
+    // is passed as is
     spdlog::info("[glim_localization] /initialpose received (min_stamp={:.3f})", min_stamp);
     glim_localization::LocalizationCallbacks::request_reset(T_map_imu, Eigen::Vector3d::Zero(),
         min_stamp);

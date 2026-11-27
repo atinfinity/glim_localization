@@ -5,7 +5,7 @@
 # https://opensource.org/licenses/MIT.
 
 """
-Shared parts of the R2 launch tests (test_r2_node.py, test_r2_imu_gap.py).
+Shared parts of the R2 launch tests (test_r2_node.py, test_r2_imu_gap.py, ...).
 
 Not a test module itself.
 """
@@ -75,12 +75,13 @@ def strip_comments(path):
     return load_launch_utils().load_json_with_comments(path)
 
 
-def make_config_dir():
+def make_config_dir(glim_ros_overrides=None):
     """
     Copy config/r2 (and the r1 files it refers to) with reliable, deep input queues.
 
     The installed config subscribes with the sensor_data profile (best effort), as GLIM does. A
     test must not lose a message in DDS: a lost IMU sample is an IMU gap and changes reset_count.
+    `glim_ros_overrides`, if given, is merged into the glim_ros section of config_ros.json.
     map_path is left to the ROS parameter. The copy is removed when the test process exits.
     """
     share = os.path.join(get_package_share_directory('glim_localization_ros2'), 'config')
@@ -94,6 +95,7 @@ def make_config_dir():
         'profile': 'default', 'reliability': 'reliable', 'depth': 10000}
     config['glim_ros']['points_qos'] = {
         'profile': 'default', 'reliability': 'reliable', 'depth': 1000}
+    config['glim_ros'].update(glim_ros_overrides or {})
     with open(path, 'w') as f:
         json.dump(config, f)
     return os.path.join(root, 'r2')
@@ -296,7 +298,7 @@ class R2Client:
         finally:
             self._stop_player(player)
 
-    def play_and_wait(self, bag, topics, during=None, node_matched=None):
+    def play_and_wait(self, bag, topics, during=None, node_matched=None, time_offset=0.0):
         """
         Play `topics` of the bag with /clock until a pose near the last ground truth stamp arrives.
 
@@ -307,11 +309,12 @@ class R2Client:
         Fails, never passes, when a deadline is reached; fails early, with the number of poses,
         when the bag has ended and no pose came for PLAYER_GRACE_S (for example a lost or rejected
         initial pose). The player exits at the end of the bag; the node does not. `node_matched`:
-        see _start_player.
+        see _start_player. `time_offset`: the node's points_time_offset, by which the pose stamps
+        are ahead of the ground truth stamps.
         """
         player = self._start_player(bag, topics, ['--topics'] + list(topics), node_matched)
         try:
-            last = self.gt_stamps[-1]
+            last = self.gt_stamps[-1] + time_offset
             deadline = time.monotonic() + DEADLINE_S
             ended_at = None
             while time.monotonic() < deadline:
@@ -360,15 +363,17 @@ class R2Client:
         best = min(candidates, key=lambda i: abs(self.gt_stamps[i] - stamp))
         return self.gt[best] if abs(self.gt_stamps[best] - stamp) < 0.005 else None
 
-    def pose_error_list(self, after):
+    def pose_error_list(self, after, time_offset=0.0):
         """
         Return the errors of the poses stamped at or after `after`.
 
-        A list of (stamp, translation error [m], rotation error [deg]).
+        A list of (stamp, translation error [m], rotation error [deg]). The stamps are those of the
+        ground truth: `time_offset` (the node's points_time_offset) is subtracted from each pose
+        stamp first.
         """
         errors = []
         for pose in self.poses:
-            stamp = stamp_s(pose.header.stamp)
+            stamp = stamp_s(pose.header.stamp) - time_offset
             if stamp < after:
                 continue
             gt = self.match_gt(stamp)
@@ -380,13 +385,13 @@ class R2Client:
                 rot_angle_deg((q.x, q.y, q.z, q.w), gt[4:8])))
         return errors
 
-    def pose_errors(self, after):
+    def pose_errors(self, after, time_offset=0.0):
         """
         Return the worst errors of the poses stamped at or after `after`, and how many.
 
-        The worst translation [m] and rotation [deg] error.
+        The worst translation [m] and rotation [deg] error. `time_offset`: see pose_error_list.
         """
-        errors = self.pose_error_list(after)
+        errors = self.pose_error_list(after, time_offset)
         return (
             max((e[1] for e in errors), default=0.0), max((e[2] for e in errors), default=0.0),
             len(errors))

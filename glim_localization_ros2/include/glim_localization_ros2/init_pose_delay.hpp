@@ -31,7 +31,9 @@ struct InitPoseDelay
   std::optional<double> late_by;
 };
 
-/// @param stamp             stamp of the pose [s]; 0 means "the next frame" and is always accepted
+/// @param stamp             stamp of the pose [s], in frame time like last_frame_stamp (not
+///                          shifted by points_time_offset); 0 means "the next frame" and is always
+///                          accepted
 /// @param last_frame_stamp  stamp of the last frame the odometry took off its input queue,
 ///                          estimated or dropped
 /// @param max_delay         max_init_pose_delay [s]
