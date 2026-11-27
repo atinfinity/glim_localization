@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="288" viewBox="0 0 760 288" font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif" role="img" aria-label="GPU mode: where a frame goes (about 5.1 ms)">
+<rect width="760" height="288" fill="#fcfcfb"/>
+<text x="16" y="24" font-size="15" font-weight="600" fill="#0b0b0b">GPU mode: where a frame goes (about 5.1 ms)</text>
+<text x="16" y="42" font-size="12" fill="#52514e">Median per frame, synthetic replay, RTX 2080 Ti. Odometry parts are approximate (±20 %).</text>
+<line x1="300.0" y1="52" x2="300.0" y2="242" stroke="#e4e3df" stroke-width="1"/>
+<text x="300.0" y="262" font-size="11" fill="#52514e" text-anchor="middle">0 ms</text>
+<line x1="397.5" y1="52" x2="397.5" y2="242" stroke="#e4e3df" stroke-width="1"/>
+<text x="397.5" y="262" font-size="11" fill="#52514e" text-anchor="middle">0.5 ms</text>
+<line x1="495.0" y1="52" x2="495.0" y2="242" stroke="#e4e3df" stroke-width="1"/>
+<text x="495.0" y="262" font-size="11" fill="#52514e" text-anchor="middle">1 ms</text>
+<line x1="592.5" y1="52" x2="592.5" y2="242" stroke="#e4e3df" stroke-width="1"/>
+<text x="592.5" y="262" font-size="11" fill="#52514e" text-anchor="middle">1.5 ms</text>
+<line x1="690.0" y1="52" x2="690.0" y2="242" stroke="#e4e3df" stroke-width="1"/>
+<text x="690.0" y="262" font-size="11" fill="#52514e" text-anchor="middle">2 ms</text>
+<text x="290" y="67.0" font-size="12" fill="#0b0b0b" text-anchor="end">Preprocessing (GLIM)</text>
+<path d="M300.0,56.0 H676.2 Q680.2,56.0 680.2,60.0 V66.0 Q680.2,70.0 676.2,70.0 H300.0 Z" fill="#2a78d6"><title>Preprocessing (GLIM), GPU module: 1.95  ms</title></path>
+<text x="686.2" y="67" font-size="11" fill="#52514e">1.95  ms</text>
+<text x="290" y="95.0" font-size="12" fill="#0b0b0b" text-anchor="end">CPU overlap (tile selection, inlier ratio)</text>
+<path d="M300.0,84.0 H479.3 Q483.3,84.0 483.3,88.0 V94.0 Q483.3,98.0 479.3,98.0 H300.0 Z" fill="#2a78d6"><title>CPU overlap (tile selection, inlier ratio), GPU module: 0.94  ms</title></path>
+<text x="489.3" y="95" font-size="11" fill="#52514e">0.94  ms</text>
+<text x="290" y="123.0" font-size="12" fill="#0b0b0b" text-anchor="end">Smoother update (incl. GPU linearization)</text>
+<path d="M300.0,112.0 H428.6 Q432.6,112.0 432.6,116.0 V122.0 Q432.6,126.0 428.6,126.0 H300.0 Z" fill="#2a78d6"><title>Smoother update (incl. GPU linearization), GPU module: 0.68  ms</title></path>
+<text x="438.6" y="123" font-size="11" fill="#52514e">0.68  ms</text>
+<text x="290" y="151.0" font-size="12" fill="#0b0b0b" text-anchor="end">Covariance estimation (GLIM)</text>
+<path d="M300.0,140.0 H403.2 Q407.2,140.0 407.2,144.0 V150.0 Q407.2,154.0 403.2,154.0 H300.0 Z" fill="#2a78d6"><title>Covariance estimation (GLIM), GPU module: 0.55  ms</title></path>
+<text x="413.2" y="151" font-size="11" fill="#52514e">0.55  ms</text>
+<text x="290" y="179.0" font-size="12" fill="#0b0b0b" text-anchor="end">Map quality (GPU residuals)</text>
+<path d="M300.0,168.0 H372.1 Q376.1,168.0 376.1,172.0 V178.0 Q376.1,182.0 372.1,182.0 H300.0 Z" fill="#2a78d6"><title>Map quality (GPU residuals), GPU module: 0.39  ms</title></path>
+<text x="382.1" y="179" font-size="11" fill="#52514e">0.39  ms</text>
+<text x="290" y="207.0" font-size="12" fill="#0b0b0b" text-anchor="end">Frame upload</text>
+<path d="M300.0,196.0 H362.3 Q366.3,196.0 366.3,200.0 V206.0 Q366.3,210.0 362.3,210.0 H300.0 Z" fill="#2a78d6"><title>Frame upload, GPU module: 0.34  ms</title></path>
+<text x="372.3" y="207" font-size="11" fill="#52514e">0.34  ms</text>
+<text x="290" y="235.0" font-size="12" fill="#0b0b0b" text-anchor="end">Other (tile cache, deskew)</text>
+<path d="M300.0,224.0 H344.8 Q348.8,224.0 348.8,228.0 V234.0 Q348.8,238.0 344.8,238.0 H300.0 Z" fill="#2a78d6"><title>Other (tile cache, deskew), GPU module: 0.25  ms</title></path>
+<text x="354.8" y="235" font-size="11" fill="#52514e">0.25  ms</text>
+<line x1="300" y1="52" x2="300" y2="242" stroke="#52514e" stroke-width="1"/>
+</svg>
