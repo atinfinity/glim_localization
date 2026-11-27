@@ -5,7 +5,7 @@
 # https://opensource.org/licenses/MIT.
 
 """
-R2 with points_time_offset: pose stamps are moved into frame time like the frames.
+R2 with points_time_offset: pose stamps are frame time and are not shifted.
 
 Headless; no display.
 
@@ -15,11 +15,12 @@ Inputs come from scripts/test_colcon.sh (see there), through environment variabl
   GLIM_R1_MAP   the map dump of the same scene
 
 The node runs with imu_time_offset = points_time_offset = OFFSET_S, so every frame (and every
-published stamp) is OFFSET_S ahead of the bag's header stamps. A pose stamp is sensor time, like
-the cloud header, and must be shifted by the same offset before the late-pose check and reset().
-Without the shift, the ~/initialize at the last frame after the playback is rejected as late by
-OFFSET_S, and the one before the playback applies at the first frame instead of its own.
-Assertions are on stamps and bounds, not on timing; deadlines fail the test.
+published stamp) is OFFSET_S ahead of the bag's header stamps (frame time = cloud header +
+points_time_offset). The stamp of /initialpose and ~/initialize is frame time too, the time base of
+~/pose, TF and RViz's now(), and the node compares it with the frames as it is. A node that added
+the offset to the pose stamp would apply the first pose OFFSET_S late, and would accept a pose
+stamped with the raw cloud header of the last frame. Assertions are on stamps and bounds, not on
+timing; deadlines fail the test.
 """
 import os
 import sys
@@ -72,13 +73,13 @@ class TestR2TimeOffset(unittest.TestCase):
         cls.client.destroy()
         rclpy.shutdown()
 
-    def call_initialize(self, gt_row):
-        """Call ~/initialize with a ground truth pose, stamped with its (sensor time) stamp."""
+    def call_initialize(self, gt_row, stamp):
+        """Call ~/initialize with a ground truth pose and the given stamp [s]."""
         request = Initialize.Request()
         request.pose = PoseWithCovarianceStamped()
         request.pose.header.frame_id = 'map'
-        request.pose.header.stamp.sec = int(gt_row[0])
-        request.pose.header.stamp.nanosec = int(round((gt_row[0] - int(gt_row[0])) * 1e9))
+        request.pose.header.stamp.sec = int(stamp)
+        request.pose.header.stamp.nanosec = int(round((stamp - int(stamp)) * 1e9))
         p, q = request.pose.pose.pose.position, request.pose.pose.pose.orientation
         p.x, p.y, p.z = gt_row[1:4]
         q.x, q.y, q.z, q.w = gt_row[4:8]
@@ -91,9 +92,10 @@ class TestR2TimeOffset(unittest.TestCase):
         self.assertEqual(c.state(), State.PRIMARY_STATE_ACTIVE)
         c.wait_for_subscribers(['/imu', '/points'])
 
-        # Before the playback: the pose of the frame at INIT_AT_S applies at that frame
+        # Before the playback: the pose of the frame at INIT_AT_S, stamped with its frame time,
+        # applies at that frame
         init = next(row for row in c.gt if row[0] >= c.gt_stamps[0] + INIT_AT_S - 1e-6)
-        response = self.call_initialize(init)
+        response = self.call_initialize(init, init[0] + OFFSET_S)
         self.assertTrue(response.success, response.message)
         c.play_and_wait(
             r2_helpers.require_env('GLIM_R1_BAG'), ['/imu', '/points'],
@@ -108,13 +110,16 @@ class TestR2TimeOffset(unittest.TestCase):
         self.assertLessEqual(worst_trans, MAX_TRANS_M, f'translation error {worst_trans:.3f} m')
         self.assertLessEqual(worst_rot, MAX_ROT_DEG, f'rotation error {worst_rot:.3f} deg')
 
-        # After the playback: the late-pose check compares in frame time. A pose stamped near the
-        # start is far too late; one stamped with the last frame's cloud stamp is on time (before
-        # the shift it was late by OFFSET_S)
-        response = self.call_initialize(c.gt[1])
-        self.assertFalse(response.success, 'a stale ~/initialize was accepted')
-        self.assertIn('too late', response.message)
-        response = self.call_initialize(c.gt[-1])
+        # After the playback: the late-pose check compares frame times. A pose at an early frame
+        # time is far too late, and so is one stamped with the raw cloud header of the last frame
+        # (late by OFFSET_S); one at the last frame time is on time
+        for row, stamp, what in (
+                (c.gt[1], c.gt[1][0] + OFFSET_S, 'an early frame time'),
+                (c.gt[-1], c.gt[-1][0], 'the raw cloud header of the last frame')):
+            response = self.call_initialize(row, stamp)
+            self.assertFalse(response.success, f'a ~/initialize at {what} was accepted')
+            self.assertIn('too late', response.message)
+        response = self.call_initialize(c.gt[-1], c.gt[-1][0] + OFFSET_S)
         self.assertTrue(response.success, response.message)
         print(
             f'R2 time offset: {len(c.poses)} poses, first at {first:.3f} '
