@@ -1,6 +1,9 @@
 // Writes a synthetic map dump and a matching replay dataset. Not installed.
+#include <cerrno>
+#include <climits>
 #include <cstdlib>
 #include <iostream>
+#include <string>
 
 #include "synthetic/synthetic_map.hpp"
 #include "synthetic/synthetic_replay.hpp"
@@ -10,7 +13,8 @@ int main(int argc, char** argv) {
     std::cerr << "usage: synthetic_replay_dataset <out_dir> [duration_s=12] [seed]\n"
               << "  writes <out_dir>/map (a GLIM dump), <out_dir>/map.pcd (the same points as one cloud),\n"
               << "  and <out_dir>/data (a replay dataset with traj_gt.txt)\n"
-              << "  seed: the noise of the map points and of the LiDAR ranges (default: the fixed seeds of the tests)" << std::endl;
+              << "  seed: 0 to " << UINT_MAX - 1 << ", the noise of the map points (seed) and of the LiDAR ranges (seed + 1);\n"
+              << "  the geometry does not change (default: the fixed seeds of the tests)" << std::endl;
     return 2;
   }
   const std::string out = argv[1];
@@ -19,12 +23,24 @@ int main(int argc, char** argv) {
     std::cerr << "invalid duration" << std::endl;
     return 2;
   }
+  unsigned long seed = 0;
+  if (argc == 4) {
+    // Digits only and below UINT_MAX, so seed + 1 for the LiDAR noise does not wrap.
+    const std::string text = argv[3];
+    char* end = nullptr;
+    errno = 0;
+    seed = std::strtoul(text.c_str(), &end, 10);
+    if (text.empty() || text.find_first_not_of("0123456789") != std::string::npos || errno == ERANGE || *end != '\0' ||
+        seed >= UINT_MAX) {
+      std::cerr << "invalid seed: " << text << std::endl;
+      return 2;
+    }
+  }
 
   try {
     auto map_params = glim_localization::test::replay_map_params();
     glim_localization::test::SyntheticReplayOptions options;
     if (argc == 4) {
-      const unsigned long seed = std::strtoul(argv[3], nullptr, 10);
       map_params.seed = static_cast<unsigned int>(seed);
       options.lidar.seed = static_cast<unsigned int>(seed + 1);
     }
