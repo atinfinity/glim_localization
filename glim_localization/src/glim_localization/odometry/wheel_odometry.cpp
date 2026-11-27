@@ -95,6 +95,10 @@ WheelOdometrySample WheelOdometryBuffer::interpolate(double t) const {
 
 std::optional<Eigen::Isometry3d> WheelOdometryBuffer::integrate(double t0, double t1) const {
   std::lock_guard<std::mutex> lock(mutex_);
+  return integrate_locked(t0, t1);
+}
+
+std::optional<Eigen::Isometry3d> WheelOdometryBuffer::integrate_locked(double t0, double t1) const {
   if (samples_.empty() || !(t1 > t0)) {
     return std::nullopt;
   }
@@ -132,6 +136,25 @@ std::optional<Eigen::Isometry3d> WheelOdometryBuffer::integrate(double t0, doubl
 
 std::optional<WheelOdometrySample> WheelOdometryBuffer::twist_at(double t) const {
   std::lock_guard<std::mutex> lock(mutex_);
+  return twist_at_locked(t);
+}
+
+std::optional<WheelOdometryMotion> WheelOdometryBuffer::motion(double t0, double t1) const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  const auto T_base = integrate_locked(t0, t1);
+  const auto twist0 = twist_at_locked(t0);
+  const auto twist1 = twist_at_locked(t1);
+  if (!T_base || !twist0 || !twist1) {
+    return std::nullopt;
+  }
+  WheelOdometryMotion motion;
+  motion.T_base = *T_base;
+  motion.twist0 = *twist0;
+  motion.twist1 = *twist1;
+  return motion;
+}
+
+std::optional<WheelOdometrySample> WheelOdometryBuffer::twist_at_locked(double t) const {
   if (samples_.empty() || !std::isfinite(t)) {
     return std::nullopt;
   }
