@@ -3,8 +3,10 @@
 #include <filesystem>
 #include <functional>
 #include <iostream>
+#include <iterator>
 #include <limits>
 #include <memory>
+#include <random>
 #include <string>
 #include <vector>
 
@@ -193,6 +195,71 @@ TEST(WheelOdometryBufferTest, NonholonomicDropsLateralAndVerticalVelocity) {
   EXPECT_NEAR(T->translation().x(), 0.1, 1e-12);
   EXPECT_NEAR(T->translation().y(), 0.0, 1e-12);
   EXPECT_NEAR(T->translation().z(), 0.0, 1e-12);
+}
+
+TEST(WheelOdometryBufferTest, TwistAtInterpolatesWithinCoverage) {
+  WheelOdometryParams params;
+  params.max_gap = 0.1;
+  WheelOdometryBuffer buffer(params);
+  EXPECT_FALSE(buffer.twist_at(1.0));  // Empty
+  ASSERT_TRUE(buffer.insert(1.0, Eigen::Vector3d(1.0, 0.0, 0.0), Eigen::Vector3d(0.0, 0.0, 0.2)));
+  ASSERT_TRUE(buffer.insert(1.1, Eigen::Vector3d(2.0, 0.0, 0.0), Eigen::Vector3d(0.0, 0.0, 0.4)));
+  ASSERT_TRUE(buffer.insert(1.5, Eigen::Vector3d(3.0, 0.0, 0.0), Eigen::Vector3d(0.0, 0.0, 0.6)));  // A 0.4 s hole
+
+  const auto mid = buffer.twist_at(1.025);
+  ASSERT_TRUE(mid);
+  EXPECT_DOUBLE_EQ(mid->stamp, 1.025);
+  EXPECT_NEAR(mid->linear.x(), 1.25, 1e-12);
+  EXPECT_NEAR(mid->angular.z(), 0.25, 1e-12);
+  const auto at_sample = buffer.twist_at(1.1);
+  ASSERT_TRUE(at_sample);
+  EXPECT_NEAR(at_sample->linear.x(), 2.0, 1e-12);
+
+  // Held within max_gap past the ends, empty further out and inside the hole
+  const auto before = buffer.twist_at(0.95);
+  ASSERT_TRUE(before);
+  EXPECT_NEAR(before->linear.x(), 1.0, 1e-12);
+  const auto after = buffer.twist_at(1.58);
+  ASSERT_TRUE(after);
+  EXPECT_NEAR(after->linear.x(), 3.0, 1e-12);
+  EXPECT_FALSE(buffer.twist_at(0.85));
+  EXPECT_FALSE(buffer.twist_at(1.65));
+  EXPECT_FALSE(buffer.twist_at(1.3));
+  EXPECT_FALSE(buffer.twist_at(std::nan("")));
+}
+
+// The IMU velocity of a base twist, in closed form with a lever arm and a turned base, and against the differentiated
+// wheel motion that the factor uses (integrate and T_imu_base * T_base * T_imu_base^-1)
+TEST(WheelOdometryBufferTest, VelocityInImuAppliesTheLeverArm) {
+  WheelOdometryParams params;
+  // The base 1 m ahead of the IMU, turned 90 deg: its forward axis is the IMU's y axis, and the IMU is 1 m to the left
+  // of the base origin (p = (0, 1, 0) in the base frame)
+  params.T_imu_base = make_pose(Eigen::Vector3d(1.0, 0.0, 0.0), M_PI / 2.0);
+  WheelOdometrySample twist;
+  twist.linear = Eigen::Vector3d(2.0, 0.0, 0.0);
+  twist.angular = Eigen::Vector3d(0.0, 0.0, 0.5);
+  // Turning left, a point 1 m to the left moves 0.5 m/s slower, along the base forward axis
+  EXPECT_TRUE(wheel_velocity_in_imu(params, twist).isApprox(Eigen::Vector3d(0.0, 1.5, 0.0), 1e-12));
+  twist.angular.setZero();
+  EXPECT_TRUE(wheel_velocity_in_imu(params, twist).isApprox(Eigen::Vector3d(0.0, 2.0, 0.0), 1e-12));
+  // Turning in place, the IMU moves on a circle around the base origin: w x p = (-0.5, 0, 0) in the base frame
+  twist.linear.setZero();
+  twist.angular = Eigen::Vector3d(0.0, 0.0, 0.5);
+  EXPECT_TRUE(wheel_velocity_in_imu(params, twist).isApprox(Eigen::Vector3d(0.0, -0.5, 0.0), 1e-12));
+
+  // A rolled, pitched and turned base with a 3D twist: the velocity is the derivative of the IMU motion
+  params.T_imu_base = test_T_imu_base();
+  params.T_imu_base.linear() = (Eigen::AngleAxisd(0.3, Eigen::Vector3d::UnitX()) * params.T_imu_base.linear()).eval();
+  twist.linear = Eigen::Vector3d(1.2, -0.1, 0.05);
+  twist.angular = Eigen::Vector3d(0.1, -0.05, 0.7);
+  WheelOdometryBuffer buffer(params);
+  ASSERT_TRUE(buffer.insert(0.0, twist.linear, twist.angular));
+  ASSERT_TRUE(buffer.insert(0.1, twist.linear, twist.angular));
+  constexpr double kDt = 1e-6;
+  const auto T_base = buffer.integrate(0.0, kDt);
+  ASSERT_TRUE(T_base);
+  const Eigen::Isometry3d T_imu = params.T_imu_base * *T_base * params.T_imu_base.inverse();
+  EXPECT_TRUE(wheel_velocity_in_imu(params, twist).isApprox(T_imu.translation() / kDt, 1e-5));
 }
 
 // The measured IMU motion against closed forms, with a base that is rolled, pitched and turned on the IMU
@@ -654,4 +721,309 @@ TEST_F(WheelOdometryTest, ReadmitsWheelFactorsAfterAWrongVelocity) {
   EXPECT_LT(readmit.final_error, 1.0);
   EXPECT_LT(readmit.final_error, 0.5 * readmit.max_error);
   EXPECT_LT(readmit.final_error, 0.1 * lockout.final_error);
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// IMU gap self-reset extrapolated with wheel odometry (wheel_odom_reset_extrapolation)
+
+namespace {
+
+using Trajectory = std::function<Eigen::Isometry3d(double)>;
+
+constexpr double kGapDiffStep = 1e-3;
+constexpr double kGapStartTime = 4.0;  ///< Frames from here, so that the run is short
+constexpr double kGapEndTime = 7.0;
+constexpr double kGapBegin = 5.25;  ///< No IMU samples in [kGapBegin, kGapEnd): a 0.31 s gap
+constexpr double kGapEnd = 5.55;
+constexpr double kResetStamp = 5.7;  ///< The first clean frame; the last estimate before the gap is at 5.2 s
+
+/// Straight at 3 m/s with a heading of 0.4 rad, braking smoothly to a stop over [4.5, 6.5] s (2.8 m/s^2 at 5.5 s)
+Eigen::Isometry3d braking_T_world_imu(double t) {
+  constexpr double kSpeed = 3.0;
+  constexpr double kBrakeStart = 4.5;
+  constexpr double kBrakeTime = 2.0;
+  constexpr double kHeading = 0.4;
+  double s = kSpeed * t;
+  if (t > kBrakeStart) {
+    const double u = std::min((t - kBrakeStart) / kBrakeTime, 1.0);
+    s = kSpeed * (kBrakeStart + kBrakeTime * (u - u * u * u * u * (2.5 + u * (-3.0 + u))));
+  }
+  return make_pose(Eigen::Vector3d(5.0 + s * std::cos(kHeading), s * std::sin(kHeading), 1.0), kHeading);
+}
+
+/// A circle of radius 2.5 m at 2 m/s: 0.8 rad/s, so the yaw turns 0.32 rad over the 0.4 s from the last estimate
+Eigen::Isometry3d turning_T_world_imu(double t) {
+  constexpr double kSpeed = 2.0;
+  constexpr double kYawRate = 0.8;
+  constexpr double kRadius = kSpeed / kYawRate;
+  const double yaw = kYawRate * t;
+  return make_pose(Eigen::Vector3d(5.0 + kRadius * std::sin(yaw), -kRadius * std::cos(yaw), 1.0), yaw);
+}
+
+Eigen::Vector3d trajectory_velocity(const Trajectory& T_world_imu, double t) {
+  return (T_world_imu(t + kGapDiffStep).translation() - T_world_imu(t - kGapDiffStep).translation()) / (2.0 * kGapDiffStep);
+}
+
+/// IMU samples at 100 Hz along the trajectory (zero bias, the default noise), as make_synthetic_imu
+std::vector<SyntheticImuSample> make_trajectory_imu(const Trajectory& T_world_imu, double t_begin, double t_end) {
+  const SyntheticImuParams params;
+  std::mt19937 rng(params.seed);
+  std::normal_distribution<double> unit(0.0, 1.0);
+  const auto noise = [&](double sigma) { return Eigen::Vector3d(sigma * unit(rng), sigma * unit(rng), sigma * unit(rng)); };
+  std::vector<SyntheticImuSample> samples;
+  for (int i = 0; t_begin + i / params.rate <= t_end + 1e-9; i++) {
+    const double t = t_begin + i / params.rate;
+    const Eigen::Isometry3d T_prev = T_world_imu(t - kGapDiffStep);
+    const Eigen::Isometry3d T_curr = T_world_imu(t);
+    const Eigen::Isometry3d T_next = T_world_imu(t + kGapDiffStep);
+    const Eigen::Vector3d a_world = (T_next.translation() - 2.0 * T_curr.translation() + T_prev.translation()) / (kGapDiffStep * kGapDiffStep);
+    const Eigen::AngleAxisd delta(T_prev.linear().transpose() * T_next.linear());
+    SyntheticImuSample sample;
+    sample.stamp = t;
+    sample.linear_acc = T_curr.linear().transpose() * (a_world + Eigen::Vector3d(0.0, 0.0, 9.81)) + noise(params.acc_noise);
+    sample.angular_vel = delta.axis() * delta.angle() / (2.0 * kGapDiffStep) + noise(params.gyro_noise);
+    samples.push_back(sample);
+  }
+  return samples;
+}
+
+/// The exact base twist along the trajectory at kWheelRate, as make_synthetic_wheel
+WheelSamples make_trajectory_wheel(const Trajectory& T_world_imu, double t_begin, double t_end, const Eigen::Isometry3d& T_imu_base) {
+  WheelSamples samples;
+  for (int i = 0; t_begin + i / kWheelRate <= t_end + 1e-9; i++) {
+    const double t = t_begin + i / kWheelRate;
+    const Eigen::Isometry3d T0 = T_world_imu(t - kGapDiffStep) * T_imu_base;
+    const Eigen::Isometry3d T1 = T_world_imu(t + kGapDiffStep) * T_imu_base;
+    const gtsam::Vector6 xi = gtsam::Pose3::Logmap(gtsam::Pose3((T0.inverse() * T1).matrix())) / (2.0 * kGapDiffStep);
+    WheelOdometrySample sample;
+    sample.stamp = t;
+    sample.angular = xi.head<3>();
+    sample.linear = xi.tail<3>();
+    samples.push_back(sample);
+  }
+  return samples;
+}
+
+double yaw_of(const Eigen::Matrix3d& R) {
+  return std::atan2(R(1, 0), R(0, 0));
+}
+
+double wrap_angle(double angle) {
+  return std::atan2(std::sin(angle), std::cos(angle));
+}
+
+/// The reset state of today's IMU gap path: the last pose moved by its velocity, the orientation held
+Eigen::Isometry3d constant_velocity_reset(const glim::EstimationFrame& last, double stamp) {
+  Eigen::Isometry3d T = last.T_world_imu;
+  T.translation() += last.v_world_imu * (stamp - last.stamp);
+  return T;
+}
+
+}  // namespace
+
+class WheelGapResetTest : public WheelOdometryTest {
+protected:
+  struct GapRun {
+    std::vector<glim::EstimationFrame::ConstPtr> estimates;
+    glim::EstimationFrame::ConstPtr before;  ///< The last estimate before the gap
+    glim::EstimationFrame::ConstPtr after;   ///< The first estimate after it (the reset frame)
+    int dropped = 0;
+    LocalizationStatus status;
+    bool used_wheel = false;
+    double translation_error = 0.0;  ///< Of the reset frame [m]
+    double yaw_error = 0.0;          ///< Of the reset frame [deg]
+    double velocity_error = 0.0;     ///< Of the reset frame [m/s]
+    double max_error_after = 0.0;    ///< Translation, over the frames from the reset to the end [m]
+  };
+
+  /// The far map (no LiDAR constraint), wheel odometry on with test_T_imu_base, starting at the truth at kGapStartTime
+  static OdometryEstimationLocalizationCPU::Params gap_params(const Trajectory& T_world_imu, bool reset_extrapolation, int num_threads = 2) {
+    auto params = make_params(num_threads);
+    params.init_T_world_imu = T_world_imu(kGapStartTime);
+    params.init_v_world_imu = trajectory_velocity(T_world_imu, kGapStartTime);
+    params.imu_bias.setZero();
+    params.wheel_odom.enabled = true;
+    params.wheel_odom.T_imu_base = test_T_imu_base();
+    params.wheel_odom.reset_extrapolation = reset_extrapolation;
+    return params;
+  }
+
+  /// Feed the frames in [kGapStartTime, kGapEndTime] with the trajectory's IMU (none in [kGapBegin, kGapEnd)) and the
+  /// given wheel samples, as feed() does
+  static GapRun run_gap(const OdometryEstimationLocalizationCPU::Params& params, const Trajectory& T_world_imu, const WheelSamples* wheel) {
+    const auto imu = make_trajectory_imu(T_world_imu, kGapStartTime - 0.2, kGapEndTime + 0.05);
+    OdometryEstimationLocalizationCPU odometry(params, *far_map_);
+    GapRun run;
+    size_t imu_cursor = 0;
+    size_t wheel_cursor = 0;
+    const double begin = kGapStartTime - 0.1;
+    while (imu_cursor < imu.size() && imu[imu_cursor].stamp < begin) {
+      imu_cursor++;
+    }
+    while (wheel && wheel_cursor < wheel->size() && (*wheel)[wheel_cursor].stamp < begin) {
+      wheel_cursor++;
+    }
+    std::vector<glim::EstimationFrame::ConstPtr> marginalized;
+    for (const auto& frame : *frames_) {
+      if (frame->stamp < kGapStartTime - 1e-6 || frame->stamp > kGapEndTime + 1e-6) {
+        continue;
+      }
+      for (; imu_cursor < imu.size() && imu[imu_cursor].stamp <= frame->stamp + 0.02; imu_cursor++) {
+        const auto& sample = imu[imu_cursor];
+        if (sample.stamp < kGapBegin - 1e-9 || sample.stamp >= kGapEnd - 1e-9) {
+          odometry.insert_imu(sample.stamp, sample.linear_acc, sample.angular_vel);
+        }
+      }
+      for (; wheel && wheel_cursor < wheel->size() && (*wheel)[wheel_cursor].stamp <= frame->stamp + 0.02; wheel_cursor++) {
+        const auto& sample = (*wheel)[wheel_cursor];
+        odometry.insert_wheel_odom(sample.stamp, sample.linear, sample.angular);
+      }
+      const auto estimate = odometry.insert_frame(frame, marginalized);
+      if (!estimate) {
+        run.dropped++;
+        continue;
+      }
+      if (run.dropped > 0 && !run.after) {
+        run.before = run.estimates.empty() ? nullptr : run.estimates.back();
+        run.after = estimate;
+        run.used_wheel = odometry.last_reset_used_wheel();
+      }
+      run.estimates.push_back(estimate);
+      if (run.after) {
+        const Eigen::Isometry3d error = T_world_imu(estimate->stamp).inverse() * estimate->T_world_imu;
+        run.max_error_after = std::max(run.max_error_after, error.translation().norm());
+      }
+    }
+    run.status = odometry.status();
+    if (run.after) {
+      const Eigen::Isometry3d truth = T_world_imu(run.after->stamp);
+      run.translation_error = (truth.translation() - run.after->T_world_imu.translation()).norm();
+      run.yaw_error = std::abs(wrap_angle(yaw_of(run.after->T_world_imu.linear()) - yaw_of(truth.linear()))) * 180.0 / M_PI;
+      run.velocity_error = (trajectory_velocity(T_world_imu, run.after->stamp) - run.after->v_world_imu).norm();
+    }
+    return run;
+  }
+
+  static void print(const std::string& name, const GapRun& run) {
+    std::cout << name << ": reset error " << run.translation_error << " m, yaw " << run.yaw_error << " deg, velocity " << run.velocity_error
+              << " m/s; max error after the reset " << run.max_error_after << " m; wheel " << run.used_wheel << ", dropped " << run.dropped
+              << ", wheel_gated " << run.status.wheel_gated << std::endl;
+  }
+
+  /// The gap was handled by one self-reset at kResetStamp, and estimation went on to the end
+  static void expect_one_gap_reset(const GapRun& run) {
+    ASSERT_TRUE(run.before);
+    ASSERT_TRUE(run.after);
+    EXPECT_NEAR(run.before->stamp, kResetStamp - 0.5, 1e-6);
+    EXPECT_NEAR(run.after->stamp, kResetStamp, 1e-6);
+    EXPECT_EQ(run.dropped, 4);
+    EXPECT_EQ(run.status.reset_count, 1);
+    EXPECT_EQ(run.status.last_reset_reason, ResetReason::IMU_GAP);
+    EXPECT_NE(run.status.state, LocalizationState::LOST);
+    EXPECT_NEAR(run.estimates.back()->stamp, kGapEndTime, 1e-6);
+  }
+
+  /// The reset frame is today's constant velocity extrapolation of the last estimate. The first frame is the
+  /// optimized prior with the IMU factors of its own interval, so it sits a little off the prior: up to 0.3 mrad and
+  /// 5 mm/s here. The wheel extrapolation is centimeters and degrees away in every case below.
+  static void expect_constant_velocity_reset(const GapRun& run) {
+    ASSERT_TRUE(run.before && run.after);
+    const Eigen::Isometry3d expected = constant_velocity_reset(*run.before, run.after->stamp);
+    EXPECT_LT((run.after->T_world_imu.translation() - expected.translation()).norm(), 1e-3);
+    EXPECT_LT(Eigen::AngleAxisd(expected.linear().transpose() * run.after->T_world_imu.linear()).angle(), 2e-3);
+    EXPECT_LT((run.after->v_world_imu - run.before->v_world_imu).norm(), 2e-2);
+  }
+
+  /// With the key on the reset frame is far closer to the truth, and so are the frames after it
+  static void expect_wheel_reset_better(const GapRun& off, const GapRun& on) {
+    expect_one_gap_reset(off);
+    expect_one_gap_reset(on);
+    EXPECT_FALSE(off.used_wheel);
+    EXPECT_TRUE(on.used_wheel);
+    expect_constant_velocity_reset(off);
+    EXPECT_LT(on.translation_error, 0.05);
+    EXPECT_LT(on.translation_error, 0.25 * off.translation_error);
+    EXPECT_LT(on.velocity_error, 0.1);
+    EXPECT_LT(on.velocity_error, 0.25 * off.velocity_error);
+    EXPECT_LT(on.yaw_error, 0.5);
+    EXPECT_LT(on.max_error_after, 0.5 * off.max_error_after);
+  }
+};
+
+// Braking through the gap: the constant velocity overshoots, and the velocity it restarts with is too high
+TEST_F(WheelGapResetTest, ExtrapolatesWithTheWheelsWhileBraking) {
+  const Trajectory trajectory = braking_T_world_imu;
+  const WheelSamples wheel = make_trajectory_wheel(trajectory, kGapStartTime - 0.2, kGapEndTime + 0.05, test_T_imu_base());
+  const GapRun off = run_gap(gap_params(trajectory, false), trajectory, &wheel);
+  const GapRun on = run_gap(gap_params(trajectory, true), trajectory, &wheel);
+  print("braking, key off", off);
+  print("braking, key on", on);
+  expect_wheel_reset_better(off, on);
+}
+
+// Turning through the gap: the held orientation misses the turn, and the position and velocity miss the arc
+TEST_F(WheelGapResetTest, ExtrapolatesWithTheWheelsWhileTurning) {
+  const Trajectory trajectory = turning_T_world_imu;
+  const WheelSamples wheel = make_trajectory_wheel(trajectory, kGapStartTime - 0.2, kGapEndTime + 0.05, test_T_imu_base());
+  const GapRun off = run_gap(gap_params(trajectory, false), trajectory, &wheel);
+  const GapRun on = run_gap(gap_params(trajectory, true), trajectory, &wheel);
+  print("turning, key off", off);
+  print("turning, key on", on);
+  expect_wheel_reset_better(off, on);
+  EXPECT_GT(off.yaw_error, 10.0);  // 0.32 rad of turn held
+  EXPECT_LT(on.yaw_error, 0.1 * off.yaw_error);
+}
+
+// Without wheel_odom_enabled the key does nothing: bit-identical to the key off, with the samples fed (and dropped)
+TEST_F(WheelGapResetTest, KeyWithoutWheelOdometryIsIdentical) {
+  const Trajectory trajectory = turning_T_world_imu;
+  const WheelSamples wheel = make_trajectory_wheel(trajectory, kGapStartTime - 0.2, kGapEndTime + 0.05, test_T_imu_base());
+  auto off = gap_params(trajectory, false, 1);
+  off.wheel_odom.enabled = false;
+  auto on = off;
+  on.wheel_odom.reset_extrapolation = true;
+  const GapRun reference = run_gap(off, trajectory, &wheel);
+  const GapRun keyed = run_gap(on, trajectory, &wheel);
+  expect_one_gap_reset(reference);
+  expect_constant_velocity_reset(reference);
+  EXPECT_FALSE(keyed.used_wheel);
+  ASSERT_EQ(keyed.estimates.size(), reference.estimates.size());
+  for (size_t i = 0; i < reference.estimates.size(); i++) {
+    EXPECT_EQ(keyed.estimates[i]->T_world_imu.matrix(), reference.estimates[i]->T_world_imu.matrix()) << "i=" << i;
+    EXPECT_EQ(keyed.estimates[i]->v_world_imu, reference.estimates[i]->v_world_imu) << "i=" << i;
+  }
+}
+
+// Without samples, or with a hole above wheel_odom_max_gap across the gap, the reset falls back to today's path
+TEST_F(WheelGapResetTest, FallsBackWithoutWheelCoverage) {
+  const Trajectory trajectory = braking_T_world_imu;
+  const WheelSamples wheel = make_trajectory_wheel(trajectory, kGapStartTime - 0.2, kGapEndTime + 0.05, test_T_imu_base());
+  WheelSamples holed;
+  std::copy_if(wheel.begin(), wheel.end(), std::back_inserter(holed), [](const auto& s) { return s.stamp < 5.25 || s.stamp > 5.5; });
+  const auto params = gap_params(trajectory, true);
+  ASSERT_LT(params.wheel_odom.max_gap, 0.25);
+
+  const GapRun none = run_gap(params, trajectory, nullptr);
+  const GapRun hole = run_gap(params, trajectory, &holed);
+  for (const auto* run : {&none, &hole}) {
+    expect_one_gap_reset(*run);
+    EXPECT_FALSE(run->used_wheel);
+    expect_constant_velocity_reset(*run);
+  }
+}
+
+// A wheel twist above kMaxResetSpeed at the reset frame: the self-reset falls back instead of going LOST
+TEST_F(WheelGapResetTest, FallsBackOnAnInvalidWheelState) {
+  const Trajectory trajectory = turning_T_world_imu;
+  WheelSamples wheel = make_trajectory_wheel(trajectory, kGapStartTime - 0.2, kGapEndTime + 0.05, test_T_imu_base());
+  for (auto& sample : wheel) {
+    if (sample.stamp > kResetStamp - 0.05 && sample.stamp < kResetStamp + 0.05) {
+      sample.linear *= 80.0;  // About 160 m/s
+    }
+  }
+  const GapRun run = run_gap(gap_params(trajectory, true), trajectory, &wheel);
+  print("excessive wheel speed", run);
+  expect_one_gap_reset(run);
+  EXPECT_FALSE(run.used_wheel);
+  expect_constant_velocity_reset(run);
 }

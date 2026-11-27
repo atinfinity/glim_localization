@@ -64,6 +64,7 @@ TEST(ConfigTest, OdometryUsesLocalizationModule) {
     // Wheel odometry is opt-in
     EXPECT_FALSE(config->at("wheel_odom_enabled").get<bool>());
     EXPECT_EQ(config->at("wheel_odom_T_imu_base").size(), 7u);
+    EXPECT_FALSE(config->at("wheel_odom_reset_extrapolation").get<bool>());
   }
 }
 
