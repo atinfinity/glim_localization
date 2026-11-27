@@ -7,7 +7,7 @@ A manual comparison of glim_localization with other LiDAR localization packages 
 
 ## Results (Gazebo bag)
 
-Three runs per method, `ros2 bag play` at 1x, one run at a time. Median over the runs, with the range in brackets when the runs differ. Host: Intel i7-9800X (8 cores, 16 threads), Docker, amd64, CPU only.
+Three runs per method, `ros2 bag play` at 1x, one run at a time. Median over the runs, with the range in brackets when the runs differ. A cell where some runs have no value says "[k of n runs]"; there is none here. Host: Intel i7-9800X (8 cores, 16 threads), Docker, amd64, CPU only.
 
 | Method | Runs | ATE trans RMSE [mm] | ATE rot RMSE [deg] | RPE trans RMSE [mm/m] | RPE rot RMSE [deg/m] | Latency median [ms] | Latency p95 [ms] | Latency max [ms] | CPU per scan [ms] | CPU [% of a core] | Peak RSS [MiB] | Scans with a pose |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
@@ -19,10 +19,10 @@ Three runs per method, `ros2 bag play` at 1x, one run at a time. Median over the
 
 In short, on this bag:
 - **Accuracy:** glim_localization is about 4 times more accurate (3.5 mm against 13 mm ATE, and 2.0 against 7 mm/m RPE). Both are in the millimeter range, far below what matters for most robots.
-- **Latency:** NDT answers in half the time at the median (19 ms against 40 ms), and has no tail. glim_localization stalls for about 0.5 s every 3 to 5 s (p95 304 ms, max 564 ms), then catches up within about 6 scans. This is the CPU odometry's known spike (max 507 ms per frame in the [GPU profile](progress/2026-11-28-gpu-profile.md)); its cause is not investigated yet.
+- **Latency:** NDT answers in half the time at the median (19 ms against 40 ms), and has no tail, with twice the threads (NDT 4, glim_localization 2, each method's default). glim_localization stalls for about 0.5 s 12 times in the 60 s (p95 304 ms, max 564 ms), then catches up within about 6 scans. In every run the stalls come at 10, 15 and 20 s, then every 3.3 to 5 s, more often 3.3 s towards the end. They are likely the same as the CPU odometry's known spike (max 507 ms per frame in the [GPU profile](progress/2026-11-28-gpu-profile.md)); their cause is not investigated yet.
 - **CPU:** about the same CPU time per scan (138 ms against 145 to 170 ms, that is 1.4 to 1.7 cores at 10 Hz), with each method's own thread defaults (glim_localization 2, NDT 4).
-- **Memory:** glim_localization uses 8 times as much (805 MiB against 100 MiB).
-- **Scans with a pose:** glim_localization gives no pose for 2 to 3 % of the scans, NDT for 0.2 to 1.3 %. Every method misses the first scan (stamp 0); the other misses are spread over the run, sometimes several in a row, and not at the stalls. The cause is not established. Both nodes subscribe best effort (sensor data QoS), so a scan may be dropped before it reaches the method.
+- **Memory:** the peak on this 60 s bag is 805 MiB for glim_localization against 100 MiB for NDT, but it is not a fixed footprint. glim_localization has about 90 MiB at activation, with the map loaded; its RSS grows to about 760 MiB in the first 15 s of the run and in steps to 775 to 800 MiB at the end, without having settled. The growth is not the map, and what grows is not investigated. NDT stays flat at 84 to 100 MiB.
+- **Scans with a pose:** glim_localization gives no pose for 2 to 3 % of the scans, NDT for 0.2 to 1.3 %. Every method misses the first scan (stamp 0). NDT run 1 also misses the scans at 0.1 to 0.4 s and 0.9 s, a start-up burst. The node had loaded the map about 11 s before the playback started and logs no registration for these scans, so it drops them before registration. The other misses are spread over the run, sometimes several in a row, and not at the stalls. The cause is not established. Both nodes subscribe best effort (sensor data QoS), so a scan may be dropped before it reaches the method.
 - **The IMU** makes no difference to NDT's accuracy on this bag; it lowers its CPU time by 15 %.
 
 ## Run
@@ -41,7 +41,7 @@ scripts/sim_benchmark.sh my_run 5   # another sim_eval.sh output, 5 runs per met
 | 4. runs | dev, baseline | `sim/scripts/bench_run.sh` for `glim`, `lidarloc` and `lidarloc_noimu`, interleaved: run 1 of every method, then run 2, and so on. |
 | 5. compare | dev | `scripts/compare_methods.py` writes the table, `benchmark.json` (every run) and the chart. |
 
-`bench/host.json` records the CPU, `nproc`, the image IDs and the commit. One benchmark with 3 runs per method takes about 15 minutes once the images exist. The baseline image takes about 20 minutes to build the first time.
+`bench/host.json` records the CPU, `nproc`, the image IDs, the ROS and Fast DDS package versions of each image, the commit and whether the tree had uncommitted changes (`dirty`). One benchmark with 3 runs per method takes about 15 minutes once the images exist. The baseline image takes about 20 minutes to build the first time.
 
 ### One run
 
@@ -55,11 +55,11 @@ The output is in `bench/<method>/run<k>`: `launch.txt` (the exact command), `nod
 
 ### Metrics
 
-- **Accuracy:** ATE and RPE (over 1 m) against `traj_gt.txt` with the functions of [`scripts/evaluate.py`](replay.md), without alignment. The window starts 2 s after the first cloud. Both methods publish the pose of the IMU frame in the map frame, which is what the ground truth gives.
+- **Accuracy:** ATE and RPE (over 1 m) against `traj_gt.txt` with the functions of [`scripts/evaluate.py`](replay.md), without alignment. The window starts 2 s after the first cloud. They cover only the scans with a pose, so a scan without a pose does not count against a method; the "Scans with a pose" column shows those. Both methods publish the pose of the IMU frame in the map frame, which is what the ground truth gives.
 - **Latency:** the time the recorder receives the pose minus the time it receives the cloud with the same header stamp (within 1 ms), on its monotonic clock. Both methods stamp the pose with the stamp of the cloud. It includes the transport to the recorder, the same for both.
 - **Scans with a pose:** the share of the clouds that the recorder received (all 601 in every run: its subscription is reliable) that got a pose.
 - **CPU:** `utime + stime` of the node process (`/proc/<pid>/stat`) at the first and the last cloud, divided by the number of scan periods, and as a mean percentage of one core.
-- **Memory:** `VmHWM` (peak RSS) of the node process at the end. The recorder also samples `VmRSS` at 1 Hz.
+- **Memory:** `VmHWM` (peak RSS) of the node process at the end, which depends on the length of the bag (see the results). The recorder also samples `VmRSS` at 1 Hz (`rss_kb` in `resources.json`).
 
 ## Fairness
 
@@ -99,6 +99,8 @@ Both are cloned at these commits when the image is built. They are not vendored,
 The rest of [#80](https://github.com/atinfinity/glim_localization/issues/80):
 - other baselines (Autoware's `ndt_scan_matcher` with its pose predictor, hdl_localization);
 - a real bag ([#5](https://github.com/atinfinity/glim_localization/issues/5)) and hard cases: fast rotation, a degenerate corridor, a map that differs from the scene, a wrong initial pose;
-- one tuned setting per method, throughput (playback as fast as possible) and the GPU mode.
+- one tuned setting per method, throughput (playback as fast as possible) and the GPU mode;
+- whether the RSS of glim_localization is bounded on long runs, and what grows;
+- the cause of glim_localization's periodic stalls.
 
 Measurements and decisions are in the [progress entry](progress/2026-11-28-benchmark-lidarloc-gazebo.md).
