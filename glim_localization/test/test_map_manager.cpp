@@ -1,4 +1,5 @@
 #include <filesystem>
+#include <limits>
 #include <memory>
 #include <thread>
 #include <vector>
@@ -143,4 +144,46 @@ TEST(MapManagerParams, RejectsInvalidResolution) {
   params.voxel_resolutions = {0.5, 0.0};
   MapManager manager(params);
   EXPECT_FALSE(manager.load("/nonexistent"));
+}
+
+// On a loadable map, so that the resolutions are the only reason for a failure
+TEST_F(MapManagerTest, RejectsResolutionsThatAreNotPositiveOrNotStrictlyAscending) {
+  const double inf = std::numeric_limits<double>::infinity();
+  const std::vector<std::vector<double>> rejected = {
+    {},                                            // Empty
+    {0.5, 0.0},                                    // Zero
+    {-1.0, 1.0},                                   // Negative
+    {0.5, std::numeric_limits<double>::quiet_NaN()},  // NaN
+    {0.5, inf},                                    // Infinite
+    {2.0, 1.0, 0.5},                               // Descending
+    {0.5, 0.5, 1.0},                               // Duplicate
+    {1.0, 1.0},                                    // Duplicate only
+    {0.5, 2.0, 1.0},                               // Unsorted
+    {1.0, 0.5, 2.0},                               // Unsorted, first above second
+  };
+  for (const auto& resolutions : rejected) {
+    MapManagerParams params;
+    params.voxel_resolutions = resolutions;
+    MapManager manager(params);
+    EXPECT_FALSE(manager.load(dir_->string())) << ::testing::PrintToString(resolutions);
+    EXPECT_EQ(manager.size(), 0u) << ::testing::PrintToString(resolutions);
+  }
+}
+
+TEST_F(MapManagerTest, AcceptsStrictlyAscendingResolutionsInTheGivenOrder) {
+  const std::vector<std::vector<double>> accepted = {{1.0}, {0.25, 4.0}, {0.5, 0.75, 1.0, 3.0}};
+  for (const auto& resolutions : accepted) {
+    MapManagerParams params;
+    params.voxel_resolutions = resolutions;
+    MapManager manager(params);
+    ASSERT_TRUE(manager.load(dir_->string())) << ::testing::PrintToString(resolutions);
+    ASSERT_EQ(manager.size(), 8u);
+    for (const auto& tile : manager.tiles()) {
+      ASSERT_EQ(tile->voxelmaps.size(), resolutions.size());
+      for (size_t i = 0; i < resolutions.size(); i++) {
+        // Level 0 is the finest: map factors and the inlier ratio rely on that order
+        EXPECT_DOUBLE_EQ(tile->voxelmaps[i]->voxel_resolution(), resolutions[i]) << "tile " << tile->id << " level " << i;
+      }
+    }
+  }
 }

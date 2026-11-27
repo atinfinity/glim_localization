@@ -5,6 +5,8 @@
 
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
+#include <spdlog/sinks/stdout_sinks.h>
+#include <spdlog/spdlog.h>
 #include <unistd.h>
 
 #include <glim/odometry/odometry_estimation_base.hpp>
@@ -50,5 +52,16 @@ TEST(PluginTest, LoadsModuleFromConfiguredMap) {
 TEST(PluginDeathTest, AbortsWhenMapCannotBeLoaded) {
   testing::FLAGS_gtest_death_test_style = "threadsafe";
   glim::GlobalConfig::instance(GLIM_LOCALIZATION_CONFIG_DIR, true);  // map_path is empty
-  EXPECT_DEATH(glim::OdometryEstimationBase::load_module(GLIM_LOCALIZATION_PLUGIN_PATH), "");
+  // The module logs the reason through spdlog before it aborts. The default logger writes to stdout, and a death test
+  // matches stderr only, so the child logs to stderr. The logger set here reaches the dlopen()ed module only because
+  // spdlog is a shared library (libspdlog.so): its default logger is one registry shared by the test and the module. A
+  // header-only or static spdlog would give the module its own registry, still logging to stdout, and this test would
+  // fail with "died but not with expected error". The message must name the module and the map, so that a death
+  // for another reason (a missing symbol, an unrelated exception) fails the test.
+  EXPECT_DEATH(
+    {
+      spdlog::set_default_logger(std::make_shared<spdlog::logger>("plugin_death_test", std::make_shared<spdlog::sinks::stderr_sink_mt>()));
+      glim::OdometryEstimationBase::load_module(GLIM_LOCALIZATION_PLUGIN_PATH);
+    },
+    "failed to create odometry_localization_cpu: failed to load the localization map");
 }
