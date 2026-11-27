@@ -10,16 +10,22 @@
 
 #include <chrono>
 #include <cmath>
+#include <cstring>
+#include <fstream>
 #include <map>
 #include <thread>
 
 #include "diagnostic_msgs/msg/diagnostic_array.hpp"
 #include "geometry_msgs/msg/pose_with_covariance_stamped.hpp"
+#include "gtsam_points/types/point_cloud_cpu.hpp"
 #include "nav_msgs/msg/odometry.hpp"
 #include "rosgraph_msgs/msg/clock.hpp"
+#include "sensor_msgs/msg/point_cloud2.hpp"
 #include "tf2_msgs/msg/tf_message.hpp"
 #include "tf2_ros/transform_broadcaster.h"
 
+#include "glim/util/config.hpp"
+#include "glim_localization_ros2/estimate_bridge.hpp"
 #include "glim_localization_ros2/localization_publisher.hpp"
 
 namespace
@@ -190,6 +196,24 @@ public:
     spin_for(200ms);
   }
 
+  /// Subscribe to ~/aligned_points (not by default: the cloud is built only for a subscriber) and,
+  /// with wait, wait until the publisher sees the subscription
+  void subscribe_aligned_points(bool wait = true)
+  {
+    const std::string topic = std::string("/") + node_->get_name() + "/aligned_points";
+    const auto on_cloud = [this](sensor_msgs::msg::PointCloud2::ConstSharedPtr msg) {
+        aligned_points.push_back(*msg);
+      };
+    aligned_points_sub_ = observer_->create_subscription<sensor_msgs::msg::PointCloud2>(topic,
+        rclcpp::SensorDataQoS(), on_cloud);
+    if (!wait) {
+      return;
+    }
+    ASSERT_TRUE(spin_until([&] {return node_->count_subscribers(topic) >= 1;}))
+      << "discovery timed out";
+    spin_for(200ms);
+  }
+
   /// Find the transform for a frame pair at a stamp
   std::optional<Eigen::Isometry3d> find(
     const std::string & parent, const std::string & child,
@@ -222,6 +246,7 @@ public:
   std::vector<geometry_msgs::msg::PoseWithCovarianceStamped> poses;
   std::vector<nav_msgs::msg::Odometry> odometries;
   std::vector<StatusMsg> statuses;
+  std::vector<sensor_msgs::msg::PointCloud2> aligned_points;
   int reset_count = 0;
   ResetReason reset_reason = ResetReason::NONE;
   int next_frame_id = 0;
@@ -257,7 +282,26 @@ private:
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odometry_sub_;
   rclcpp::Subscription<StatusMsg>::SharedPtr status_sub_;
   rclcpp::Subscription<diagnostic_msgs::msg::DiagnosticArray>::SharedPtr diag_sub_;
+  rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr aligned_points_sub_;
 };
+
+/// A frame of make_frame with a few points in the IMU frame
+FrameEstimate make_frame_with_points(int k)
+{
+  FrameEstimate frame = make_frame(k, 0.0);
+  const std::vector<Eigen::Vector4d> points = {
+    {1.0, 0.0, 0.0, 1.0}, {0.0, 2.0, 0.0, 1.0}, {0.0, 0.0, 3.0, 1.0}, {1.1, 0.1, 0.1, 1.0}};
+  frame.points_imu = std::make_shared<gtsam_points::PointCloudCPU>(points);
+  return frame;
+}
+
+/// The x, y, z of point i of a float32 x, y, z cloud
+Eigen::Vector3d cloud_point(const sensor_msgs::msg::PointCloud2 & cloud, size_t i)
+{
+  Eigen::Vector3f p;
+  std::memcpy(p.data(), &cloud.data[i * cloud.point_step], 3 * sizeof(float));
+  return p.cast<double>();
+}
 
 glim_localization::LocalizationStatus frame_status(
   int k,
@@ -1095,4 +1139,122 @@ TEST(LocalizationPublisher, ExternalOdomFindsSamplesAtEpochScaleStamps) {
   ASSERT_TRUE(fixture.spin_until([&] {return fixture.count("map", "odom") >= kEpochFrames;}));
   EXPECT_EQ(fixture.publisher->tf_lookup_failures(), 0u);
   fixture.executor_.remove_node(fake_node);
+}
+
+// ~/aligned_points is the scan of the published frame in the map frame, at the frame stamp.
+TEST(LocalizationPublisher, AlignedPointsAreTheScanInTheMapFrame) {
+  Fixture fixture(LocalizationPublisherParams(), "publisher_aligned");
+  fixture.wait_for_discovery(1);
+  fixture.subscribe_aligned_points();
+  const FrameEstimate frame = make_frame_with_points(3);
+  fixture.feed(frame);
+  ASSERT_TRUE(fixture.spin_until([&] {return fixture.aligned_points.size() >= 1;}));
+
+  const auto & cloud = fixture.aligned_points[0];
+  EXPECT_EQ(cloud.header.frame_id, "map");
+  EXPECT_EQ(key(cloud.header.stamp), key(to_msg(frame.stamp)));
+  ASSERT_EQ(cloud.fields.size(), 3u);
+  for (size_t k = 0; k < 3; ++k) {
+    EXPECT_EQ(cloud.fields[k].name, std::string(1, "xyz"[k]));
+    EXPECT_EQ(cloud.fields[k].datatype, sensor_msgs::msg::PointField::FLOAT32);
+  }
+  ASSERT_EQ(cloud.width * cloud.height, frame.points_imu->size());
+  for (size_t i = 0; i < frame.points_imu->size(); ++i) {
+    const Eigen::Vector3d expected = frame.T_map_imu * frame.points_imu->points[i].head<3>();
+    EXPECT_LT((cloud_point(cloud, i) - expected).norm(), 1e-5) << "point " << i;
+  }
+  EXPECT_EQ(fixture.publisher->aligned_clouds(), 1u);
+}
+
+// aligned_points_voxel keeps one point, the centroid, per voxel: the first and the last point share
+// a 1 m voxel (identity pose).
+TEST(LocalizationPublisher, AlignedPointsAreDownsampledByTheVoxel) {
+  LocalizationPublisherParams params;
+  params.aligned_points_voxel = 1.0;
+  Fixture fixture(params, "publisher_aligned_voxel");
+  fixture.wait_for_discovery(1);
+  fixture.subscribe_aligned_points();
+  FrameEstimate frame = make_frame_with_points(0);
+  frame.T_map_imu = Eigen::Isometry3d::Identity();
+  fixture.feed(frame);
+  ASSERT_TRUE(fixture.spin_until([&] {return fixture.aligned_points.size() >= 1;}));
+  const auto & cloud = fixture.aligned_points[0];
+  ASSERT_EQ(cloud.width, 3u);
+  EXPECT_LT((cloud_point(cloud, 0) - Eigen::Vector3d(1.05, 0.05, 0.05)).norm(), 1e-5);
+}
+
+// LOST publishes no aligned points, as no pose; the frame after it is published again.
+TEST(LocalizationPublisher, AlignedPointsAreNotPublishedInLost) {
+  Fixture fixture(LocalizationPublisherParams(), "publisher_aligned_lost");
+  fixture.wait_for_discovery(1);
+  fixture.subscribe_aligned_points();
+  fixture.feed(make_frame_with_points(0));
+  ASSERT_TRUE(fixture.spin_until([&] {return fixture.aligned_points.size() >= 1;}));
+  fixture.feed(make_frame_with_points(1), LocalizationState::LOST);
+  fixture.feed(make_frame_with_points(2));
+  ASSERT_TRUE(fixture.spin_until([&] {
+      return fixture.statuses.size() >= 3 && fixture.aligned_points.size() >= 2;
+    }));
+  fixture.spin_for(200ms);
+  EXPECT_EQ(fixture.publisher->aligned_clouds(), 2u);
+  ASSERT_EQ(fixture.aligned_points.size(), 2u);
+  EXPECT_EQ(key(fixture.aligned_points[0].header.stamp), key(to_msg(kStart)));
+  EXPECT_EQ(key(fixture.aligned_points[1].header.stamp), key(to_msg(kStart + 2 * kDt)));
+}
+
+// Without a subscriber no cloud is built; with publish_aligned_points false there is no topic.
+TEST(LocalizationPublisher, AlignedPointsAreBuiltOnlyForASubscriber) {
+  {
+    Fixture fixture(LocalizationPublisherParams(), "publisher_aligned_none");
+    fixture.wait_for_discovery(1);
+    fixture.feed(make_frame_with_points(0));
+    ASSERT_TRUE(fixture.spin_until([&] {return fixture.poses.size() >= 1;}));
+    EXPECT_EQ(fixture.publisher->aligned_clouds(), 0u);
+  }
+  {
+    LocalizationPublisherParams params;
+    params.publish_aligned_points = false;
+    Fixture fixture(params, "publisher_aligned_off");
+    fixture.wait_for_discovery(1);
+    EXPECT_EQ(fixture.node_->count_publishers("/publisher_aligned_off/aligned_points"), 0u);
+    // A listener gets nothing, while ~/pose is published
+    fixture.subscribe_aligned_points(false);
+    fixture.spin_for(200ms);
+    fixture.feed(make_frame_with_points(0));
+    ASSERT_TRUE(fixture.spin_until([&] {return fixture.poses.size() >= 1;}));
+    fixture.spin_for(300ms);
+    EXPECT_TRUE(fixture.aligned_points.empty());
+    EXPECT_EQ(fixture.publisher->aligned_clouds(), 0u);
+  }
+}
+
+// read_publisher_params reads both keys from localization_ros and rejects a negative voxel
+TEST(LocalizationPublisher, AlignedPointsKeysAreReadFromTheConfig) {
+  const auto config_for = [](const std::string & name, const std::string & section) {
+      const std::string path = testing::TempDir() + name;
+      std::ofstream(path) << "{\"localization_ros\": {" << section << "}}";
+      return glim::Config(path);
+    };
+  const auto defaults = glim_localization_ros2::read_publisher_params(
+    config_for("aligned_points_default.json", ""));
+  EXPECT_TRUE(defaults.publish_aligned_points);
+  EXPECT_EQ(defaults.aligned_points_voxel, 0.0);
+
+  const auto params = glim_localization_ros2::read_publisher_params(
+    config_for("aligned_points_set.json",
+    "\"publish_aligned_points\": false, \"aligned_points_voxel\": 0.3"));
+  EXPECT_FALSE(params.publish_aligned_points);
+  EXPECT_DOUBLE_EQ(params.aligned_points_voxel, 0.3);
+
+  EXPECT_THROW(
+    glim_localization_ros2::read_publisher_params(
+      config_for("aligned_points_negative.json", "\"aligned_points_voxel\": -1")),
+    std::invalid_argument);
+}
+
+TEST(LocalizationPublisher, NegativeAlignedPointsVoxelIsRejected) {
+  LocalizationPublisherParams params;
+  params.aligned_points_voxel = -0.1;
+  auto node = std::make_shared<rclcpp::Node>("publisher_aligned_bad_voxel");
+  EXPECT_THROW(LocalizationPublisher(*node, params), std::invalid_argument);
 }

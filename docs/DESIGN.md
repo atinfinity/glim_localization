@@ -256,7 +256,7 @@ The core (`glim_localization/`) depends only on GLIM, gtsam_points, nlohmann_jso
 | Initial pose and resets | `request_reset()` applies a stamped pose at the first frame at or after its stamp; IMU-gap self-reset; LOST | `/initialpose`, `~/initialize`, `~/relocalize`, the late-pose check (`max_init_pose_delay`) |
 | Initial pose yaw search (§5.3) | Candidate generation and scan-to-map scoring, the acceptance rules (truncated, out of range, low score, ambiguous), and the result and reason in `LocalizationStatus`; configured by the `init_yaw_search` keys of the odometry JSON config | No ROS parameters (JSON only); the `init_search*` fields of `LocalizationStatus.msg` (including `init_search_reason`) and the diagnostics text that gives the reason for a rejection |
 | State and quality | `LocalizationStatus` struct, states INITIALIZING / TRACKING / DEGRADED / LOST, quality monitor, `on_status` callback | `~/status` (`LocalizationStatus.msg`) and `/diagnostics` |
-| Pose output | Frame estimates through GLIM's odometry callbacks | `~/pose`, `~/odometry` (angular twist from the gyro), TF with `tf_mode`, `base_frame_id` and `T_base_imu` (LocalizationPublisher) |
+| Pose output | Frame estimates through GLIM's odometry callbacks | `~/pose`, `~/odometry` (angular twist from the gyro), `~/aligned_points` (the scan in the map frame), TF with `tf_mode`, `base_frame_id` and `T_base_imu` (LocalizationPublisher) |
 | Process and configuration | GLIM JSON configs (the odometry and map parameters) | R1 extension module, R2 lifecycle node and component, ROS parameters, launch files, RViz config |
 | Tools | `map_compiler` (GLIM dump, compiled map, PCD or PLY in; compiled map out; optional 2D occupancy grid as a map_server YAML + PGM file), `glim_localization_replay`, `glim_localization_mapper` | — (Nav2's map_server serves the 2D grid; this package does not publish it) |
 
@@ -281,7 +281,7 @@ glim_localization/                  # repository
     launch/localization.launch.py   # R2: standalone or as a component, autostart
     launch/localization_r1.launch.py   # R1: glim_rosnode, or glim_rosbag with bag:=
     launch/launch_utils.py          # R1 helpers: typed -p values, JSON with comments, the map_path override
-    rviz/localization.rviz          # map frame, ~/map, ~/pose, ~/odometry, TF
+    rviz/localization.rviz          # map frame, ~/map, ~/aligned_points, ~/pose, ~/odometry, TF
 ```
 
 ### Inputs and outputs
@@ -297,7 +297,7 @@ glim_localization/                  # repository
 | ~/odometry | nav_msgs/Odometry | Pose + velocity (LiDAR rate). An IMU-rate predicted version is planned |
 | ~/status, /diagnostics | LocalizationStatus, diagnostic_msgs | State, inlier ratio, number of tiles in use, number of map factors, residual, processing time, reset count and the latest reason, and the wheel odometry counters (`wheel_factors`, `wheel_gated`, `wheel_readmitted`, `wheel_missing`, per frame since the last reset; 0 while it is disabled) |
 | ~/map | sensor_msgs/PointCloud2 | The loaded map in the map frame, published once and latched (reliable, transient local). One centroid per `map_cloud_voxel` voxel (0.5 m; 0 keeps every point), x/y/z float32; `publish_map: false` turns it off (both in `localization_ros`). R1 publishes it when the extension is loaded, from the map the odometry module already holds (`LocalizationCallbacks::loaded_map()`, so the map is not loaded twice); R2 publishes it at configure, so it is visible while the node is inactive. The build runs there, synchronously: 12 bytes per published point, plus about 40 bytes per occupied voxel while downsampling (with 0 the points go straight into the message). With 0, a map above 10 million points gets a warning; a cloud above 1 GiB (the message limit is 4 GiB, uint32 `row_step`) is not published, with a warning |
-| ~/aligned_points | sensor_msgs/PointCloud2 | Not implemented: the aligned scan (downsampled). Deferred: it needs a per-frame copy and conversion of the scan on the odometry callback, plus a rate and downsampling policy, which is more than the launch work needed ([#18](https://github.com/atinfinity/glim_localization/issues/18)) |
+| ~/aligned_points | sensor_msgs/PointCloud2 | The deskewed scan of each published frame (`EstimationFrame::frame`, IMU frame, carried as a shared pointer in `FrameEstimate::points_imu`), transformed by its `T_map_imu` into the map frame and stamped with the frame, so a display does not depend on TF timing. x/y/z float32, sensor data QoS. Built (on the odometry thread) only while the topic has a subscriber. `aligned_points_voxel` (0, the default, keeps every point) keeps one centroid per voxel; `publish_aligned_points: false` creates no topic (both in `localization_ros`) |
 
 ### TF (`tf_mode`)
 
@@ -312,7 +312,7 @@ glim_localization/                  # repository
 - **Pairing.** The estimate of a frame is published only together with the status of the same frame. `LocalizationPublisher::on_frame` only stores the frame; `on_status` with `frame_id >= 0` and the same stamp publishes it with that status's state. A stored frame is dropped and counted (`unpaired_frames()`) when a newer frame replaces it or a reset status (`frame_id < 0`) comes before its own status; the frame is from before the reset, and an external reset must re-anchor `odom->base` at a frame after it. A status with `frame_id < 0` comes from a reset (also LOST when the initial pose search then rejects the pose). The core emits the frame callback before its status, so the publisher subscribes `OdometryEstimationCallbacks::on_update_new_frame` (the corrected state, not the IMU prediction of `on_new_frame`) and `LocalizationCallbacks::on_status`.
 - **State gate.**
 
-  | state of the frame | `~/pose` | `~/odometry` | `map->odom` | `odom->base` (internal_odom) |
+  | state of the frame | `~/pose` | `~/odometry`, `~/aligned_points` | `map->odom` | `odom->base` (internal_odom) |
   | --- | --- | --- | --- | --- |
   | INITIALIZING, TRACKING, DEGRADED | yes | yes | yes | yes |
   | LOST | no | no | no | yes |

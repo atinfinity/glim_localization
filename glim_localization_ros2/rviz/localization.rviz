@@ -37,6 +37,24 @@ Visualization Manager:
       Decay Time: 0
       Selectable: false
       Value: true
+    - Class: rviz_default_plugins/PointCloud2
+      Name: Aligned Points
+      Enabled: true
+      Topic:
+        Value: /glim_localization/aligned_points
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Best Effort
+      Style: Points
+      Size (Pixels): 3
+      Color Transformer: FlatColor
+      Color: 255; 85; 0
+      Use Fixed Frame: true
+      Alpha: 1
+      Decay Time: 0
+      Selectable: false
+      Value: true
     - Class: rviz_default_plugins/TF
       Name: TF
       Enabled: true

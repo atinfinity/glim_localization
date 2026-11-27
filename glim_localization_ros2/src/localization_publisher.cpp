@@ -13,6 +13,8 @@
 #include "diagnostic_msgs/msg/diagnostic_status.hpp"
 #include "geometry_msgs/msg/transform_stamped.hpp"
 
+#include "glim_localization_ros2/map_publisher.hpp"
+
 namespace glim_localization_ros2
 {
 
@@ -209,10 +211,11 @@ LocalizationPublisher::LocalizationPublisher(
     throw std::invalid_argument("frame names must not be empty");
   }
   if (!is_finite(params_.T_base_imu) || !std::isfinite(params_.diagnostics_period) ||
-    params_.diagnostics_period < 0.0)
+    params_.diagnostics_period < 0.0 || !std::isfinite(params_.aligned_points_voxel) ||
+    params_.aligned_points_voxel < 0.0)
   {
     throw std::invalid_argument(
-        "T_base_imu and diagnostics_period must be finite and not negative");
+        "T_base_imu, diagnostics_period and aligned_points_voxel must be finite and not negative");
   }
 
   auto topics = node_.get_node_topics_interface();
@@ -220,6 +223,10 @@ LocalizationPublisher::LocalizationPublisher(
       "~/pose", rclcpp::QoS(10));
   odometry_pub_ = rclcpp::create_publisher<nav_msgs::msg::Odometry>(topics, "~/odometry",
       rclcpp::QoS(10));
+  if (params_.publish_aligned_points) {
+    aligned_points_pub_ = rclcpp::create_publisher<sensor_msgs::msg::PointCloud2>(topics,
+        "~/aligned_points", rclcpp::SensorDataQoS());
+  }
   status_pub_ = rclcpp::create_publisher<LocalizationStatus>(topics, "~/status", rclcpp::QoS(10));
   diagnostics_pub_ = rclcpp::create_publisher<diagnostic_msgs::msg::DiagnosticArray>(topics,
       "/diagnostics", rclcpp::QoS(10));
@@ -252,6 +259,12 @@ size_t LocalizationPublisher::stale_frames() const
 {
   std::lock_guard<std::mutex> lock(mutex_);
   return stale_frames_;
+}
+
+size_t LocalizationPublisher::aligned_clouds() const
+{
+  std::lock_guard<std::mutex> lock(mutex_);
+  return aligned_clouds_;
 }
 
 void LocalizationPublisher::on_frame(const FrameEstimate & frame)
@@ -312,6 +325,7 @@ void LocalizationPublisher::publish_frame(const FrameEstimate & frame, uint8_t s
     odometry.twist.twist.angular.y = w_base.y();
     odometry.twist.twist.angular.z = w_base.z();
     odometry_pub_->publish(odometry);
+    publish_aligned_points(frame, stamp);
   }
 
   if (params_.tf_mode == TfMode::NONE || (lost && params_.tf_mode == TfMode::EXTERNAL_ODOM)) {
@@ -321,6 +335,31 @@ void LocalizationPublisher::publish_frame(const FrameEstimate & frame, uint8_t s
   Eigen::Isometry3d T_map_odom = Eigen::Isometry3d::Identity();
   if (compute_odom_base(stamp, T_map_base, T_odom_base, T_map_odom)) {
     publish_tf(stamp, T_map_odom, T_odom_base, !lost);
+  }
+}
+
+void LocalizationPublisher::publish_aligned_points(
+  const FrameEstimate & frame,
+  const builtin_interfaces::msg::Time & stamp)
+{
+  if (!aligned_points_pub_ || !frame.points_imu) {
+    return;
+  }
+  try {
+    // Built only for a subscriber: without one the topic costs nothing per frame
+    if (aligned_points_pub_->get_subscription_count() == 0) {
+      return;
+    }
+    // In the map frame, so that a display does not depend on the TF at the frame stamp
+    auto msg = make_aligned_cloud(*frame.points_imu, frame.T_map_imu,
+        params_.aligned_points_voxel, params_.map_frame);
+    msg.header.stamp = stamp;
+    aligned_points_pub_->publish(msg);
+    ++aligned_clouds_;
+  } catch (const std::exception & e) {
+    // Not expected for a scan (the cap is 1 GiB); never let it reach the odometry thread
+    RCLCPP_WARN_THROTTLE(node_.get_node_logging_interface()->get_logger(), *clock_, 5000,
+        "~/aligned_points is not published: %s", e.what());
   }
 }
 

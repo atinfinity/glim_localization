@@ -25,7 +25,7 @@ ros2 launch glim_localization_ros2 localization_r1.launch.py map_path:=/ws/out/m
 
 R1 passes the `params_file` entries (under `/**`, then `glim_ros`) to GLIM's node as typed `-p name:=value`, because `glim_rosbag` would read a `--params-file` path as a bag: strings stay strings, integers of the double parameters become doubles, nested mappings are rejected. In the R2 `params_file`, write doubles with a decimal point (`1.0`, not `1`).
 
-`rviz:=true` starts `rviz2` with `rviz/localization.rviz` (map frame, `~/map`, `~/pose`, `~/odometry`, TF, and the 2D Pose Estimate tool on `/initialpose`). `rviz2` is not a dependency of this package: when it is not installed, the launch file prints a warning and starts without it.
+`rviz:=true` starts `rviz2` with `rviz/localization.rviz` (map frame, `~/map`, `~/aligned_points`, `~/pose`, `~/odometry`, TF, and the 2D Pose Estimate tool on `/initialpose`). `rviz2` is not a dependency of this package: when it is not installed, the launch file prints a warning and starts without it.
 
 For the GPU module (CUDA image), use the `config/r1_gpu` and `config/r2_gpu` configs; see [CUDA variant](build.md#cuda-variant).
 
@@ -79,6 +79,7 @@ Lifecycle: configure fails and leaves the node unconfigured on a missing config 
 | `~/pose` | `geometry_msgs/PoseWithCovarianceStamped` | Base pose in the map frame, LiDAR rate. Covariance is zero (not estimated) |
 | `~/odometry` | `nav_msgs/Odometry` | Pose and twist of the base |
 | `~/map` | `sensor_msgs/PointCloud2` | The loaded map in the map frame, published once, latched (reliable, transient local). One centroid per `map_cloud_voxel` (0.5 m) voxel; `publish_map: false` turns it off. Built once (R1: at node start, R2: at configure) at 12 bytes per point; with `map_cloud_voxel: 0` a map above 10 million points gets a warning, and a cloud above 1 GiB is not published |
+| `~/aligned_points` | `sensor_msgs/PointCloud2` | The current scan (deskewed) in the map frame, stamped with the frame, for each published `~/pose`; nothing in LOST. Sensor data QoS. Built only while the topic has a subscriber. `aligned_points_voxel` (0: every point) keeps one centroid per voxel; `publish_aligned_points: false` turns it off |
 | `~/status` | `glim_localization_msgs/LocalizationStatus` | State, inlier ratio, tiles, map factors, residual, processing time, reset count and reason, result of the initial pose search |
 | `/diagnostics` | `diagnostic_msgs/DiagnosticArray` | OK, WARN for DEGRADED, ERROR for LOST (the message says why the yaw search rejected the given pose) |
 | `~/initialize` (R2) | `glim_localization_msgs/srv/Initialize` | Sets the pose. `success` means accepted, applied at the next frame; the yaw search result comes later on `~/status`. `global_search=true` returns `success=false` ([#3](https://github.com/atinfinity/glim_localization/issues/3)) |

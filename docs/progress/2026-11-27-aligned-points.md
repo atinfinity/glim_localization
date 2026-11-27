@@ -1,0 +1,28 @@
+# `~/aligned_points`: the current scan in the map frame ([#18](https://github.com/atinfinity/glim_localization/issues/18))
+
+- **Change**: `LocalizationPublisher` (R1 and R2) publishes `sensor_msgs/PointCloud2` on `~/aligned_points`, so RViz can show the scan on top of `~/map`. All in `glim_localization_ros2/`; no core or GLIM change.
+  - `FrameEstimate` gains `points_imu`, the deskewed points of the frame in the IMU frame. `EstimateBridge::add_frame` fills it from `EstimationFrame::frame` when `frame_id` is IMU (GLIM's IMU odometry and this core always set IMU). It is a shared pointer copy: no point is copied when the frame is stored.
+  - The cloud is published with the frame, so it has the same pairing and state gate as `~/pose`: only when the frame's status arrives, never in LOST. Frame: the map frame, with the points transformed by the frame's `T_map_imu`; stamp: the frame stamp. x/y/z float32, `rclcpp::SensorDataQoS()`.
+  - The cloud is built only when `get_subscription_count() > 0`, so the topic costs nothing per frame without a subscriber.
+  - Config keys in `localization_ros` (R1 and R2 `config_ros.json`, read by `read_publisher_params` like `diagnostics_period`): `publish_aligned_points` (default true; false creates no topic) and `aligned_points_voxel` (default 0, every point; > 0 keeps one centroid per voxel). A negative or non-finite voxel is rejected when the config is read and by the publisher constructor.
+  - `rviz/localization.rviz` gains an "Aligned Points" PointCloud2 display (best effort, flat orange). The R1 launch file remaps it to `/glim_ros/aligned_points` with the other RViz topics.
+  - Docs: the topic in `docs/ros2.md` and DESIGN section 6 (topic table and state gate); the "not published" notes in the README, `docs/status.md` and the implementation plan are removed.
+- **Decisions**:
+  - Map frame rather than the base or IMU frame at the frame stamp: RViz then draws the cloud without a TF lookup at that stamp, so it never waits for or misses a transform (for example in `external_odom` or `none`).
+  - The cloud reuses the `~/map` builder: `make_map_cloud`'s body became a template over a point visitor in `map_publisher.cpp`, and `make_aligned_cloud` uses the same layout and centroid downsampling. The downsampling is therefore the centroid per voxel, as for `~/map`, not a random pick.
+  - The build runs where `~/pose` is published, on the odometry thread under the publisher mutex. A full scan is a few tens of thousands of points, and the cost is paid only with a subscriber; `aligned_points_voxel` reduces it. A build error (only possible above the 1 GiB cap) is caught and warned, throttled, so it never reaches the odometry thread; the subscription count is inside the same catch. The per-frame cost with a subscriber is not measured; the config comment recommends a non-zero `aligned_points_voxel` (for example 0.2) for a dense LiDAR.
+  - The default is on: without a subscriber it costs one subscription count per frame.
+  - `aligned_clouds()` counts the built clouds, so a test can check that none is built without a subscriber.
+  - A frame whose `frame_id` is not IMU gets no cloud, and `EstimateBridge` warns once (spdlog) so the missing topic is explained.
+  - The size error names the voxel key of the cloud (`map_cloud_voxel` or `aligned_points_voxel`): `check_map_cloud_size` and the shared builder take the key.
+- **Verification**: `scripts/ci.sh` (Docker, amd64, after the review fixes): all checks pass, 362 core tests, the colcon tests (208, 0 failures) and the replay e2e. New tests in `test_localization_publisher`:
+  - `AlignedPointsAreTheScanInTheMapFrame`: a frame with four IMU-frame points under a rotated and translated pose gives one cloud in `map`, at the frame stamp, with fields x/y/z float32 and every point equal to `T_map_imu * p` (within 1e-5 m).
+  - `AlignedPointsAreDownsampledByTheVoxel`: with `aligned_points_voxel` 1.0, two points in one voxel become their centroid, so four points give three.
+  - `AlignedPointsAreNotPublishedInLost`: TRACKING, LOST, TRACKING gives two clouds, at the first and third stamps, and `aligned_clouds()` is 2.
+  - `AlignedPointsAreBuiltOnlyForASubscriber`: without a subscriber the pose is published and `aligned_clouds()` stays 0; with `publish_aligned_points: false` the topic has no publisher, and a listener gets no cloud while `~/pose` arrives.
+  - `AlignedPointsKeysAreReadFromTheConfig`: `read_publisher_params` gives the defaults (true, 0) for an empty section, reads `publish_aligned_points: false` and `aligned_points_voxel: 0.3`, and throws for -1.
+  - End to end from GLIM's frame (`test_r2_node.py` on `/glim_localization/aligned_points`, `test_r1_extension.py` on `/glim_ros/aligned_points`, sensor data QoS): at least one cloud arrives, and every cloud is in `map`, has points, and is stamped at a received `~/pose` stamp.
+  - `NegativeAlignedPointsVoxelIsRejected`: the constructor throws.
+  - `ament_cpplint --linelength 100`, `ament_uncrustify` and `ament_flake8` over the whole `glim_localization_ros2` package in the container: no new findings (cpplint reports only the two attribution lines of the GLIM-derived `localization_node.cpp`, which the package checks with its own 150-column `cpplint_derived` test).
+  - Not run: RViz itself (the image is headless). The display is the shipped config's PointCloud2 with best effort QoS to match the publisher.
+- **Open**: none for [#18](https://github.com/atinfinity/glim_localization/issues/18). The scan cloud has no intensity or ring fields; add them only if a display needs them.

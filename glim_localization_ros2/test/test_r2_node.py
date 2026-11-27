@@ -68,7 +68,8 @@ class TestR2Node(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         rclpy.init()
-        cls.client = r2_helpers.R2Client('r2_test_client', r2_helpers.require_env('GLIM_R1_DATA'))
+        cls.client = r2_helpers.R2Client(
+            'r2_test_client', r2_helpers.require_env('GLIM_R1_DATA'), aligned_points=True)
         cls.initialize = cls.client.node.create_client(
             Initialize, f'{r2_helpers.NODE}/initialize')
         cls.relocalize = cls.client.node.create_client(Trigger, f'{r2_helpers.NODE}/relocalize')
@@ -175,6 +176,17 @@ class TestR2Node(unittest.TestCase):
             f'{len(c.poses)} poses for {num_frames} frames')
         for pose in c.poses:
             self.assertEqual(pose.header.frame_id, 'map')
+
+        # ~/aligned_points: the scan of a published frame, in the map frame at a pose stamp (best
+        # effort, so not every frame is required)
+        self.assertTrue(c.aligned_points, 'no ~/aligned_points message')
+        pose_stamps = {(p.header.stamp.sec, p.header.stamp.nanosec) for p in c.poses}
+        for header, num_points in c.aligned_points:
+            self.assertEqual(header.frame_id, 'map')
+            self.assertGreater(num_points, 0)
+            self.assertIn(
+                (header.stamp.sec, header.stamp.nanosec), pose_stamps,
+                'an ~/aligned_points stamp is not a ~/pose stamp')
 
         # Accuracy against the ground truth after the settling time
         worst_trans, worst_rot, checked = c.pose_errors(c.gt_stamps[0] + SETTLE_S)
