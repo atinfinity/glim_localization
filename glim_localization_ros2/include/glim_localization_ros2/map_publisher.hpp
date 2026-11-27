@@ -47,8 +47,10 @@ constexpr size_t kLargeMapCloudPoints = 10'000'000;
 size_t count_map_points(const std::vector<glim_localization::MapTile::ConstPtr> & tiles);
 
 /// @throw std::length_error if a cloud of num_points does not fit in max_bytes (capped at the
-/// uint32 limit of the message)
-void check_map_cloud_size(size_t num_points, size_t max_bytes = kMaxMapCloudBytes);
+/// uint32 limit of the message). voxel_key is the config key the message tells to raise.
+void check_map_cloud_size(
+  size_t num_points, size_t max_bytes = kMaxMapCloudBytes,
+  const char * voxel_key = "map_cloud_voxel");
 
 /// The points of the tiles in the map frame (T_world_origin * p) as an unorganized PointCloud2 with
 /// float32 x, y, z. With voxel_size > 0, each voxel of that size keeps one point, the centroid of

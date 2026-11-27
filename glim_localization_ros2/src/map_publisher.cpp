@@ -57,12 +57,13 @@ void check_voxel_size(double voxel_size, const char * name = "map_cloud_voxel")
 
 /// An unorganized float32 x, y, z cloud of the points that for_each_point visits (each as an
 /// Eigen::Vector3d in the output frame; num_input_points is their number), downsampled as described
-/// at make_map_cloud
+/// at make_map_cloud. voxel_key names the config key of voxel_size in the errors.
 template<typename ForEachPoint>
 sensor_msgs::msg::PointCloud2 build_cloud(
   const ForEachPoint & for_each_point, size_t num_input_points, double voxel_size,
-  const std::string & frame_id, size_t max_bytes)
+  const std::string & frame_id, size_t max_bytes, const char * voxel_key)
 {
+  check_voxel_size(voxel_size, voxel_key);
   sensor_msgs::msg::PointCloud2 msg;
   msg.header.frame_id = frame_id;
   msg.height = 1;
@@ -89,7 +90,7 @@ sensor_msgs::msg::PointCloud2 build_cloud(
   if (voxel_size <= 0.0) {
     // Every point: write straight into the message (the input size is an upper bound, non-finite
     // points are skipped)
-    check_map_cloud_size(num_input_points, max_bytes);
+    check_map_cloud_size(num_input_points, max_bytes, voxel_key);
     msg.data.resize(num_input_points * kMapCloudPointStep);
     size_t n = 0;
     const auto write_point = [&](const Eigen::Vector3d & p) {
@@ -131,7 +132,7 @@ sensor_msgs::msg::PointCloud2 build_cloud(
     };
   for_each_point(add_point);
 
-  check_map_cloud_size(sums.size(), max_bytes);
+  check_map_cloud_size(sums.size(), max_bytes, voxel_key);
   finish(sums.size());
   for (size_t i = 0; i < sums.size(); i++) {
     const Eigen::Vector3f p = (sums[i] / static_cast<double>(counts[i])).cast<float>();
@@ -163,16 +164,16 @@ size_t count_map_points(const std::vector<glim_localization::MapTile::ConstPtr> 
   return num_points;
 }
 
-void check_map_cloud_size(size_t num_points, size_t max_bytes)
+void check_map_cloud_size(size_t num_points, size_t max_bytes, const char * voxel_key)
 {
   // row_step and data size are uint32 in the message; the cap keeps the copy and the DDS send sane
   const size_t limit = std::min<size_t>(max_bytes, std::numeric_limits<uint32_t>::max());
   if (num_points > limit / kMapCloudPointStep) {
     throw std::length_error(
-      "the map cloud would have " + std::to_string(num_points) +
+      "the cloud would have " + std::to_string(num_points) +
         " points, more than the limit of " + std::to_string(limit / kMapCloudPointStep) + " (" +
       std::to_string(limit / (1024 * 1024)) + " MiB at " + std::to_string(kMapCloudPointStep) +
-        " bytes per point); set a larger map_cloud_voxel");
+        " bytes per point); set a larger " + voxel_key);
   }
 }
 
@@ -182,7 +183,6 @@ sensor_msgs::msg::PointCloud2 make_map_cloud(
   const std::string & frame_id,
   size_t max_bytes)
 {
-  check_voxel_size(voxel_size);
   const auto for_each_point = [&tiles](const auto & visit) {
       for (const auto & tile : tiles) {
         if (!tile || !tile->points) {
@@ -194,7 +194,8 @@ sensor_msgs::msg::PointCloud2 make_map_cloud(
         }
       }
     };
-  return build_cloud(for_each_point, count_map_points(tiles), voxel_size, frame_id, max_bytes);
+  return build_cloud(for_each_point, count_map_points(tiles), voxel_size, frame_id, max_bytes,
+           "map_cloud_voxel");
 }
 
 sensor_msgs::msg::PointCloud2 make_aligned_cloud(
@@ -204,14 +205,14 @@ sensor_msgs::msg::PointCloud2 make_aligned_cloud(
   const std::string & frame_id,
   size_t max_bytes)
 {
-  check_voxel_size(voxel_size, "aligned_points_voxel");
   const size_t num_points = points.points ? points.size() : 0;
   const auto for_each_point = [&](const auto & visit) {
       for (size_t i = 0; i < num_points; i++) {
         visit(Eigen::Vector3d(T_frame_points * points.points[i].head<3>()));
       }
     };
-  return build_cloud(for_each_point, num_points, voxel_size, frame_id, max_bytes);
+  return build_cloud(for_each_point, num_points, voxel_size, frame_id, max_bytes,
+           "aligned_points_voxel");
 }
 
 MapPublisher::MapPublisher(
