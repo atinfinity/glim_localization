@@ -31,6 +31,9 @@ while [[ $# -gt 0 ]]; do
   shift
 done
 
+# The parts set these knobs themselves; an exported value must not weaken a run (all would skip tests).
+unset GLIM_LOC_CTEST_SHARD GLIM_LOC_CORE_TESTS
+
 shard=""
 case "${part}" in
   all | rest) ;;

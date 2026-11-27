@@ -24,6 +24,9 @@
   - These times come from a shared host and a warm volume, so they do not predict the runner times.
   - Host pytest (`uv run --with pytest==9.2.0 --with PyYAML==6.0.4`): `test_ci_parts.py`, `test_is_docs_only.py` and `test_ci_local.py` pass, 136 tests in total.
   - actionlint 1.7.12 (`docker run rhysd/actionlint`, with shellcheck) reports no findings, and `shellcheck scripts/ci.sh scripts/build_core.sh` is clean.
+- **Review** (agent): no high or medium findings. Fixed: `ci.sh` now unsets `GLIM_LOC_CTEST_SHARD` and `GLIM_LOC_CORE_TESTS`, so an exported value cannot make `all` skip tests; the stale `ci_local.sh` comment. Left as they are:
+  - the publish jobs now start on every main push (with `packages: write`) and skip the push after `docker manifest inspect` finds the tag;
+  - when the image is missing, all three parts of an architecture build it (six builds instead of two). This happens only on Dockerfile changes.
 - **Open** (pending, to check on GitHub after the push):
   - A normal PR: six check parts plus `build-and-test` and `build-and-test-arm64` green, and wall times close to the target.
   - A docs-only PR: the check jobs are skipped, and the two required checks pass with `SKIPPED: docs-only change`.
