@@ -1,5 +1,7 @@
 # Headless development image: Ubuntu 24.04 + ROS 2 Jazzy, CPU only.
-FROM ros:jazzy-ros-base
+# The base image is pinned by the digest of its multi-platform index; Dependabot proposes updates
+# (.github/dependabot.yml), and docs/DEPENDENCIES.md ("Updating the pins") has the manual way.
+FROM ros:jazzy-ros-base@sha256:5147d3ae250ce754afd399f6bfec15b33dd4e473ca357e30432a3182031bfad6
 
 ARG GLIM_COMMIT=1a197c999e4865f5cab7c9cd25474128413ebbca
 ARG GTSAM_VERSION=4.3.0

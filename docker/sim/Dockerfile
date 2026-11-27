@@ -3,7 +3,8 @@
 # uses Mesa's software rasterizer (llvmpipe) through EGL (`gz sim --headless-rendering`), so no GPU is
 # needed. Not used by CI and independent of glim_localization:dev: localization and evaluation run in
 # the development image.
-FROM ros:jazzy-ros-base
+# Same pinned base as docker/Dockerfile (updated by Dependabot, .github/dependabot.yml).
+FROM ros:jazzy-ros-base@sha256:5147d3ae250ce754afd399f6bfec15b33dd4e473ca357e30432a3182031bfad6
 
 ARG SDF2MAP_COMMIT=66feb61af4c0fca37becb7e2ba4dcdd5731f58f1
 ARG JOBS=4
