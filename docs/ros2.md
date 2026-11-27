@@ -2,7 +2,7 @@
 
 Two integrations share the localization core: R1, a GLIM extension module loaded by glim_ros2's nodes (for evaluation), and R2, a dedicated lifecycle node (for deployment). Design details are in [DESIGN 6](DESIGN.md#6-ros-2-support). [Core and ROS 2 boundary](DESIGN.md#core-and-ros-2-boundary) lists what the ROS-independent core does and what the ROS 2 packages add.
 
-The commands run inside the container after the build (see [Build and test](build.md#build-and-test)). Source the colcon install first: `source /ws/build/colcon/install/setup.bash`. Run one localization (R1 or R2) per process.
+The commands run inside the container after the build (see [Build and test](build.md#build-and-test)). Source the colcon install first: `source /ws/build/colcon/install/setup.bash`. Run one localization (R1 or R2) per process: a second one in the same process (for example a second `LocalizationNode` loaded into a component container) is refused with `one localization per process: already held by <owner>`. An R2 component can be unloaded and loaded again; R1 holds the claim until its process exits ([DESIGN](DESIGN.md#r2-node-differences-from-the-plan)).
 
 ## Launch files
 
