@@ -17,6 +17,7 @@
 #include <glim_localization/odometry/map_factor_builder.hpp>
 #include <glim_localization/odometry/quality_monitor.hpp>
 #include <glim_localization/odometry/wheel_odometry.hpp>
+#include <glim_localization/relocalization/candidate_search.hpp>
 #include <glim_localization/relocalization/pose_candidates.hpp>
 
 namespace glim_localization {
@@ -164,12 +165,19 @@ struct OdometryEstimationLocalizationParams : public glim::OdometryEstimationIMU
     int max_iterations = 10;            ///< Registration iterations per candidate
     int min_points = 100;               ///< Smaller frames are dropped while the search waits for its first frame
     double max_translation = 0.0;       ///< Position uncertainty of the given pose [m] in xy; 0 is unbounded
+    /// Threads of the registrations and scoring of the search only (CPU factors in both modules); 0 uses
+    /// map_factors.num_threads, that is the odometry num_threads (config: init_yaw_search_num_threads)
+    int num_threads = 0;
   } init_yaw_search;
 
   /// Optional wheel odometry: a relative pose factor between consecutive frames from the twists given to
   /// insert_wheel_odom(). Off by default.
   WheelOdometryParams wheel_odom;
 };
+
+/// The parameters of the initial pose search for a given pose at hint_position. The scorer searches tiles as the map
+/// factors do, with init_yaw_search.num_threads in place of map_factors.num_threads when it is above 0.
+CandidateSearchParams init_search_params(const OdometryEstimationLocalizationParams& params, const Eigen::Vector3d& hint_position);
 
 /// Load the map at params.map_path with params.map_voxel_resolutions.
 /// @throw std::runtime_error if the map cannot be loaded

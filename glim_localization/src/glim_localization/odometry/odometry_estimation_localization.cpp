@@ -142,6 +142,23 @@ std::shared_ptr<const MapManager> load_localization_map(const OdometryEstimation
   return map;
 }
 
+CandidateSearchParams init_search_params(const OdometryEstimationLocalizationParams& params, const Eigen::Vector3d& hint_position) {
+  const auto& search = params.init_yaw_search;
+  CandidateSearchParams search_params;
+  search_params.scorer.map_factors = params.map_factors;
+  if (search.num_threads > 0) {
+    search_params.scorer.map_factors.num_threads = search.num_threads;
+  }
+  search_params.scorer.max_iterations = search.max_iterations;
+  search_params.min_score = search.min_inlier_ratio;
+  search_params.min_score_gap = search.min_score_gap;
+  search_params.distinct_yaw = distinct_yaw_for_step(search.step);
+  search_params.time_budget = search.time_budget;
+  search_params.hint_position = hint_position;
+  search_params.max_translation = search.max_translation;
+  return search_params;
+}
+
 OdometryEstimationLocalizationParams::OdometryEstimationLocalizationParams() {
   glim::Config config(glim::GlobalConfig::get_config_path("config_odometry"));
   const std::string section = "odometry_estimation";
@@ -178,6 +195,7 @@ OdometryEstimationLocalizationParams::OdometryEstimationLocalizationParams() {
   init_yaw_search.max_iterations = config.param<int>(section, "init_yaw_search_max_iterations", 10);
   init_yaw_search.min_points = config.param<int>(section, "init_yaw_search_min_points", 100);
   init_yaw_search.max_translation = config.param<double>(section, "init_yaw_search_max_translation", 0.0);
+  init_yaw_search.num_threads = config.param<int>(section, "init_yaw_search_num_threads", 0);
 
   wheel_odom.enabled = config.param<bool>(section, "wheel_odom_enabled", false);
   wheel_odom.T_imu_base = config.param<Eigen::Isometry3d>(section, "wheel_odom_T_imu_base", Eigen::Isometry3d::Identity());
@@ -234,6 +252,9 @@ OdometryEstimationLocalization::OdometryEstimationLocalization(std::unique_ptr<P
     throw std::invalid_argument(
       "init_yaw_search_min_inlier_ratio and init_yaw_search_min_score_gap must be in [0, 1], init_yaw_search_time_budget and "
       "init_yaw_search_max_translation finite and not negative, and init_yaw_search_max_iterations and init_yaw_search_min_points positive");
+  }
+  if (search.num_threads < 0) {
+    throw std::invalid_argument("init_yaw_search_num_threads must not be negative (0 uses num_threads)");
   }
   candidate_generator_ = std::make_unique<YawCandidateGenerator>(search.range, search.step);  // Validates the range and step
   if (p.wheel_odom.enabled) {
@@ -670,16 +691,7 @@ bool OdometryEstimationLocalization::run_init_search(const glim::PreprocessedFra
   query.map = map_;
   const PoseCandidates candidates = candidate_generator_->generate(query);
 
-  CandidateSearchParams search_params;
-  search_params.scorer.map_factors = p.map_factors;
-  search_params.scorer.max_iterations = p.init_yaw_search.max_iterations;
-  search_params.min_score = p.init_yaw_search.min_inlier_ratio;
-  search_params.min_score_gap = p.init_yaw_search.min_score_gap;
-  search_params.distinct_yaw = distinct_yaw_for_step(p.init_yaw_search.step);
-  search_params.time_budget = p.init_yaw_search.time_budget;
-  search_params.hint_position = init_hint_T_world_imu_.translation();
-  search_params.max_translation = p.init_yaw_search.max_translation;
-  const CandidateSearchResult result = search_candidates(*map_, cloud, candidates, search_params);
+  const CandidateSearchResult result = search_candidates(*map_, cloud, candidates, init_search_params(p, init_hint_T_world_imu_.translation()));
 
   {
     std::lock_guard<std::mutex> lock(status_mutex_);
