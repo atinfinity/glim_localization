@@ -96,6 +96,8 @@ TEST_F(LocalizationOdometryTest, ConvergesFromPerturbedInitialPose) {
   params.init_v_world_imu.setZero();
   params.num_threads = 2;
   params.map_factors.num_threads = 2;
+  // Below the 5 tiles of the map, which are all within the search radius: the cap on the work per frame must bite
+  params.map_factors.max_submaps = 3;
 
   OdometryEstimationLocalizationCPU odometry(params, *map_);
 
@@ -157,11 +159,11 @@ TEST_F(LocalizationOdometryTest, ConvergesFromPerturbedInitialPose) {
   EXPECT_GT(status.num_map_factors, 0);
   // No wall-clock bound: it depends on the machine and on what runs beside the test, so it either flakes or checks
   // nothing. The elapsed time and latencies above are printed for comparison, and ctest's TIMEOUT catches a hang. The
-  // work per frame is bounded instead: at most one factor per level of each of max_submaps tiles.
+  // work per frame is bounded instead: at most one factor per level of each of max_submaps tiles. The cap is below the
+  // tile count and reached, so a query or a tile selection that ignores max_submaps fails here.
   const auto tiles = (*map_)->tiles();
-  ASSERT_FALSE(tiles.empty());
-  EXPECT_GT(max_map_factors, 0);
-  EXPECT_LE(max_map_factors, params.map_factors.max_submaps * static_cast<int>(tiles.front()->voxelmaps.size()));
+  ASSERT_GT(static_cast<int>(tiles.size()), params.map_factors.max_submaps);
+  EXPECT_EQ(max_map_factors, params.map_factors.max_submaps * static_cast<int>(tiles.front()->voxelmaps.size()));
 }
 
 namespace {
