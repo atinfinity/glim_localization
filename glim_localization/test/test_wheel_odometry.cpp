@@ -1156,3 +1156,22 @@ TEST_F(WheelGapResetTest, FallsBackOnAWrongWheelYawRate) {
   print("no wheel turn from 5 s, key on", on);
   expect_slip_fallback(off, on, ResetExtrapolation::SLIP_ANGULAR);
 }
+
+// The known blind spot of the slip check: a scale slip that starts in the gap and lasts through the reset frame. The
+// wheel velocity at the end is wrong by the same factor, so the displacement matches the trapezoid within
+// |k - 1| / 2 * v against the gate 0.3 * max(1, k) * v: k = 2 passes. Nothing after the gap gives another speed
+// reference, so the reset uses the wheels and is worse than the constant velocity; the map factors have to correct
+// it. This pins the current behavior so that the limit stays explicit.
+TEST_F(WheelGapResetTest, PersistentSlipFromTheGapIsNotCaught) {
+  const Trajectory trajectory = turning_T_world_imu;
+  const WheelSamples wheel = scaled_wheel(trajectory, [](double t) { return t >= kGapBegin ? 2.0 : 1.0; });
+  const GapRun off = run_gap(gap_params(trajectory, false, 1), trajectory, &wheel);
+  const GapRun on = run_gap(gap_params(trajectory, true, 1), trajectory, &wheel);
+  print("wheel x2 from the gap on, key off", off);
+  print("wheel x2 from the gap on, key on", on);
+  expect_one_gap_reset(off);
+  expect_one_gap_reset(on);
+  EXPECT_EQ(off.extrapolation, ResetExtrapolation::NONE);
+  EXPECT_EQ(on.extrapolation, ResetExtrapolation::WHEEL);
+  EXPECT_GT(on.translation_error, 2.0 * off.translation_error);
+}
