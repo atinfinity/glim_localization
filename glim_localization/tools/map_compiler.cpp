@@ -158,7 +158,12 @@ int main(int argc, char** argv) {
   }
   if (!export_pcd.empty()) {
     std::error_code ec;
-    if (std::filesystem::exists(export_pcd, ec)) {
+    const bool exists = std::filesystem::exists(export_pcd, ec);
+    if (ec) {
+      std::cerr << "failed to check " << export_pcd << ": " << ec.message() << std::endl;
+      return 1;
+    }
+    if (exists) {
       std::cerr << export_pcd << " already exists" << std::endl;
       return 1;
     }
@@ -247,20 +252,21 @@ int main(int argc, char** argv) {
   }
   spdlog::info("wrote {} submaps to {}", submaps.size(), output);
 
-  if (!export_pcd.empty()) {
-    if (!glim_localization::write_pcd(export_pcd, submaps)) {
-      spdlog::error("failed to write the point cloud {}; the compiled map in {} was written and is complete", export_pcd, output);
-      return 1;
-    }
-    spdlog::info("wrote the point cloud {}", export_pcd);
-  }
-
   if (!grid_prefix.empty()) {
     if (!glim_localization::save_occupancy_grid(grid_prefix, grid)) {
       spdlog::error("failed to write the occupancy grid {}; the compiled map in {} was written and is complete", grid_prefix, output);
       return 1;
     }
     spdlog::info("wrote the occupancy grid {}", glim_localization::occupancy_grid_yaml_path(grid_prefix));
+  }
+
+  // Last, so a failed export leaves the compiled map and the occupancy grid complete.
+  if (!export_pcd.empty()) {
+    if (!glim_localization::write_pcd(export_pcd, submaps)) {
+      spdlog::error("failed to write the point cloud {}; the other outputs were written and are complete", export_pcd);
+      return 1;
+    }
+    spdlog::info("wrote the point cloud {}", export_pcd);
   }
   return 0;
 }

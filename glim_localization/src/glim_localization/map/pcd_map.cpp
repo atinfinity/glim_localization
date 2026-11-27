@@ -657,6 +657,8 @@ bool recompute_covariances(LoadedSubmaps& submaps, int k_neighbors, int num_thre
 }
 
 bool write_pcd(const std::string& path, const LoadedSubmaps& submaps) {
+  // PCD `DATA binary` is little-endian, and the doubles below are written in host byte order.
+  static_assert(__BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__, "write_pcd writes host-order doubles; PCD binary is little-endian");
   namespace fs = std::filesystem;
   size_t num_points = 0;
   for (const auto& submap : submaps) {
@@ -668,7 +670,12 @@ bool write_pcd(const std::string& path, const LoadedSubmaps& submaps) {
   }
   const fs::path output(path);
   std::error_code ec;
-  if (fs::exists(output, ec) || ec) {
+  const bool exists = fs::exists(output, ec);
+  if (ec) {
+    spdlog::error("failed to check {}: {}", path, ec.message());
+    return false;
+  }
+  if (exists) {
     spdlog::error("{} already exists", path);
     return false;
   }
@@ -680,7 +687,8 @@ bool write_pcd(const std::string& path, const LoadedSubmaps& submaps) {
     }
   }
 
-  // Written under a temporary name and renamed, so a failure does not leave a half-written file behind.
+  // Written under a temporary name and renamed, so a failure does not leave a half-written file behind. The check above
+  // and the rename are not atomic together: a file created at `path` in between is replaced (rename overwrites it).
   const fs::path temp = path + ".tmp." + std::to_string(::getpid());
   {
     std::ofstream ofs(temp, std::ios::binary | std::ios::trunc);
