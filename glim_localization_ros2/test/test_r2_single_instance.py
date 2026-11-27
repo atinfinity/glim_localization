@@ -10,7 +10,8 @@ One localization per process: a component container refuses a second R2 node.
 Headless; no map and no bag. The node is only constructed (not configured), which is where it
 takes the process claim. A second LoadNode into the same container must fail with the claim
 message; after the first node is unloaded, a load must succeed again (the destructor releases the
-claim).
+claim). A load whose constructor throws after it took the claim (a parameter of the wrong type)
+must release it too.
 """
 import time
 import unittest
@@ -24,6 +25,7 @@ import launch_testing.asserts
 import launch_testing.markers
 import pytest
 import rclpy
+from rclpy.parameter import Parameter
 
 CONTAINER = '/single_instance_container'
 PLUGIN = 'glim_localization_ros2::LocalizationNode'
@@ -63,14 +65,21 @@ class TestR2SingleInstance(unittest.TestCase):
         self.assertTrue(future.done(), f'{client.srv_name} did not answer')
         return future.result()
 
-    def load_node(self, name):
+    def load_node(self, name, parameters=()):
         request = LoadNode.Request()
         request.package_name = 'glim_localization_ros2'
         request.plugin_name = PLUGIN
         request.node_name = name
+        request.parameters = [p.to_parameter_msg() for p in parameters]
         return self.call(self.load, request)
 
     def test_second_load_refused_until_unload(self, proc_output):
+        # A constructor that throws after it took the claim must release it: autostart as a string
+        # fails declare_parameter, and the next valid load must not be refused
+        bad = self.load_node('bad_localization', [Parameter('autostart', value='yes')])
+        self.assertFalse(bad.success)
+        self.assertNotIn('one localization per process', bad.error_message)
+
         first = self.load_node('first_localization')
         self.assertTrue(first.success, first.error_message)
 

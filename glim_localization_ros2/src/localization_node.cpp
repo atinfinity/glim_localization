@@ -186,12 +186,20 @@ public:
     // localization runs per process (see EstimateBridge). A second load in the same process throws
     // here, and the component container answers LoadNode with this message.
     EstimateBridge::connect(bridge_, std::string("R2 node ") + get_fully_qualified_name());
-    declare_parameter<std::string>("config_path", "config/r2");
-    declare_parameter<std::string>("map_path", "");
-    declare_parameter<double>("max_init_pose_delay", 0.2);
-    if (declare_parameter<bool>("autostart", false)) {
-      // One shot, from the executor: the transitions must not run inside the constructor
-      autostart_timer_ = create_wall_timer(std::chrono::milliseconds(0), [this] {autostart();});
+    // The destructor does not run when the constructor throws, and the callbacks in the static
+    // slots keep bridge_ alive: disconnect here, or the claim would stay with a node that does not
+    // exist and refuse every later load (for example after a parameter of the wrong type)
+    try {
+      declare_parameter<std::string>("config_path", "config/r2");
+      declare_parameter<std::string>("map_path", "");
+      declare_parameter<double>("max_init_pose_delay", 0.2);
+      if (declare_parameter<bool>("autostart", false)) {
+        // One shot, from the executor: the transitions must not run inside the constructor
+        autostart_timer_ = create_wall_timer(std::chrono::milliseconds(0), [this] {autostart();});
+      }
+    } catch (...) {
+      bridge_->disconnect();
+      throw;
     }
   }
 
