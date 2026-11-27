@@ -28,6 +28,7 @@ nav = [
   { "Map preparation" = "maps.md" },
   { "Offline replay and evaluation" = "replay.md" },
   { "Simulation evaluation" = "sim_eval.md" },
+  { "Benchmark" = "benchmark.md" },
   { "ROS 2" = "ros2.md" },
   { "Configuration reference" = "https://atinfinity.github.io/glim_localization/DESIGN/#55-configuration-example" },
   { "Limitations" = "status.md" },

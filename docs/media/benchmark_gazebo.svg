@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="296" viewBox="0 0 760 296" font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif" role="img" aria-label="Benchmark on the Gazebo bag: latency and ATE per method">
+<rect width="760" height="296" fill="#fcfcfb"/>
+<text x="16" y="24" font-size="15" font-weight="600" fill="#0b0b0b">Benchmark on the Gazebo bag</text>
+<text x="16" y="42" font-size="12" fill="#52514e">ros2 bag play at 1x, the same map and initial pose. Median over the runs.</text>
+<text x="16" y="76" font-size="13" font-weight="600" fill="#0b0b0b">Latency, scan in to pose out [ms]: median, whisker to p95</text>
+<line x1="300.0" y1="84" x2="300.0" y2="150" stroke="#e4e3df" stroke-width="1"/>
+<text x="300.0" y="166" font-size="11" fill="#52514e" text-anchor="middle">0</text>
+<line x1="395.0" y1="84" x2="395.0" y2="150" stroke="#e4e3df" stroke-width="1"/>
+<text x="395.0" y="166" font-size="11" fill="#52514e" text-anchor="middle">100</text>
+<line x1="490.0" y1="84" x2="490.0" y2="150" stroke="#e4e3df" stroke-width="1"/>
+<text x="490.0" y="166" font-size="11" fill="#52514e" text-anchor="middle">200</text>
+<line x1="585.0" y1="84" x2="585.0" y2="150" stroke="#e4e3df" stroke-width="1"/>
+<text x="585.0" y="166" font-size="11" fill="#52514e" text-anchor="middle">300</text>
+<line x1="680.0" y1="84" x2="680.0" y2="150" stroke="#e4e3df" stroke-width="1"/>
+<text x="680.0" y="166" font-size="11" fill="#52514e" text-anchor="middle">400</text>
+<text x="290" y="99" font-size="12" fill="#0b0b0b" text-anchor="end">glim_localization</text>
+<rect x="300" y="88" width="38.3" height="14" rx="3" fill="#2a78d6"><title>glim_localization: 40.36</title></rect>
+<line x1="338.3" y1="95" x2="588.8" y2="95" stroke="#0b0b0b" stroke-width="1"/>
+<line x1="588.8" y1="90" x2="588.8" y2="100" stroke="#0b0b0b" stroke-width="1"><title>p95: 304.05</title></line>
+<text x="594.8" y="99" font-size="11" fill="#52514e">40.4 (p95 304.0)</text>
+<text x="290" y="121" font-size="12" fill="#0b0b0b" text-anchor="end">lidar_localization_ros2 NDT (IMU, default)</text>
+<rect x="300" y="110" width="18.4" height="14" rx="3" fill="#eb6834"><title>lidar_localization_ros2 NDT (IMU, default): 19.33</title></rect>
+<line x1="318.4" y1="117" x2="321.4" y2="117" stroke="#0b0b0b" stroke-width="1"/>
+<line x1="321.4" y1="112" x2="321.4" y2="122" stroke="#0b0b0b" stroke-width="1"><title>p95: 22.49</title></line>
+<text x="327.4" y="121" font-size="11" fill="#52514e">19.3 (p95 22.5)</text>
+<text x="290" y="143" font-size="12" fill="#0b0b0b" text-anchor="end">lidar_localization_ros2 NDT, no IMU</text>
+<rect x="300" y="132" width="17.3" height="14" rx="3" fill="#f2a57f"><title>lidar_localization_ros2 NDT, no IMU: 18.17</title></rect>
+<line x1="317.3" y1="139" x2="321.7" y2="139" stroke="#0b0b0b" stroke-width="1"/>
+<line x1="321.7" y1="134" x2="321.7" y2="144" stroke="#0b0b0b" stroke-width="1"><title>p95: 22.88</title></line>
+<text x="327.7" y="143" font-size="11" fill="#52514e">18.2 (p95 22.9)</text>
+<line x1="300" y1="84" x2="300" y2="150" stroke="#52514e" stroke-width="1"/>
+<text x="16" y="196" font-size="13" font-weight="600" fill="#0b0b0b">ATE translation RMSE [mm]</text>
+<line x1="300.0" y1="204" x2="300.0" y2="270" stroke="#e4e3df" stroke-width="1"/>
+<text x="300.0" y="286" font-size="11" fill="#52514e" text-anchor="middle">0</text>
+<line x1="426.7" y1="204" x2="426.7" y2="270" stroke="#e4e3df" stroke-width="1"/>
+<text x="426.7" y="286" font-size="11" fill="#52514e" text-anchor="middle">5</text>
+<line x1="553.3" y1="204" x2="553.3" y2="270" stroke="#e4e3df" stroke-width="1"/>
+<text x="553.3" y="286" font-size="11" fill="#52514e" text-anchor="middle">10</text>
+<line x1="680.0" y1="204" x2="680.0" y2="270" stroke="#e4e3df" stroke-width="1"/>
+<text x="680.0" y="286" font-size="11" fill="#52514e" text-anchor="middle">15</text>
+<text x="290" y="219" font-size="12" fill="#0b0b0b" text-anchor="end">glim_localization</text>
+<rect x="300" y="208" width="88.1" height="14" rx="3" fill="#2a78d6"><title>glim_localization: 3.48</title></rect>
+<text x="394.1" y="219" font-size="11" fill="#52514e">3.5</text>
+<text x="290" y="241" font-size="12" fill="#0b0b0b" text-anchor="end">lidar_localization_ros2 NDT (IMU, default)</text>
+<rect x="300" y="230" width="335.7" height="14" rx="3" fill="#eb6834"><title>lidar_localization_ros2 NDT (IMU, default): 13.25</title></rect>
+<text x="641.7" y="241" font-size="11" fill="#52514e">13.3</text>
+<text x="290" y="263" font-size="12" fill="#0b0b0b" text-anchor="end">lidar_localization_ros2 NDT, no IMU</text>
+<rect x="300" y="252" width="331.0" height="14" rx="3" fill="#f2a57f"><title>lidar_localization_ros2 NDT, no IMU: 13.07</title></rect>
+<text x="637.0" y="263" font-size="11" fill="#52514e">13.1</text>
+<line x1="300" y1="204" x2="300" y2="270" stroke="#52514e" stroke-width="1"/>
+</svg>

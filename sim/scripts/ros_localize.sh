@@ -24,33 +24,11 @@ if [[ ! -f /ws/build/colcon/install/setup.bash ]]; then
 fi
 source /ws/build/colcon/install/setup.bash
 
-# Config: the localize.sh one (rig extrinsic) with the R2 config_ros.json. The gpu_lidar clouds have
-# no time field: a global shutter LiDAR. The initial pose is the ground truth at the first frame. ~/map
-# keeps one point per 0.2 m voxel instead of 0.5 m, for a denser map in the picture.
-rm -rf "${viz}/config"
-cp -r "${out}/config" "${viz}/config"
-cp "${repo_root}/glim_localization_ros2/config/r2/config_ros.json" "${viz}/config/"
-env -u PYTHONPATH "${GLIM_LOC_PYTHON}" - "${viz}/config" "${out}/traj_gt.txt" <<'PY'
-import re
-import sys
-d, gt = sys.argv[1], sys.argv[2]
-row = next(l for l in open(gt) if l.strip() and not l.startswith("#")).split()
-edits = {
-    "config_ros.json": [(r'"imu_topic": "[^"]*"', '"imu_topic": "/sim_eval/imu"'),
-                        (r'"map_cloud_voxel": [0-9.]+', '"map_cloud_voxel": 0.2'),
-                        (r'"points_topic": "[^"]*"', '"points_topic": "/sim_eval/lidar/points"')],
-    "config_sensors.json": [(r'"global_shutter_lidar": \w+', '"global_shutter_lidar": true')],
-    "config_odometry_localization_cpu.json": [
-        (r'"map_path": "[^"]*",', '"map_path": "",\n    "init_T_world_imu": [' + ", ".join(row[1:8]) + "],")],
-}
-for name, subs in edits.items():
-    path = f"{d}/{name}"
-    text = open(path).read()
-    for pattern, repl in subs:
-        text, n = re.subn(pattern, repl, text, count=1)
-        assert n == 1, (name, pattern)
-    open(path, "w").write(text)
-PY
+# Config: the localize.sh one with the R2 config_ros.json, the sim topics and the initial pose
+# (sim/scripts/ros_config.py). ~/map keeps one point per 0.2 m voxel instead of 0.5 m, for a denser map
+# in the picture.
+env -u PYTHONPATH "${GLIM_LOC_PYTHON}" "${repo_root}/sim/scripts/ros_config.py" "${out}" "${viz}/config" \
+  --map-cloud-voxel 0.2
 
 # Background jobs of a script ignore SIGINT, so they are stopped with SIGTERM.
 ros2 launch glim_localization_ros2 localization.launch.py use_sim_time:=true \

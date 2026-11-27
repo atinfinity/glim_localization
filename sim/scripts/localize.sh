@@ -2,9 +2,10 @@
 # Convert, compile the map, localize and evaluate (inside the development image, glim_localization:dev).
 #   sim/scripts/localize.sh <out dir>
 # Needs <out>/bag and <out>/traj_gt.txt from record.sh and <out>/map.pcd from sdf2map. Writes
-# <out>/dataset, <out>/map, <out>/config, <out>/run (replay output, eval.json, eval.txt) and
-# <out>/run/status_sequence.json. Builds the core first when it is not built. Fails on a data check, a
-# replay error, any LOST state, or a pose error above SIM_EVAL_MAX_TRANS / SIM_EVAL_MAX_ROT_DEG.
+# <out>/dataset, <out>/map, <out>/map_export.pcd (the compiled map as one PCD), <out>/config, <out>/run
+# (replay output, eval.json, eval.txt) and <out>/run/status_sequence.json. Builds the core first when it
+# is not built. Fails on a data check, a replay error, any LOST state, or a pose error above
+# SIM_EVAL_MAX_TRANS / SIM_EVAL_MAX_ROT_DEG.
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -23,7 +24,8 @@ MAX_ROT_DEG="${SIM_EVAL_MAX_ROT_DEG:-1.0}"
 for f in bag traj_gt.txt map.pcd; do
   test -e "${out}/${f}" || { echo "FAIL: ${out}/${f} is missing" >&2; exit 1; }
 done
-rm -rf "${out}/dataset" "${out}/map" "${out}/config" "${out}/run"
+# map_export.pcd is removed too: map_compiler --export-pcd refuses an existing file.
+rm -rf "${out}/dataset" "${out}/map" "${out}/config" "${out}/run" "${out}/map_export.pcd"
 mkdir -p "${out}/logs"
 
 if [[ ! -x "${build_dir}/tools/glim_localization_replay" || ! -x "${build_dir}/tools/map_compiler" ]]; then
@@ -39,8 +41,10 @@ py "${repo_root}/scripts/bag_to_replay.py" "${out}/bag" --out "${out}/dataset" \
   > "${out}/logs/bag_to_replay.log" 2>&1 || { cat "${out}/logs/bag_to_replay.log" >&2; exit 1; }
 tail -n 3 "${out}/logs/bag_to_replay.log"
 
-# 2. Map from the sdf2map PCD (world frame = map frame)
+# 2. Map from the sdf2map PCD (world frame = map frame). map_export.pcd holds the points of the compiled map,
+#    the map of the baseline in scripts/sim_benchmark.sh, so that every method sees the same points.
 "${build_dir}/tools/map_compiler" "${out}/map.pcd" "${out}/map" --grid-size 50 --voxel-size 0.1 \
+  --export-pcd "${out}/map_export.pcd" \
   > "${out}/logs/map_compiler.log" 2>&1 || { cat "${out}/logs/map_compiler.log" >&2; exit 1; }
 
 # Data checks: counts, stamps and rates in simulation time, the IMU against the ground truth, and the scans

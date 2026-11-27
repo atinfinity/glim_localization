@@ -68,7 +68,7 @@ The run fails when the node, `rviz2` or `viz_paths.py` exits early. Only one cap
 | --- | --- | --- |
 | 1. record | sim | `sim/scripts/record.sh`: builds the `ScriptedMotion` plugin, then Gazebo Harmonic runs `sim/worlds/sim_eval_room.sdf` headless for `SIM_DURATION` s of simulation time. `ros_gz_bridge` and `ros2 bag record` (mcap) write the LiDAR points, the IMU and the IMU link pose to `bag/`. `sim/scripts/pose_to_tum.py` writes the pose topic as `traj_gt.txt` (TUM, `T_world_imu`, simulation time), and the real-time factor and the Gazebo version to `record.json`. |
 | 2. map | sim | sdf2map samples the world (without the rig) into `map.pcd`, density 400 points/m², 0.05 m voxel, fixed seed. |
-| 3. localize | dev | `sim/scripts/localize.sh`: `bag_to_replay.py --gt`, `map_compiler` (PCD path, 50 m tiles, 0.1 m voxel), `sim/scripts/check_data.py`, the replay from the first ground truth pose, the status sequence, and `evaluate.py`, which never aligns trajectories (the world frame is the map frame). |
+| 3. localize | dev | `sim/scripts/localize.sh`: `bag_to_replay.py --gt`, `map_compiler` (PCD path, 50 m tiles, 0.1 m voxel, plus `map_export.pcd` for the [benchmark](benchmark.md)), `sim/scripts/check_data.py`, the replay from the first ground truth pose, the status sequence, and `evaluate.py`, which never aligns trajectories (the world frame is the map frame). |
 
 `check_data.py` fails the run before the replay when:
 - a sensor or the ground truth has the wrong count for the duration, a first stamp more than one period after 0, or a gap;
