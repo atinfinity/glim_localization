@@ -34,15 +34,21 @@ def to_float32_pcd(src, dest):
     header = {}
     with open(src, "rb") as handle:
         while True:
-            line = handle.readline().decode("ascii").strip()
+            raw = handle.readline()
+            if not raw:
+                raise RuntimeError(f"{src}: end of file before the DATA line")
+            line = raw.decode("ascii").strip()
             if not line or line.startswith("#"):
                 continue
             key, *values = line.split()
             header[key] = values
             if key == "DATA":
                 break
-        if header["FIELDS"] != ["x", "y", "z"] or header["DATA"] != ["binary"] or header["TYPE"] != ["F"] * 3:
-            raise RuntimeError(f"{src}: expected binary float x y z fields, got {header}")
+        sizes = header.get("SIZE")
+        if (header.get("FIELDS") != ["x", "y", "z"] or header.get("DATA") != ["binary"]
+                or header.get("TYPE") != ["F"] * 3 or header.get("COUNT", ["1"] * 3) != ["1"] * 3
+                or sizes not in (["4"] * 3, ["8"] * 3)):
+            raise RuntimeError(f"{src}: expected binary float x y z fields of one size, got {header}")
         dtype = {"4": "<f4", "8": "<f8"}[header["SIZE"][0]]
         points = np.fromfile(handle, dtype=dtype, count=3 * int(header["POINTS"][0])).reshape(-1, 3)
     with open(dest, "wb") as handle:
