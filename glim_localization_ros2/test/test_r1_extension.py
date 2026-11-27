@@ -93,9 +93,12 @@ def make_config_dir(dst, map_path):
         ros_path, 'localization_ros',
         {'wheel_odom_topic': WHEEL_TOPIC, 'wheel_odom_child_frame_id': 'base_link'})
     # glim_rosbag hands bag messages to the extension as it reads them, but queues the frames for
-    # the odometry. At the default 100x it can read far ahead, and the reset of the 5 s
-    # /initialpose then clears wheel samples of frames after it. 2x bounds that backlog.
-    edit_config(ros_path, 'glim_ros', {'playback_speed': 2.0})
+    # the odometry. Faster than the odometry, it reads ahead: the reset of the 5 s /initialpose
+    # then drops the queued frames before it and clears wheel samples of frames after it, and a
+    # frame handled more than 1 s after the newest IMU sample is not published. 2x was not enough
+    # on a loaded CPU (79 poses for 121 frames); real time bounds the backlog (see
+    # test_launch_r1.py).
+    edit_config(ros_path, 'glim_ros', {'playback_speed': 1.0})
     return dst
 
 
