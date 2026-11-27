@@ -119,6 +119,11 @@ if(BUILD_TESTING)
     ENV ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST)
   target_link_libraries(test_map_publisher localization_publisher)
 
+  # One localization per process: the process claim and the static slots of EstimateBridge
+  ament_add_ros_isolated_gtest(test_estimate_bridge test/test_estimate_bridge.cpp
+    ENV ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST)
+  target_link_libraries(test_estimate_bridge localization_publisher)
+
   # No ROS spin: the gyro buffer of the R1 extension is plain C++
   ament_add_gtest(test_gyro_buffer test/test_gyro_buffer.cpp)
   target_link_libraries(test_gyro_buffer Eigen3::Eigen)
@@ -138,7 +143,8 @@ if(BUILD_TESTING)
   find_package(launch_testing_ament_cmake REQUIRED)
   # test_launch_*: the installed launch files (launch/), headless (rviz:=false)
   foreach(launch_test test_r1_extension test_r2_node test_r2_imu_gap test_r2_wheel_odom
-      test_r2_time_offset test_launch_r1 test_launch_r1_live test_launch_r2 test_launch_r2_component)
+      test_r2_time_offset test_r2_single_instance test_launch_r1 test_launch_r1_live test_launch_r2
+      test_launch_r2_component)
     add_launch_test(test/${launch_test}.py TIMEOUT 300 RUNNER "${ros_isolated_runner}"
       ENV ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST)
   endforeach()

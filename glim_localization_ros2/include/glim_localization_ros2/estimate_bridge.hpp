@@ -10,6 +10,7 @@
 #include <cstddef>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -20,6 +21,7 @@
 #include "glim/odometry/estimation_frame.hpp"
 #include "glim/util/config.hpp"
 #include "glim_localization/odometry/odometry_estimation_localization.hpp"
+#include "glim_localization/util/process_claim.hpp"
 #include "glim_localization_ros2/gyro_buffer.hpp"
 #include "glim_localization_ros2/localization_publisher.hpp"
 
@@ -40,17 +42,30 @@ LocalizationPublisherParams read_publisher_params(const glim::Config & config_ro
 /// node.
 ///
 /// The core reports through static CallbackSlots, which are not thread-safe to modify while an
-/// odometry thread runs. So a bridge is connected once (connect()) and stays registered for the
-/// rest of the process; attach() and detach() switch the forwarding on and off under a mutex. Every
-/// connected bridge receives the callbacks of every odometry instance in the process, so run one
-/// localization (R1 or R2) per process.
+/// odometry thread runs, and every registered bridge would receive the callbacks of every odometry
+/// instance in the process. So one localization (R1 or R2) runs per process: connect() takes the
+/// process claim (glim_localization::ProcessClaim) before it touches the slots and refuses a second
+/// bridge. attach() and detach() switch the forwarding on and off under a mutex. disconnect()
+/// removes the callbacks and releases the claim (R2 on unload, after its odometry thread is joined;
+/// R1 never disconnects).
 class EstimateBridge {
 public:
   using PoseMsg = geometry_msgs::msg::PoseWithCovarianceStamped;
 
-  /// Register bridge in OdometryEstimationCallbacks::on_insert_imu, on_update_new_frame and
+  /// Take the process claim for owner, then register bridge in
+  /// OdometryEstimationCallbacks::on_insert_imu, on_update_new_frame and
   /// LocalizationCallbacks::on_status. Call before the odometry starts.
-  static void connect(const std::shared_ptr<EstimateBridge> & bridge);
+  /// @throw std::runtime_error "one localization per process: already held by <owner>" while
+  /// another bridge is connected (the slots are left as they were); std::logic_error if bridge is
+  /// already connected
+  static void connect(const std::shared_ptr<EstimateBridge> & bridge, const std::string & owner);
+
+  /// Remove the callbacks that connect() added and release the claim. Idempotent. No odometry
+  /// thread may run in the process (the slots are not thread-safe): call it after the odometry of
+  /// the owner is stopped and joined. The caller must hold a shared_ptr to the bridge: the removed
+  /// callbacks drop theirs.
+  void disconnect();
+  bool connected() const;
 
   /// Start forwarding to publisher. Clears the gyro buffer.
   void attach(
@@ -94,6 +109,13 @@ public:
   DropCounts drop_counts() const;
 
 private:
+  // connect() and disconnect() state, under a mutex of its own (the forwarding uses mutex_)
+  mutable std::mutex connection_mutex_;
+  std::optional<glim_localization::ProcessClaim> claim_;
+  int imu_callback_id_ = -1;
+  int frame_callback_id_ = -1;
+  int status_callback_id_ = -1;
+
   mutable std::mutex mutex_;
   std::unique_ptr<LocalizationPublisher> publisher_;
   std::string map_frame_;
