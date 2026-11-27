@@ -39,7 +39,8 @@
   // publish_aligned_points : publish the scan of each published frame on ~/aligned_points, in the map frame (sensor
   //                          data QoS; not in LOST). Built only while the topic has a subscriber
   // aligned_points_voxel   : ~/aligned_points keeps one point (the centroid) per voxel of this size [m]; 0 keeps every
-  //                          point
+  //                          point. The cloud is built on the odometry thread: for a dense LiDAR (100k+ points per
+  //                          scan) set it non-zero, for example 0.2
   // wheel_odom_topic          : nav_msgs/Odometry input of wheel_odom_enabled (odometry config); empty: none. Only
   //                             twist.twist is used, in child_frame_id (the base of wheel_odom_T_imu_base); the pose,
   //                             header.frame_id and the covariances are ignored, and no TF is looked up. Not subscribed
