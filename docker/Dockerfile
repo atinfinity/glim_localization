@@ -9,6 +9,12 @@ ARG GTSAM_POINTS_VERSION=1.2.2
 ARG JOBS=4
 # Primary key fingerprint of the koide3 PPA (docs/DEPENDENCIES.md). The build fails if KEY.gpg differs.
 ARG KOIDE3_PPA_KEY_FPR=A0DAE9CF75CFEF37A509FCD3C2C44E47B79E8F3A
+# SHA256 of the PPA debs per architecture (docs/DEPENDENCIES.md). The PPA has replaced debs under the
+# same version, so the version alone does not pin the contents; the build fails on any other file.
+ARG GTSAM_SHA256_AMD64=257cbe2edf232cbce64f3bac45060c6e56f1b17ead939b415ae7247557cb4e66
+ARG GTSAM_SHA256_ARM64=211bc1693478a3afbd9cc70bbc386a9ec4c9d06b9f87beb9c2192f1bbc7303cb
+ARG GTSAM_POINTS_SHA256_AMD64=bd947013c199789e04b1f2a234159a107213b9decc04a892877de05b1898f8b4
+ARG GTSAM_POINTS_SHA256_ARM64=246d03b234bf7904cc755e62ed506e5097d4845ce38241e9bdf65ad039e1b34e
 
 SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
 
@@ -33,9 +39,28 @@ RUN apt-get update \
     && echo "deb [signed-by=/etc/apt/keyrings/koide3_ppa.gpg] https://koide3.github.io/ppa/ubuntu2404 ./" \
          > /etc/apt/sources.list.d/koide3_ppa.list \
     && apt-get update \
+    && arch="$(dpkg --print-architecture)" \
+    && case "${arch}" in \
+         amd64 | arm64) ;; \
+         *) echo "no pinned SHA256 of the PPA debs for architecture ${arch} (docs/DEPENDENCIES.md)" >&2; exit 1 ;; \
+       esac \
+    && debs="$(mktemp -d)" && chown _apt "${debs}" \
+    && check_sha256() { \
+         local deb="${debs}/$1_${arch}.deb" expected="${!2:-}" actual; \
+         actual="$(sha256sum "${deb}" | cut -d ' ' -f 1)" || actual=""; \
+         if [ -z "${expected}" ] || [ "${actual}" != "${expected}" ]; then \
+           echo "SHA256 mismatch for ${1%%_*} on ${arch}: expected ${expected:-none} (ARG $2), got ${actual:-none}." >&2; \
+           echo "The PPA replaced this file under the same version; re-verify per docs/DEPENDENCIES.md, then update ARG $2 in docker/Dockerfile and docker/Dockerfile.cuda." >&2; \
+           exit 1; \
+         fi; \
+       } \
+    && (cd "${debs}" && apt-get download "libgtsam-notbb-dev=${GTSAM_VERSION}" "libgtsam-points-dev=${GTSAM_POINTS_VERSION}") \
+    && check_sha256 "libgtsam-notbb-dev_${GTSAM_VERSION}" "GTSAM_SHA256_${arch^^}" \
+    && check_sha256 "libgtsam-points-dev_${GTSAM_POINTS_VERSION}" "GTSAM_POINTS_SHA256_${arch^^}" \
     && apt-get install -y --no-install-recommends \
-         "libgtsam-notbb-dev=${GTSAM_VERSION}" \
-         "libgtsam-points-dev=${GTSAM_POINTS_VERSION}" \
+         "${debs}/libgtsam-notbb-dev_${GTSAM_VERSION}_${arch}.deb" \
+         "${debs}/libgtsam-points-dev_${GTSAM_POINTS_VERSION}_${arch}.deb" \
+    && rm -rf "${debs}" \
     && ldconfig \
     && rm -rf /var/lib/apt/lists/*
 
