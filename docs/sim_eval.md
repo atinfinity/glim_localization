@@ -34,6 +34,31 @@ The script builds the simulation image `glim_localization:sim` (`docker/sim/Dock
 
 On the development Mac (Docker, arm64, CPU only) one run takes about 45 s once the images and the core build exist. Measurements and the problems found are in the [progress entry](progress/2026-11-25-sim-eval-step1.md).
 
+## RViz2 capture
+
+`scripts/sim_viz.sh` runs `glim_localization_node` (R2) on the bag of a finished `sim_eval.sh` run and records RViz2. The picture shows:
+- the map (`~/map`, gray);
+- the scan aligned in the map frame (`~/aligned_points`, orange);
+- the pose (`~/pose`);
+- the estimated path (cyan) over the ground truth (white).
+
+```bash
+scripts/sim_eval.sh             # once: bag, map and config in out/sim_eval
+scripts/sim_viz.sh              # out/sim_eval/viz/sim_viz.webp and sim_viz.png
+scripts/sim_viz.sh my_run 0.5   # another sim_eval.sh output, played at half speed
+```
+
+| Step | Image | What |
+| --- | --- | --- |
+| 1. restamp | sim | `sim/scripts/restamp_bag.py` copies the bag to `viz/bag` with the log time of each message set to its header stamp. `record.sh` records faster than real time, so without this `ros2 bag play --clock` would publish a `/clock` that disagrees with the stamps. |
+| 2. capture | sim (detached) | `sim/scripts/viz_capture.sh` starts Xvfb, `rviz2` with `sim/rviz/sim_viz.rviz` (no panels, a fixed camera over the room) and `sim/scripts/viz_paths.py` (the two paths). It waits for `/clock`, records the screen at 10 fps with ffmpeg, and encodes an animated WebP, three times as fast as recorded (`SIM_VIZ_SPEEDUP`), at 5 fps and 640 px wide: about 3 MB for 60 s. |
+| 3. localize | dev | `sim/scripts/ros_localize.sh` builds the ROS packages in the `loc` build volume on the first run. It then launches `localization.launch.py use_sim_time:=true` and plays `viz/bag` with `--clock` at the given rate (default 1.0). The config is the one of `localize.sh`, with these changes: the R2 `config_ros.json`, the sim topics, `global_shutter_lidar: true` (the clouds have no time field), `map_cloud_voxel: 0.2`, and the first ground truth pose as `init_T_world_imu`. |
+
+The two containers are on the compose network and find each other with `ROS_AUTOMATIC_DISCOVERY_RANGE=SUBNET` (`ROS_DOMAIN_ID`, default 42). RViz2 renders with llvmpipe, like Gazebo. Other variables:
+- `SIM_VIZ_QUALITY` sets the WebP quality (default 30).
+- `SIM_VIZ_CROP` sets the crop of the 3D view, `w:h:x:y` (default `928:628:16:62`).
+- `SIM_VIZ_SETTLE` sets the wait between the node start and the playback, in seconds (default 5).
+
 ## Chain
 
 | Step | Image | What |

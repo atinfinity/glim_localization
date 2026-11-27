@@ -27,6 +27,8 @@ R1 passes the `params_file` entries (under `/**`, then `glim_ros`) to GLIM's nod
 
 `rviz:=true` starts `rviz2` with `rviz/localization.rviz` (map frame, `~/map`, `~/aligned_points`, `~/pose`, `~/odometry`, TF, and the 2D Pose Estimate tool on `/initialpose`). `rviz2` is not a dependency of this package: when it is not installed, the launch file prints a warning and starts without it.
 
+[sim_eval.md](sim_eval.md#rviz2-capture) shows the R2 node in RViz2 on the Gazebo bag, and `scripts/sim_viz.sh` records it.
+
 For the GPU module (CUDA image), use the `config/r1_gpu` and `config/r2_gpu` configs; see [CUDA variant](build.md#cuda-variant).
 
 ## R1: GLIM extension (evaluation)
