@@ -70,7 +70,9 @@ public:
 
 
   /// Convert an initial pose of the base frame in the map frame to the IMU pose for the core's
-  /// reset(). min_stamp is the message stamp (0 when unstamped, meaning the next frame).
+  /// reset(). min_stamp is the message stamp (0 when unstamped, meaning the next frame). It is
+  /// frame time (cloud header + points_time_offset), the time base of ~/pose, TF and RViz's now(),
+  /// and is compared with the frames without any shift.
   /// @return an empty string on success, otherwise why the pose is rejected (not attached, wrong
   /// frame, invalid pose)
   std::string to_T_map_imu(

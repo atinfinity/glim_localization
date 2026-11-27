@@ -138,7 +138,7 @@ if(BUILD_TESTING)
   find_package(launch_testing_ament_cmake REQUIRED)
   # test_launch_*: the installed launch files (launch/), headless (rviz:=false)
   foreach(launch_test test_r1_extension test_r2_node test_r2_imu_gap test_r2_wheel_odom
-      test_launch_r1 test_launch_r1_live test_launch_r2 test_launch_r2_component)
+      test_r2_time_offset test_launch_r1 test_launch_r1_live test_launch_r2 test_launch_r2_component)
     add_launch_test(test/${launch_test}.py TIMEOUT 300 RUNNER "${ros_isolated_runner}"
       ENV ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST)
   endforeach()

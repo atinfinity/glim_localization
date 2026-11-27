@@ -624,7 +624,8 @@ private:
       return error;
     }
     // Compared with the last frame the odometry thread took, estimated or dropped (not the last
-    // estimated frame: none is estimated before the first pose or while LOST)
+    // estimated frame: none is estimated before the first pose or while LOST). The pose stamp is
+    // frame time, like the frame stamps (points_time_offset already in), so it is not shifted.
     const InitPoseDelay delay = check_init_pose_delay(min_stamp,
         odometry_->last_input_frame_stamp(), max_init_pose_delay_);
     if (!delay.accept) {
