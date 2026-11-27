@@ -58,6 +58,9 @@ The two containers are on the compose network and find each other with `ROS_AUTO
 - `SIM_VIZ_QUALITY` sets the WebP quality (default 30).
 - `SIM_VIZ_CROP` sets the crop of the 3D view, `w:h:x:y` (default `928:628:16:62`).
 - `SIM_VIZ_SETTLE` sets the wait between the node start and the playback, in seconds (default 5).
+- `SIM_VIZ_WAIT` sets how long the capture waits for `/clock`, in seconds (default 1800). It covers the first build of the ROS packages. Once the playback has ended, `sim_viz.sh` waits at most the recording time plus 300 s for the capture.
+
+The run fails when the node, `rviz2` or `viz_paths.py` exits early. Only one capture can run at a time: the capture container has a fixed name, and both runs would use the same `ROS_DOMAIN_ID`.
 
 ## Chain
 
