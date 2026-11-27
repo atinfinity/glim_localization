@@ -342,13 +342,14 @@ void LocalizationPublisher::publish_aligned_points(
   const FrameEstimate & frame,
   const builtin_interfaces::msg::Time & stamp)
 {
-  // Built only for a subscriber: without one the topic costs nothing per frame
-  if (!aligned_points_pub_ || !frame.points_imu ||
-    aligned_points_pub_->get_subscription_count() == 0)
-  {
+  if (!aligned_points_pub_ || !frame.points_imu) {
     return;
   }
   try {
+    // Built only for a subscriber: without one the topic costs nothing per frame
+    if (aligned_points_pub_->get_subscription_count() == 0) {
+      return;
+    }
     // In the map frame, so that a display does not depend on the TF at the frame stamp
     auto msg = make_aligned_cloud(*frame.points_imu, frame.T_map_imu,
         params_.aligned_points_voxel, params_.map_frame);
