@@ -50,6 +50,10 @@ struct WheelOdometryParams {
   /// the two cases cannot be told apart, so a slip longer than this many frames lets one slipping factor through: keep
   /// it above the longest expected slip (the default is 2 s at 10 Hz).
   int gate_readmit_frames = 20;
+  /// IMU gap self-reset: move the last pose to the reset frame with the wheel motion and take the velocity from the
+  /// wheel twist, instead of the constant velocity and held orientation. Falls back to those (with a warning) when the
+  /// samples do not cover the interval within max_gap or the result is not a valid reset. No effect unless enabled.
+  bool reset_extrapolation = false;
 
   /// @throw std::invalid_argument if a value is invalid
   void validate() const;
@@ -82,6 +86,10 @@ public:
   /// samples and held constant past the ends. Empty if the samples do not cover [t0, t1] within max_gap.
   std::optional<Eigen::Isometry3d> integrate(double t0, double t1) const;
 
+  /// Twist at t, linearly interpolated between samples (as integrate() uses it; stamp is t). Empty if t is more than
+  /// max_gap outside the samples or inside a hole longer than max_gap.
+  std::optional<WheelOdometrySample> twist_at(double t) const;
+
   /// Drop samples before the last one at or before keep_from
   void trim(double keep_from);
 
@@ -98,6 +106,10 @@ private:
   std::deque<WheelOdometrySample, Eigen::aligned_allocator<WheelOdometrySample>> samples_;
   int rejected_ = 0;  ///< Consecutive samples not newer than the last one
 };
+
+/// Velocity of the IMU origin in the IMU frame for a twist of the base: R_imu_base * (v + w x p), with p the IMU origin
+/// in the base frame (the lever arm of params.T_imu_base)
+Eigen::Vector3d wheel_velocity_in_imu(const WheelOdometryParams& params, const WheelOdometrySample& twist);
 
 /// Why no wheel factor was added for a frame
 enum class WheelFactorResult { ADDED, NO_DATA, GATED };

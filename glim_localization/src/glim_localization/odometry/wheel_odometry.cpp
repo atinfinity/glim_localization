@@ -130,6 +130,27 @@ std::optional<Eigen::Isometry3d> WheelOdometryBuffer::integrate(double t0, doubl
   return Eigen::Isometry3d(T.matrix());
 }
 
+std::optional<WheelOdometrySample> WheelOdometryBuffer::twist_at(double t) const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (samples_.empty() || !std::isfinite(t)) {
+    return std::nullopt;
+  }
+  const double tol = params_.max_gap + 1e-9;
+  if (t < samples_.front().stamp - tol || t > samples_.back().stamp + tol) {
+    return std::nullopt;
+  }
+  if (t > samples_.front().stamp && t < samples_.back().stamp) {
+    const auto next = std::upper_bound(samples_.begin(), samples_.end(), t, [](double lhs, const WheelOdometrySample& rhs) { return lhs < rhs.stamp; });
+    const auto prev = next - 1;
+    if (t > prev->stamp && next->stamp - prev->stamp > tol) {
+      return std::nullopt;  // Inside a hole (a sample stamp itself is covered)
+    }
+  }
+  WheelOdometrySample sample = interpolate(t);
+  sample.stamp = t;
+  return sample;
+}
+
 void WheelOdometryBuffer::trim(double keep_from) {
   std::lock_guard<std::mutex> lock(mutex_);
   while (samples_.size() >= 2 && samples_[1].stamp <= keep_from) {
@@ -146,6 +167,11 @@ void WheelOdometryBuffer::clear() {
 size_t WheelOdometryBuffer::size() const {
   std::lock_guard<std::mutex> lock(mutex_);
   return samples_.size();
+}
+
+Eigen::Vector3d wheel_velocity_in_imu(const WheelOdometryParams& params, const WheelOdometrySample& twist) {
+  const Eigen::Vector3d p_base_imu = params.T_imu_base.inverse().translation();
+  return params.T_imu_base.linear() * (twist.linear + twist.angular.cross(p_base_imu));
 }
 
 gtsam::NonlinearFactorGraph create_wheel_factor(

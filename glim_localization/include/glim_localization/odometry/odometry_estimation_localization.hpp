@@ -240,6 +240,9 @@ public:
   size_t incomplete_drops() const { return incomplete_drops_; }
   /// Frames dropped without a pose because their stamp or scan end time is not finite (for tests and logs, not thread-safe)
   size_t nonfinite_frame_drops() const { return nonfinite_frame_drops_; }
+  /// true if the last applied reset was an IMU gap self-reset extrapolated with wheel odometry
+  /// (wheel_odom_reset_extrapolation), false after any other reset and before the first (for tests and logs, not thread-safe)
+  bool last_reset_used_wheel() const { return last_reset_used_wheel_; }
 
 protected:
   /// @throw std::invalid_argument if the map is null or a shared parameter is invalid
@@ -284,9 +287,20 @@ private:
     ResetReason reason;
     bool from_current = false;  ///< relocalize(): the pose and velocity are taken from the newest frame when applied
     double max_age = 0.0;       ///< relocalize(): the newest estimate may be at most this much older than the frame
+    bool from_wheel = false;    ///< IMU gap: the pose and velocity were extrapolated with wheel odometry
   };
 
-  bool queue_reset(const Eigen::Isometry3d& T_world_imu, const Eigen::Vector3d& v_world_imu, double min_stamp, ResetReason reason);
+  bool queue_reset(
+    const Eigen::Isometry3d& T_world_imu,
+    const Eigen::Vector3d& v_world_imu,
+    double min_stamp,
+    ResetReason reason,
+    bool from_wheel = false);
+  /// The IMU gap self-reset state at stamp from the wheel motion since the last estimate (wheel_odom_reset_extrapolation):
+  /// T = last.T_world_imu * T_imu_base * T_base * T_imu_base^-1, v = R * wheel_velocity_in_imu(twist at stamp).
+  /// @return false (with a warning) if disabled, the samples do not cover [last.stamp, stamp] within max_gap, or the
+  ///         result is not a valid reset; T and v are then unchanged
+  bool extrapolate_with_wheel(const glim::EstimationFrame& last, double stamp, Eigen::Isometry3d& T_world_imu, Eigen::Vector3d& v_world_imu) const;
   /// @param frame_stamp  the frame the reset applies at
   void apply_pending_reset(double frame_stamp);
   /// What insert_frame does with a frame after the IMU gap policy
@@ -324,6 +338,7 @@ private:
   size_t incomplete_drops_ = 0;  ///< See incomplete_drops()
   size_t nonfinite_frame_drops_ = 0;  ///< See nonfinite_frame_drops()
   bool imu_lost_ = false;     ///< The gap was too long to recover; frames are dropped until reset()
+  bool last_reset_used_wheel_ = false;  ///< See last_reset_used_wheel()
   Eigen::Matrix<double, 6, 1> start_imu_bias_;  ///< See start_imu_bias()
 
   // Initial pose search (init_yaw_search)

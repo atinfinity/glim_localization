@@ -40,6 +40,7 @@
     "wheel_odom_gate_velocity_ratio": 0.3,
     "wheel_odom_gate_angular_velocity": 0.5,
     "wheel_odom_gate_readmit_frames": 20,
+    "wheel_odom_reset_extrapolation": false,
     "smoother_lag": 5.0,
     "use_isam2_dogleg": false,
     "isam2_relinearize_skip": 1,
