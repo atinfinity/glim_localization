@@ -290,6 +290,15 @@ glim::EstimationFrame::ConstPtr OdometryEstimationLocalization::insert_frame(
   const glim::PreprocessedFrame::Ptr& frame,
   std::vector<glim::EstimationFrame::ConstPtr>& marginalized_frames) {
   const auto begin = std::chrono::steady_clock::now();
+  if (!std::isfinite(frame->stamp) || !std::isfinite(frame->scan_end_time)) {
+    // A corrupt frame is a missing frame: no comparison or hold check can judge it (a NaN compares false and a NaN
+    // span vanishes in std::max), and its stamp must not reach the reset bookkeeping. Nothing is trimmed, so the next
+    // finite frame is judged over the whole interval since the last pose, as after a LiDAR dropout. Not LOST: the
+    // IMU and the last pose are still valid.
+    nonfinite_frame_drops_++;
+    spdlog::warn("dropping a frame with a non-finite stamp ({}) or scan end time ({})", frame->stamp, frame->scan_end_time);
+    return nullptr;
+  }
   {
     // Before any drop: a reset requested after a reader saw this stamp applies at this frame or a later one
     std::lock_guard<std::mutex> lock(reset_mutex_);

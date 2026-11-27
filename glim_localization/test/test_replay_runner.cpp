@@ -2086,6 +2086,36 @@ TEST_F(ReplayRunnerTest, AShutdownFlushThroughTheAsyncWrapperDoesNotGoLost) {
   EXPECT_EQ(odometry->hold_check_trips(), 0u);
 }
 
+TEST_F(ReplayRunnerTest, AFrameWithANonFiniteStampOrScanEndIsDroppedWithoutLost) {
+  // A NaN compares false and vanishes in std::max, so neither the gap check nor the hold check can judge such a frame.
+  // It is dropped like a missing frame; the next frame is integrated over the whole interval since the last pose.
+  for (const bool stamp : {true, false}) {
+    SCOPED_TRACE(stamp ? "stamp" : "scan_end_time");
+    const auto run = run_probe(*dataset_, [stamp](ProbeOdometry& o) {
+      o.frame_hook = [stamp](const glim::PreprocessedFrame::Ptr& frame) {
+        if (std::abs(frame->stamp - 4.1) < 1e-6) {
+          (stamp ? frame->stamp : frame->scan_end_time) = std::nan("");
+        }
+      };
+    });
+    for (const auto& record : run.records) {
+      EXPECT_NE(record.state, LocalizationState::LOST) << record.stamp_ns;
+    }
+    const auto* dropped = record_at(run.records, 4.1);
+    ASSERT_NE(dropped, nullptr);
+    EXPECT_NE(dropped->result, ReplayResult::ESTIMATED);
+    const auto* next = record_at(run.records, 4.2);
+    ASSERT_NE(next, nullptr);
+    EXPECT_EQ(next->result, ReplayResult::ESTIMATED);
+    EXPECT_EQ(run.odometry->nonfinite_frame_drops(), 1u);
+    EXPECT_EQ(run.records.back().reset_count, 0);
+    EXPECT_EQ(run.odometry->incomplete_drops(), 0u);
+    EXPECT_EQ(run.odometry->hold_check_trips(), 0u);
+    EXPECT_LE(run.odometry->max_hold, 0.05 + 1e-6);
+    EXPECT_TRUE(queue_and_history_agree(*run.odometry));
+  }
+}
+
 TEST_F(ReplayRunnerTest, AnExternalResetWinsOverASelfReset) {
   // 0.2 s gap. At the moment the odometry decides to reset itself, an external pose arrives
   const auto dataset = make_variant("external_vs_self", imu_hole(4000000000, 4200000000));

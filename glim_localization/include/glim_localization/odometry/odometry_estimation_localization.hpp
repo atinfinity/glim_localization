@@ -238,6 +238,8 @@ public:
   /// Frames dropped without a pose because the IMU data ended before them and upstream would hold the last sample
   /// for more than max_imu_gap (an INCOMPLETE frame outside a gap episode; for tests and logs, not thread-safe)
   size_t incomplete_drops() const { return incomplete_drops_; }
+  /// Frames dropped without a pose because their stamp or scan end time is not finite (for tests and logs, not thread-safe)
+  size_t nonfinite_frame_drops() const { return nonfinite_frame_drops_; }
 
 protected:
   /// @throw std::invalid_argument if the map is null or a shared parameter is invalid
@@ -320,6 +322,7 @@ private:
   double gap_longest_ = 0.0;  ///< Longest gap seen in this episode [s]
   size_t hold_check_trips_ = 0;  ///< Frames dropped as LOST by the hold check
   size_t incomplete_drops_ = 0;  ///< See incomplete_drops()
+  size_t nonfinite_frame_drops_ = 0;  ///< See nonfinite_frame_drops()
   bool imu_lost_ = false;     ///< The gap was too long to recover; frames are dropped until reset()
   Eigen::Matrix<double, 6, 1> start_imu_bias_;  ///< See start_imu_bias()
 
