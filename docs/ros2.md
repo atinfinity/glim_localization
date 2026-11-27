@@ -87,7 +87,7 @@ Lifecycle: configure fails and leaves the node unconfigured on a missing config 
 | `~/initialize` (R2) | `glim_localization_msgs/srv/Initialize` | Sets the pose. `success` means accepted, applied at the first frame at or after its stamp (0: the next frame; the stamp is frame time, as for `/initialpose`); the yaw search result comes later on `~/status`. `global_search=true` returns `success=false` ([#3](https://github.com/atinfinity/glim_localization/issues/3)) |
 | `~/relocalize` (R2) | `std_srvs/srv/Trigger` | Restarts from the newest estimate; refused unless TRACKING or DEGRADED with an estimate no older than `max_init_pose_delay` and no reset pending |
 
-States: `INITIALIZING` (started or reset) -> `TRACKING` -> `DEGRADED` (low inlier ratio, map weight lowered) -> `LOST` (left only by an external initialization). In LOST, no pose, odometry or `map->odom` is published; `odom->base_link` continues in `internal_odom`.
+States: `INITIALIZING` (started or reset) -> `TRACKING` -> `DEGRADED` (low inlier ratio, map weight lowered) -> `LOST` (left only by an external initialization). In LOST, no pose, odometry or `map->odom` is published; `odom->base_link` continues in `internal_odom`. Wheel odometry does not change these states; raise `lost_frames` to tolerate poor matching for longer ([DESIGN 5.4](DESIGN.md#54-quality-monitoring)).
 
 `tf_mode` in `localization_ros`: `internal_odom` (default; publishes `map->odom` and `odom->base_link`), `external_odom` (publishes only `map->odom`, using `odom->base_link` from another source), `none` (no TF). Also set `base_frame_id` and `T_base_imu` there. Details are in [DESIGN 6](DESIGN.md#6-ros-2-support).
 

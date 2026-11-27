@@ -15,6 +15,7 @@ Measurements and the history behind these items are in [PROGRESS.md](PROGRESS.md
 | 5 | Launch files, YAML parameter files, RViz config, `~/map` | Done |
 | 6 | `map_compiler` PCD and PLY input, 2D occupancy grid export, covariance recomputation for GLIM dumps | Done |
 | 6 | README and user docs | Done |
+| 6 | Optional wheel odometry fusion: wheel factor, IMU gap reset extrapolation ([#14](https://github.com/atinfinity/glim_localization/issues/14)) | Done; no covariance weighting, no change to the state rules ([decision](progress/2026-11-28-wheel-state-decisions.md)) |
 | 6 | GPU (CUDA) odometry module, selected by the odometry config (CUDA image) | Done; tiles streamed within a byte budget with prefetch; real-data GPU timing open ([#23](https://github.com/atinfinity/glim_localization/issues/23)) |
 
 ## Open work
@@ -25,7 +26,6 @@ Not done yet (open issues):
 - Relocalizer ([#3](https://github.com/atinfinity/glim_localization/issues/3)): global relocalization (no pose given), and a better use of the yaw search (accumulated scans, roll and pitch from gravity, height from the map). The yaw search around a given pose is in place ([Initial pose yaw search](ros2.md#initial-pose-yaw-search)).
 - `map_compiler` follow-ups ([#12](https://github.com/atinfinity/glim_localization/issues/12)): streaming large clouds, per-tile covariance estimation, and tile selection by bounding box.
 - Evaluation on real data against an independent reference ([#5](https://github.com/atinfinity/glim_localization/issues/5)) and in simulation ([#9](https://github.com/atinfinity/glim_localization/issues/9)).
-- Optional wheel odometry fusion ([#14](https://github.com/atinfinity/glim_localization/issues/14)).
 - Follow-ups for robustness, the IMU gap policy, the publisher and the R2 node ([#6](https://github.com/atinfinity/glim_localization/issues/6), [#8](https://github.com/atinfinity/glim_localization/issues/8), [#10](https://github.com/atinfinity/glim_localization/issues/10), [#13](https://github.com/atinfinity/glim_localization/issues/13)).
 
 ## Limitations
