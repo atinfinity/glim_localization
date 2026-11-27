@@ -15,4 +15,5 @@
 - **Verification** (Docker, amd64, 16 cores, `glim_localization:dev`):
   - Each test alone with 32 busy-loop processes running beside it: the old `test_launch_r1` failed 3 of 3 (86, 93, 72 poses) and again 3 of 3 in a second set (74, 77, 95). At 2x it failed 3 of 3 (76, 88, 85), and the new one at 1x passed 9 of 9 (114 to 121 poses). `test_r1_extension` at 2x failed 3 of 3 (79 poses); at 1x it passed 10 of 11.
   - `scripts/test_colcon.sh` with `CTEST_JOBS=8`: passed 3 of 3 runs. The new check printed `ok: every ROS test of glim_localization_ros2 runs through run_test_isolated.py`. With the allowlist cut to one gtest, it failed and named the other two.
+- **Review** (agent): no high findings. Fixed: the comments said that real time bounds the backlog; it does so only while the odometry keeps up with real time, so they now say that it makes the loss rare. Left as it is: the gtests without ROS are exempt by name, so one that later gains a ROS graph, or a stale name, is not reported.
 - **Open**: the one failure in 11 runs of `test_r1_extension` at 1x under 2x CPU oversubscription was not kept, so its reason is unknown; CI load is lower than that.

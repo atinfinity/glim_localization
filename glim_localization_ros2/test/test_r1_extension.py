@@ -96,8 +96,8 @@ def make_config_dir(dst, map_path):
     # the odometry. Faster than the odometry, it reads ahead: the reset of the 5 s /initialpose
     # then drops the queued frames before it and clears wheel samples of frames after it, and a
     # frame handled more than 1 s after the newest IMU sample is not published. 2x was not enough
-    # on a loaded CPU (79 poses for 121 frames); real time bounds the backlog (see
-    # test_launch_r1.py).
+    # on a loaded CPU (79 poses for 121 frames). Real time keeps the backlog small while the
+    # odometry keeps up with real time, which makes the loss rare (see test_launch_r1.py).
     edit_config(ros_path, 'glim_ros', {'playback_speed': 1.0})
     return dst
 

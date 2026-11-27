@@ -21,8 +21,9 @@ reads it, but queues the frames for the odometry, and throttles on that queue on
 than the odometry, it reads seconds ahead on a loaded runner (ctest -j): the reset of the 5 s
 /initialpose then drops every queued frame before 5 s, and a frame handled more than 1 s after the
 newest IMU sample gets no angular velocity and is not published. At the default 100x that cost 31
-of 121 frames in CI, and 2x still lost about 40 under load. Real time is what the odometry must
-keep up with anyway. test_r1_extension.py does the same.
+of 121 frames in CI, and 2x still lost about 40 under load. Real time makes that rare but does not
+rule it out: the backlog stays small only while the odometry keeps up with real time, which it must
+do anyway. test_r1_extension.py does the same.
 """
 import atexit
 import json
