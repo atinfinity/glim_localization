@@ -56,6 +56,7 @@ By default, the per-point covariances of a GLIM dump or a compiled map are copie
 ```
 
 - **Format:** `DATA binary` with x, y, z as F8 (`double`) in the map frame, so UTM-sized coordinates keep their precision. Covariances, poses and other attributes are not written. The file is refused if it exists.
+- **F8 and other tools:** a tool that loads the file with `pcl::loadPCDFile` into `pcl::PointXYZ` (float fields) gets no points: PCL does not convert F8 fields ("Failed to find match for field 'x'"). Convert it to F4 first, as the [benchmark](benchmark.md#overrides-of-the-baseline) does for lidar_localization_ros2. That is fine for map-local coordinates but loses precision for UTM-sized ones.
 - **Overlap:** GLIM submaps overlap, and a point that several submaps hold appears once per submap, so the export holds near-duplicate copies of the overlapping surfaces. In the [synthetic measurement](progress/2026-11-28-map-source-measurement.md), whose copies are exact, compiling the export at the default k = 10 gave degenerate covariances and every run failed; `--voxel-size 0.05` (a quarter of the point spacing there) or `--k-neighbors 20` fixed it. For a real export, use a `--voxel-size` at least as large as the spacing between the near-duplicate copies. This was not measured on real data.
 - An export is not a lossless copy: keep the GLIM dump as the master (see [Which map to keep](getting_started.md#which-map-to-keep)).
 

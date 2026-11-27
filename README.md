@@ -68,6 +68,7 @@ The pages below are also published as a project site: <https://atinfinity.github
 | [Map preparation](docs/maps.md) | GLIM dumps, `map_compiler` and its PCD and PLY options, 2D occupancy grid export for Nav2 |
 | [Offline replay and evaluation](docs/replay.md) | Replay datasets, bag conversion, `glim_localization_replay`, `evaluate.py` |
 | [Simulation evaluation](docs/sim_eval.md) | Gazebo world with exact ground truth, `scripts/sim_eval.sh` (manual, not in CI) |
+| [Benchmark](docs/benchmark.md) | Comparison with lidar_localization_ros2 (NDT) on the Gazebo bag: accuracy, latency, CPU, memory (manual, not in CI) |
 | [ROS 2](docs/ros2.md) | Launch files, R1 extension, R2 lifecycle node, parameters, topics, services, TF |
 | [Status and limitations](docs/status.md) | Progress, open work and known limitations |
 | [Design](docs/DESIGN.md) | Architecture and design decisions |
