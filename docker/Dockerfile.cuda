@@ -105,7 +105,7 @@ RUN if [ "$(dpkg --print-architecture)" != amd64 ]; then \
          actual="$(sha256sum "${deb}" | cut -d ' ' -f 1)" || actual=""; \
          if [ -z "${expected}" ] || [ "${actual}" != "${expected}" ]; then \
            echo "SHA256 mismatch for ${1%%_*} on ${arch}: expected ${expected:-none} (ARG $2), got ${actual:-none}." >&2; \
-           echo "The PPA replaced this file under the same version; re-verify per docs/DEPENDENCIES.md, then update ARG $2 in docker/Dockerfile and docker/Dockerfile.cuda." >&2; \
+           echo "Either ARG $2 is wrong, or the PPA replaced this file under the same version: re-verify per docs/DEPENDENCIES.md (Updating the pins), then update ARG $2 in every Dockerfile that declares it." >&2; \
            exit 1; \
          fi; \
        } \

@@ -273,8 +273,8 @@ copy the new hash:
    and every file, and repeat steps 3 and 4 of "How to repeat the check" for the headers. A changed
    header or generated config header, or a library with different exported symbols, needs a decision
    (and a progress entry) before the pin moves.
-4. Update the build argument the message names in `docker/Dockerfile` and `docker/Dockerfile.cuda`
-   (the shared arguments must be equal; `scripts/tests/test_dockerfile_cuda.py` checks it) and the
+4. Update the build argument the message names in every Dockerfile that declares it (`docker/Dockerfile`
+   and `docker/Dockerfile.cuda`; `GTSAM_POINTS_CUDA_SHA256_AMD64` is only in the latter; the shared arguments must be equal; `scripts/tests/test_dockerfile_cuda.py` checks it) and the
    table above, and record the comparison on this page.
 
 **A new package version.** Change `GTSAM_VERSION` or `GTSAM_POINTS_VERSION` (both Dockerfiles and

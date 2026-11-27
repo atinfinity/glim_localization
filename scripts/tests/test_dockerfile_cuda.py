@@ -37,8 +37,9 @@ def test_shared_pins_are_equal():
 
 
 def test_both_images_pin_the_same_base_by_digest():
-    bases = [re.findall(r"^FROM (\S+)", text, re.M) for text in (CPU, CUDA)]
-    assert bases[0] == bases[1], bases
+    sim = (ROOT / "docker" / "sim" / "Dockerfile").read_text()
+    bases = [re.findall(r"^FROM (\S+)", text, re.M) for text in (CPU, CUDA, sim)]
+    assert bases[0] == bases[1] == bases[2], bases
     assert len(bases[0]) == 1 and re.fullmatch(r"ros:jazzy-ros-base@sha256:[0-9a-f]{64}", bases[0][0]), bases
 
 

@@ -1,8 +1,9 @@
 # Pin the PPA package contents and check dependency versions ([#11](https://github.com/atinfinity/glim_localization/issues/11))
 
-- **Change**: on 2026-11-25 the koide3 PPA replaced the files of `libgtsam-notbb-dev` 4.3.0,
-  `libgtsam-points-dev` 1.2.2 and `libgtsam-points-cuda12.6-dev` 1.2.2 under the same versions
-  (PPA commit 6b45536, a rebuild from the same gtsam_points submodule commit 9d32e7d). A version pin
+- **Change**: on 2026-11-25 the koide3 PPA replaced the files of `libgtsam-points-dev` 1.2.2
+  (amd64, arm64) and of its CUDA variants, `libgtsam-points-cuda13.1-dev` 1.2.2 among them, under the same versions
+  (PPA commit 6b45536, a rebuild from the same gtsam_points submodule commit 9d32e7d;
+  `libgtsam-notbb-dev` 4.3.0 is unchanged since 2026-07-11). A version pin
   alone cannot notice that, so the images now pin the contents:
   - `docker/Dockerfile` and `docker/Dockerfile.cuda` fetch the debs with `apt-get download`,
     compare them with per-architecture SHA256 build arguments (`GTSAM_SHA256_AMD64`/`ARM64`,
@@ -45,6 +46,11 @@
   - `scripts/tests/test_dockerfile_cuda.py`: 9 passed. `docker build --check`: no new warnings.
   - The CUDA image was not built (no practical GPU build here); its Dockerfile is covered by the
     Python test and `docker build --check`.
+- **Review** (agent): no high findings. Fixed: this entry named the wrong replaced packages; the mismatch
+  message now says that a wrong ARG is as likely as a replaced file and names every Dockerfile that declares
+  the ARG (`GTSAM_POINTS_CUDA_SHA256_AMD64` is only in `Dockerfile.cuda`); the digest test also covers
+  `docker/sim/Dockerfile`. Left as they are: the CUDA image is not built in CI; the PPA source stays enabled
+  in the image, so a manual `apt-get upgrade` in a container could move gtsam.
 - **Open**:
   - A cached image layer skips the check: a replaced deb is noticed only when the install layer is
     rebuilt (a new base digest, a changed argument or `--no-cache`). A scheduled job that compares
