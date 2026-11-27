@@ -568,8 +568,45 @@ TEST_F(InitYawSearchTest, InvalidParametersAreRejected) {
     p.init_yaw_search.max_translation = max_translation;
     EXPECT_THROW(OdometryEstimationLocalizationCPU(p, *map_), std::invalid_argument) << max_translation;
   }
+  p = params(true);
+  p.init_yaw_search.num_threads = -1;
+  EXPECT_THROW(OdometryEstimationLocalizationCPU(p, *map_), std::invalid_argument);
   // Validated also when disabled: a typo should not wait until someone turns the search on
   p = params(false);
   p.init_yaw_search.range = -1.0;
   EXPECT_THROW(OdometryEstimationLocalizationCPU(p, *map_), std::invalid_argument);
+  p = params(false);
+  p.init_yaw_search.num_threads = -2;
+  EXPECT_THROW(OdometryEstimationLocalizationCPU(p, *map_), std::invalid_argument);
+}
+
+TEST_F(InitYawSearchTest, SearchThreadCountDefaultsToTheOdometryAndCanBeOverridden) {
+  OdometryEstimationLocalizationCPU::Params p;
+  p.map_factors.num_threads = 2;
+  p.map_factors.search_radius = 30.0;
+  p.init_yaw_search.step = 10.0 * kDeg;
+  p.init_yaw_search.max_iterations = 7;
+  p.init_yaw_search.min_inlier_ratio = 0.6;
+  p.init_yaw_search.max_translation = 2.5;
+  const Eigen::Vector3d hint(1.0, 2.0, 3.0);
+
+  // 0 (the default, also in the shipped config read here) keeps the odometry's thread count
+  EXPECT_EQ(p.init_yaw_search.num_threads, 0);
+  const CandidateSearchParams shared = init_search_params(p, hint);
+  EXPECT_EQ(shared.scorer.map_factors.num_threads, 2);
+
+  // A positive value replaces it for the search only; the rest is unchanged
+  p.init_yaw_search.num_threads = 8;
+  const CandidateSearchParams own = init_search_params(p, hint);
+  EXPECT_EQ(own.scorer.map_factors.num_threads, 8);
+  EXPECT_EQ(p.map_factors.num_threads, 2);
+  for (const auto* s : {&shared, &own}) {
+    EXPECT_DOUBLE_EQ(s->scorer.map_factors.search_radius, 30.0);
+    EXPECT_EQ(s->scorer.max_iterations, 7);
+    EXPECT_DOUBLE_EQ(s->min_score, 0.6);
+    EXPECT_DOUBLE_EQ(s->distinct_yaw, distinct_yaw_for_step(10.0 * kDeg));
+    EXPECT_DOUBLE_EQ(s->max_translation, 2.5);
+    ASSERT_TRUE(s->hint_position.has_value());
+    EXPECT_TRUE(s->hint_position->isApprox(hint));
+  }
 }
