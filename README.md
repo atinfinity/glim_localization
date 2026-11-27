@@ -90,7 +90,7 @@ The full list is in [Status and limitations](docs/status.md#limitations).
 
 MIT. Portions are derived from GLIM / glim_ros2 (MIT, Copyright (c) 2024 koide3). See `LICENSE`.
 
-Provenance and licenses of the pinned C++ dependencies (GTSAM, BSD-3-Clause; gtsam_points, GLIM, and glim_ros2, MIT) are in [docs/DEPENDENCIES.md](docs/DEPENDENCIES.md). It does not cover the ROS base image, the Ubuntu packages, or the Python tooling.
+Provenance and licenses of the pinned C++ dependencies (GTSAM, BSD-3-Clause; gtsam_points, GLIM, and glim_ros2, MIT) are in [docs/DEPENDENCIES.md](docs/DEPENDENCIES.md). It records the digest the ROS base image is pinned to, but does not cover the contents of that image, the Ubuntu packages, or the Python tooling.
 
 ## Acknowledgements
 
