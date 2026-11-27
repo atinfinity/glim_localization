@@ -830,6 +830,7 @@ protected:
     int dropped = 0;
     LocalizationStatus status;
     bool used_wheel = false;
+    ResetExtrapolation extrapolation = ResetExtrapolation::NONE;  ///< Of the reset
     double translation_error = 0.0;  ///< Of the reset frame [m]
     double yaw_error = 0.0;          ///< Of the reset frame [deg]
     double velocity_error = 0.0;     ///< Of the reset frame [m/s]
@@ -891,6 +892,7 @@ protected:
         run.before = run.estimates.empty() ? nullptr : run.estimates.back();
         run.after = estimate;
         run.used_wheel = odometry.last_reset_used_wheel();
+        run.extrapolation = odometry.last_reset_extrapolation();
       }
       run.estimates.push_back(estimate);
       if (run.after) {
@@ -944,6 +946,8 @@ protected:
     expect_one_gap_reset(on);
     EXPECT_FALSE(off.used_wheel);
     EXPECT_TRUE(on.used_wheel);
+    EXPECT_EQ(off.extrapolation, ResetExtrapolation::NONE);
+    EXPECT_EQ(on.extrapolation, ResetExtrapolation::WHEEL);
     expect_constant_velocity_reset(off);
     EXPECT_LT(on.translation_error, 0.05);
     EXPECT_LT(on.translation_error, 0.25 * off.translation_error);
@@ -968,11 +972,13 @@ protected:
   /// The slip check rejected the wheel motion: the key on resets as the key off does, from the same samples (one
   /// thread, so the runs are deterministic). Not compared with the constant velocity prior: the wheel factors after
   /// the reset are the same bad ones in both runs and may pull the reset frame.
-  static void expect_slip_fallback(const GapRun& off, const GapRun& on) {
+  static void expect_slip_fallback(const GapRun& off, const GapRun& on, ResetExtrapolation reason) {
     expect_one_gap_reset(off);
     expect_one_gap_reset(on);
     EXPECT_FALSE(off.used_wheel);
     EXPECT_FALSE(on.used_wheel);
+    EXPECT_EQ(off.extrapolation, ResetExtrapolation::NONE);
+    EXPECT_EQ(on.extrapolation, reason);
     EXPECT_NEAR(on.translation_error, off.translation_error, 1e-9);
     EXPECT_NEAR(on.velocity_error, off.velocity_error, 1e-9);
     EXPECT_NEAR(on.max_error_after, off.max_error_after, 1e-9);
@@ -1016,6 +1022,7 @@ TEST_F(WheelGapResetTest, KeyWithoutWheelOdometryIsIdentical) {
   expect_one_gap_reset(reference);
   expect_constant_velocity_reset(reference);
   EXPECT_FALSE(keyed.used_wheel);
+  EXPECT_EQ(keyed.extrapolation, ResetExtrapolation::NONE);
   ASSERT_EQ(keyed.estimates.size(), reference.estimates.size());
   for (size_t i = 0; i < reference.estimates.size(); i++) {
     EXPECT_EQ(keyed.estimates[i]->T_world_imu.matrix(), reference.estimates[i]->T_world_imu.matrix()) << "i=" << i;
@@ -1037,6 +1044,7 @@ TEST_F(WheelGapResetTest, FallsBackWithoutWheelCoverage) {
   for (const auto* run : {&none, &hole}) {
     expect_one_gap_reset(*run);
     EXPECT_FALSE(run->used_wheel);
+    EXPECT_EQ(run->extrapolation, ResetExtrapolation::NO_COVERAGE);
     expect_constant_velocity_reset(*run);
   }
 }
@@ -1054,6 +1062,7 @@ TEST_F(WheelGapResetTest, FallsBackOnAnInvalidWheelState) {
   print("excessive wheel speed", run);
   expect_one_gap_reset(run);
   EXPECT_FALSE(run.used_wheel);
+  EXPECT_EQ(run.extrapolation, ResetExtrapolation::INVALID);
   expect_constant_velocity_reset(run);
 }
 
@@ -1085,6 +1094,7 @@ TEST_F(WheelGapResetTest, KeepsTheWheelSamplesAcrossTheGapReset) {
     const GapRun run = run_gap(params, trajectory, &wheel);
     expect_one_gap_reset(run);
     EXPECT_EQ(run.used_wheel, key);
+    EXPECT_EQ(run.extrapolation, key ? ResetExtrapolation::WHEEL : ResetExtrapolation::NONE);
     EXPECT_EQ(run.status.wheel_missing, 0) << "key " << key;
     // The status counts restart at the reset: every frame after the reset frame has a wheel interval
     ASSERT_TRUE(run.after);
@@ -1103,7 +1113,7 @@ TEST_F(WheelGapResetTest, FallsBackOnAWheelLockedInTheGap) {
   const GapRun on = run_gap(gap_params(trajectory, true, 1), trajectory, &wheel);
   print("locked wheel, key off", off);
   print("locked wheel, key on", on);
-  expect_slip_fallback(off, on);
+  expect_slip_fallback(off, on, ResetExtrapolation::SLIP_GAP);
 }
 
 // A wheel spinning at twice the speed inside the gap while turning, right again at the reset frame: only the
@@ -1115,7 +1125,7 @@ TEST_F(WheelGapResetTest, FallsBackOnAWheelSlippingInTheGap) {
   const GapRun on = run_gap(gap_params(trajectory, true, 1), trajectory, &wheel);
   print("wheel x2 in the gap, key off", off);
   print("wheel x2 in the gap, key on", on);
-  expect_slip_fallback(off, on);
+  expect_slip_fallback(off, on, ResetExtrapolation::SLIP_GAP);
 }
 
 // A wheel already spinning at twice the speed before the gap: its velocity at the last estimate disagrees with the
@@ -1127,5 +1137,5 @@ TEST_F(WheelGapResetTest, FallsBackOnAWheelSlippingBeforeTheGap) {
   const GapRun on = run_gap(gap_params(trajectory, true, 1), trajectory, &wheel);
   print("wheel x2 from 5 s, key off", off);
   print("wheel x2 from 5 s, key on", on);
-  expect_slip_fallback(off, on);
+  expect_slip_fallback(off, on, ResetExtrapolation::SLIP_START);
 }

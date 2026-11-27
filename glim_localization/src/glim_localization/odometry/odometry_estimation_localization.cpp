@@ -528,12 +528,15 @@ OdometryEstimationLocalization::GapVerdict OdometryEstimationLocalization::handl
   gap_longest_ = 0.0;
   Eigen::Isometry3d T = frames.back()->T_world_imu;
   Eigen::Vector3d v = frames.back()->v_world_imu;
-  const bool from_wheel = p.wheel_odom.enabled && p.wheel_odom.reset_extrapolation && extrapolate_with_wheel(*frames.back(), frame->stamp, T, v);
+  const ResetExtrapolation extrapolation = p.wheel_odom.enabled && p.wheel_odom.reset_extrapolation
+                                             ? extrapolate_with_wheel(*frames.back(), frame->stamp, T, v)
+                                             : ResetExtrapolation::NONE;
+  const bool from_wheel = extrapolation == ResetExtrapolation::WHEEL;
   if (!from_wheel) {
     T.translation() += v * (frame->stamp - frames.back()->stamp);
   }
   spdlog::warn("resetting the pose after an IMU gap of {:.3f} s{}", gap, from_wheel ? " with the wheel odometry motion" : "");
-  if (!queue_reset(T, v, frame->stamp, ResetReason::IMU_GAP, from_wheel)) {
+  if (!queue_reset(T, v, frame->stamp, ResetReason::IMU_GAP, extrapolation)) {
     imu_lost_ = true;  // A non-finite state or one above kMaxResetSpeed cannot be recovered
     publish_lost();
     return GapVerdict::DROP;
@@ -543,14 +546,14 @@ OdometryEstimationLocalization::GapVerdict OdometryEstimationLocalization::handl
   return frame->stamp < min_stamp_ ? GapVerdict::DROP : GapVerdict::PROCEED;
 }
 
-bool OdometryEstimationLocalization::extrapolate_with_wheel(
+ResetExtrapolation OdometryEstimationLocalization::extrapolate_with_wheel(
   const glim::EstimationFrame& last,
   const double stamp,
   Eigen::Isometry3d& T_world_imu,
   Eigen::Vector3d& v_world_imu) const {
   const auto& params = localization_params().wheel_odom;
   if (!params.enabled || !params.reset_extrapolation) {
-    return false;
+    return ResetExtrapolation::NONE;
   }
   // The buffer still holds the samples since the last estimate: it is trimmed only when a frame gets its wheel factor,
   // and only up to the reset frame when the reset is applied
@@ -561,44 +564,54 @@ bool OdometryEstimationLocalization::extrapolate_with_wheel(
       last.stamp,
       stamp,
       params.max_gap);
-    return false;
+    return ResetExtrapolation::NO_COVERAGE;
   }
   Eigen::Isometry3d T = last.T_world_imu * (params.T_imu_base * motion->T_base * params.T_imu_base.inverse());
   T.linear() = Eigen::Quaterniond(T.linear()).normalized().toRotationMatrix();
   const Eigen::Vector3d v = T.linear() * wheel_velocity_in_imu(params, motion->twist1);
   if (!is_valid_reset(T, v, stamp)) {
     spdlog::warn("the wheel odometry gives an invalid reset state (speed {:.3f} m/s): resetting with the last velocity instead", v.norm());
-    return false;
+    return ResetExtrapolation::INVALID;
   }
 
   // Slip check. The reset velocity also becomes the IMU prediction of the next frames, so the wheel factor gate would
   // agree with a slipping wheel from then on: check the wheels here, with the thresholds of that gate.
   // 1. At the last estimate, the wheel velocity must agree with the estimated one (a wheel already slipping).
   // 2. Over the gap, the wheel displacement must agree with the trapezoid of the estimated velocity at the start and the
-  //    wheel velocity at the end (a wheel that slips or locks inside the gap). A smooth brake or turn is close to
-  //    linear over the gap; a step in the speed is not, and then the constant velocity reset is used, as before.
+  //    wheel velocity at the end (a wheel that locks, or slips and recovers, inside the gap). A smooth brake or turn is
+  //    close to linear over the gap; a step in the speed is not, and then the constant velocity reset is used.
+  // Not caught: a scale slip that starts in the gap and lasts through the reset frame. The end velocity is then wrong
+  // too, and there is no other speed reference after the gap; the map factors have to correct it.
   const auto velocity_gate = [&params](double speed) { return std::max(params.gate_velocity, params.gate_velocity_ratio * speed); };
   const Eigen::Vector3d v_wheel_last = last.T_world_imu.linear() * wheel_velocity_in_imu(params, motion->twist0);
   const double start_diff = (v_wheel_last - last.v_world_imu).norm();
   const double start_gate = velocity_gate(std::max(v_wheel_last.norm(), last.v_world_imu.norm()));
+  if (start_gate > 0.0 && start_diff > start_gate) {
+    spdlog::warn(
+      "the wheel velocity disagrees with the estimate at {:.3f} s by {:.3f} m/s (gate {:.3f}): resetting with the last velocity instead",
+      last.stamp,
+      start_diff,
+      start_gate);
+    return ResetExtrapolation::SLIP_START;
+  }
+
   const double dt = stamp - last.stamp;
   const Eigen::Vector3d displacement = T.translation() - last.T_world_imu.translation();
   const double gap_diff = (displacement - 0.5 * (last.v_world_imu + v) * dt).norm() / dt;
   const double gap_gate = velocity_gate(std::max(last.v_world_imu.norm(), v.norm()));
-  if ((start_gate > 0.0 && start_diff > start_gate) || (gap_gate > 0.0 && gap_diff > gap_gate)) {
+  if (gap_gate > 0.0 && gap_diff > gap_gate) {
     spdlog::warn(
-      "the wheel odometry disagrees with the last estimate (by {:.3f} m/s at {:.3f} s, gate {:.3f}; by {:.3f} m/s over the gap, gate {:.3f}): "
+      "the wheel displacement over the gap [{:.3f}, {:.3f}] s disagrees with the velocities at its ends by {:.3f} m/s (gate {:.3f}): "
       "resetting with the last velocity instead",
-      start_diff,
       last.stamp,
-      start_gate,
+      stamp,
       gap_diff,
       gap_gate);
-    return false;
+    return ResetExtrapolation::SLIP_GAP;
   }
   T_world_imu = T;
   v_world_imu = v;
-  return true;
+  return ResetExtrapolation::WHEEL;
 }
 
 void OdometryEstimationLocalization::set_candidate_generator(std::unique_ptr<PoseCandidateGenerator> generator) {
@@ -746,7 +759,7 @@ bool OdometryEstimationLocalization::queue_reset(
   const Eigen::Vector3d& v_world_imu,
   double min_stamp,
   ResetReason reason,
-  bool from_wheel) {
+  ResetExtrapolation extrapolation) {
   if (!is_valid_reset(T_world_imu, v_world_imu, min_stamp)) {
     spdlog::error("ignoring invalid localization reset request");
     return false;
@@ -758,7 +771,7 @@ bool OdometryEstimationLocalization::queue_reset(
   pending->v_world_imu = v_world_imu;
   pending->min_stamp = min_stamp;
   pending->reason = reason;
-  pending->from_wheel = from_wheel;
+  pending->extrapolation = extrapolation;
 
   std::lock_guard<std::mutex> lock(reset_mutex_);
   if (reason == ResetReason::IMU_GAP && pending_reset_) {
@@ -852,7 +865,7 @@ void OdometryEstimationLocalization::apply_pending_reset(double frame_stamp) {
   gap_pending_ = false;
   gap_longest_ = 0.0;
   imu_lost_ = false;
-  last_reset_used_wheel_ = pending->from_wheel;
+  last_reset_extrapolation_ = pending->extrapolation;
   current_map_factors_ = MapFactors();
   if (pending->reason == ResetReason::IMU_GAP) {
     // The same clock goes on: keep the sample at or before the reset frame, so the first interval after it is covered
