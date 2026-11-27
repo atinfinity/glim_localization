@@ -553,10 +553,9 @@ bool OdometryEstimationLocalization::extrapolate_with_wheel(
     return false;
   }
   // The buffer still holds the samples since the last estimate: it is trimmed only when a frame gets its wheel factor,
-  // and cleared when the reset is applied
-  const auto T_base = wheel_.integrate(last.stamp, stamp);
-  const auto twist = wheel_.twist_at(stamp);
-  if (!T_base || !twist) {
+  // and only up to the reset frame when the reset is applied
+  const auto motion = wheel_.motion(last.stamp, stamp);
+  if (!motion) {
     spdlog::warn(
       "the wheel odometry does not cover [{:.3f}, {:.3f}] s within {:.3f} s: resetting with the last velocity instead",
       last.stamp,
@@ -564,11 +563,37 @@ bool OdometryEstimationLocalization::extrapolate_with_wheel(
       params.max_gap);
     return false;
   }
-  Eigen::Isometry3d T = last.T_world_imu * (params.T_imu_base * *T_base * params.T_imu_base.inverse());
+  Eigen::Isometry3d T = last.T_world_imu * (params.T_imu_base * motion->T_base * params.T_imu_base.inverse());
   T.linear() = Eigen::Quaterniond(T.linear()).normalized().toRotationMatrix();
-  const Eigen::Vector3d v = T.linear() * wheel_velocity_in_imu(params, *twist);
+  const Eigen::Vector3d v = T.linear() * wheel_velocity_in_imu(params, motion->twist1);
   if (!is_valid_reset(T, v, stamp)) {
     spdlog::warn("the wheel odometry gives an invalid reset state (speed {:.3f} m/s): resetting with the last velocity instead", v.norm());
+    return false;
+  }
+
+  // Slip check. The reset velocity also becomes the IMU prediction of the next frames, so the wheel factor gate would
+  // agree with a slipping wheel from then on: check the wheels here, with the thresholds of that gate.
+  // 1. At the last estimate, the wheel velocity must agree with the estimated one (a wheel already slipping).
+  // 2. Over the gap, the wheel displacement must agree with the trapezoid of the estimated velocity at the start and the
+  //    wheel velocity at the end (a wheel that slips or locks inside the gap). A smooth brake or turn is close to
+  //    linear over the gap; a step in the speed is not, and then the constant velocity reset is used, as before.
+  const auto velocity_gate = [&params](double speed) { return std::max(params.gate_velocity, params.gate_velocity_ratio * speed); };
+  const Eigen::Vector3d v_wheel_last = last.T_world_imu.linear() * wheel_velocity_in_imu(params, motion->twist0);
+  const double start_diff = (v_wheel_last - last.v_world_imu).norm();
+  const double start_gate = velocity_gate(std::max(v_wheel_last.norm(), last.v_world_imu.norm()));
+  const double dt = stamp - last.stamp;
+  const Eigen::Vector3d displacement = T.translation() - last.T_world_imu.translation();
+  const double gap_diff = (displacement - 0.5 * (last.v_world_imu + v) * dt).norm() / dt;
+  const double gap_gate = velocity_gate(std::max(last.v_world_imu.norm(), v.norm()));
+  if ((start_gate > 0.0 && start_diff > start_gate) || (gap_gate > 0.0 && gap_diff > gap_gate)) {
+    spdlog::warn(
+      "the wheel odometry disagrees with the last estimate (by {:.3f} m/s at {:.3f} s, gate {:.3f}; by {:.3f} m/s over the gap, gate {:.3f}): "
+      "resetting with the last velocity instead",
+      start_diff,
+      last.stamp,
+      start_gate,
+      gap_diff,
+      gap_gate);
     return false;
   }
   T_world_imu = T;
@@ -829,8 +854,13 @@ void OdometryEstimationLocalization::apply_pending_reset(double frame_stamp) {
   imu_lost_ = false;
   last_reset_used_wheel_ = pending->from_wheel;
   current_map_factors_ = MapFactors();
-  // Samples of the old run may be stamped after the new one (a bag loop): they would block the new samples
-  wheel_.clear();
+  if (pending->reason == ResetReason::IMU_GAP) {
+    // The same clock goes on: keep the sample at or before the reset frame, so the first interval after it is covered
+    wheel_.trim(frame_stamp);
+  } else {
+    // Samples of the old run may be stamped after the new one (a bag loop): they would block the new samples
+    wheel_.clear();
+  }
   wheel_gated_streak_ = 0;
   reset_backend();
   min_stamp_ = pending->min_stamp;
