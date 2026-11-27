@@ -56,7 +56,7 @@ By default, the per-point covariances of a GLIM dump or a compiled map are copie
 ```
 
 - **Format:** `DATA binary` with x, y, z as F8 (`double`) in the map frame, so UTM-sized coordinates keep their precision. Covariances, poses and other attributes are not written. The file is refused if it exists.
-- **Overlap:** GLIM submaps overlap, and a point that several submaps hold appears once per submap. Compile the export again with `--voxel-size` (about a quarter of the point spacing) or `--k-neighbors 20`: with the default k = 10, duplicated points give degenerate covariances and localization fails ([measurement](progress/2026-11-28-map-source-measurement.md)).
+- **Overlap:** GLIM submaps overlap, and a point that several submaps hold appears once per submap, so the export holds near-duplicate copies of the overlapping surfaces. In the [synthetic measurement](progress/2026-11-28-map-source-measurement.md), whose copies are exact, compiling the export at the default k = 10 gave degenerate covariances and every run failed; `--voxel-size 0.05` (a quarter of the point spacing there) or `--k-neighbors 20` fixed it. For a real export, use a `--voxel-size` at least as large as the spacing between the near-duplicate copies. This was not measured on real data.
 - An export is not a lossless copy: keep the GLIM dump as the master (see [Which map to keep](getting_started.md#which-map-to-keep)).
 
 ## 2D occupancy grid for Nav2

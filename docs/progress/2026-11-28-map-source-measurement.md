@@ -1,8 +1,8 @@
 # Map source measurement and PCD export ([#61](https://github.com/atinfinity/glim_localization/issues/61))
 
 - **Change**:
-  - `map_compiler --export-pcd <file>` writes the points of the compiled map as one PCD file, from any input: `DATA binary`, x, y, z as F8 in the map frame, no covariances. The file is refused if it exists, is written to a temporary name and renamed. It is written after the compiled map, so a failed export leaves a complete map. The writer is `write_pcd` in `map/pcd_map.hpp`. Documented in [Map preparation](../maps.md#exporting-a-point-cloud).
-  - `synthetic_replay_dataset` takes an optional seed; the scene uses it and the LiDAR noise uses seed + 1. Without it, the output is unchanged.
+  - `map_compiler --export-pcd <file>` writes the points of the compiled map as one PCD file, from any input: `DATA binary`, x, y, z as F8 in the map frame, no covariances. The file is refused if it exists, is written to a temporary name and renamed. It is written last, after the compiled map and the occupancy grid, so a failed export leaves the other outputs complete. A filesystem error in the existence check is reported as such, not as "already exists". The writer is `write_pcd` in `map/pcd_map.hpp`. Documented in [Map preparation](../maps.md#exporting-a-point-cloud).
+  - `synthetic_replay_dataset` takes an optional seed (a decimal number below `UINT_MAX`). It seeds the noise of the map points, and seed + 1 the noise of the LiDAR ranges; the geometry of the scene is fixed (`SyntheticMapParams::seed` only drives the per-point noise). Without it, the output is unchanged. Seed 42 is not the default dataset of `test_replay_e2e.sh`: the map noise seed is the same (42), but the LiDAR seed is 43 instead of the default 11.
   - `scripts/compare_map_sources.py` compiles one synthetic scene in several ways, replays the same frames on each map and writes `results.md` and `results.json`. It only reports; it is not part of CI.
   - [Which map to keep](../getting_started.md#which-map-to-keep) now gives the measured result instead of "not measured yet".
 - **Decisions**:
@@ -10,9 +10,9 @@
   - **Variants** (scene: the synthetic corridor of `test_replay_e2e.sh`, point spacing about 0.2 m):
     - `dump`, `dump_recov_k10`, `dump_recov_k20`: the GLIM dump as is, and with `--recompute-covariances`.
     - `scene_g<grid>_k<k>`: the generated scene cloud (`map.pcd`, no duplicates) as PCD input. This is the case "same scene as a point cloud".
-    - `export_g<grid>_k<k>[_v<voxel>]`: the dump's `--export-pcd` output compiled again. Its submap overlap points are exact copies, which is the worst case; real GLIM submaps overlap with separate scans, so their copies are near rather than exact.
+    - `export_g<grid>_k<k>[_v<voxel>]`: the dump's `--export-pcd` output compiled again. Its submap overlap points are exact copies, because the synthetic submaps share points. Real GLIM submaps overlap with separate scans, so their copies are near rather than exact; how that changes the result is not measured.
     - `scene_g20_k10_max12`: `map_max_submaps` 12 instead of 5, to check whether the tile limit causes the gap. It does not; the result is the same.
-  - **Cases** per seed: three tracking runs with the yaw search off (initial error (0.3, -0.2, 0.1) m and 3 deg; (1.0, -0.5, 0) m and 8 deg; (-0.6, 0.6, 0.05) m and -6 deg), and one with `init_yaw_search` on and a 60 deg yaw error. Pass: replay exit 0 and `evaluate.py` within 0.1 m and 1 deg. Seeds 42, 43 and 44 give different scenes and noise; the three offsets of one seed converge to the same trajectory, so they are not independent samples.
+  - **Cases** per seed: three tracking runs with the yaw search off (initial error (0.3, -0.2, 0.1) m and 3 deg; (1.0, -0.5, 0) m and 8 deg; (-0.6, 0.6, 0.05) m and -6 deg), and one with `init_yaw_search` on and a 60 deg yaw error. Pass: replay exit 0 and `evaluate.py` within 0.1 m and 1 deg. Seeds 42, 43 and 44 are 3 noise draws of one geometry, not different scenes. The three offsets of one seed converge to the same trajectory, so they are not independent samples either.
 - **Verification** (amd64, Docker image of `docker/compose.yaml`):
 
   ```bash
@@ -48,11 +48,14 @@
   ![Initial yaw search margin by map source](../media/map_source_yaw_margin.svg)
 
   Findings:
-  - **Dump:** passes every run at 5.3 mm rmse with an inlier ratio of 0.997. Recomputing its covariances (k 10 or 20) changes nothing, so the gap of the PCD path comes from the tiling, not from GLIM's covariances.
-  - **Same scene as PCD:** at the defaults (20 m tiles, k 10) the ATE is about 2.7 times that of the dump (14.3 against 5.3 mm) and the inlier ratio drops to 0.92; one of nine runs (the 1.1 m, 8 deg offset) fails. Disjoint tiles cut surfaces at their edges, and points near an edge see only the neighbours in their own tile. 50 m tiles bring the ATE back to the dump's level (4.4 to 6.1 mm); 10 m tiles make it worse. k 20 made the 20 m map pass 9/9.
+  - **Dump:** passes every run at 5.3 mm rmse with an inlier ratio of 0.997. Recomputing its covariances (k 10 or 20) changes nothing, so GLIM's covariances are not what makes the dump better.
+  - **Same scene as PCD:** at the defaults (20 m tiles, k 10) the ATE is about 2.7 times that of the dump (14.3 against 5.3 mm) and the inlier ratio drops to 0.92; one of nine runs (the 1.1 m, 8 deg offset) fails. 50 m tiles bring the ATE to the dump's level (4.4 to 6.1 mm); 10 m tiles make it worse. k 20 made the 20 m map pass 9/9.
+    - **Cause, a hypothesis:** the ATE is lower with 50 m tiles than with 20 or 10 m tiles, which points at the tiling. It is not the covariances at tile edges: `build_pcd_submaps` estimates them over the whole cloud before it splits the points. Candidate causes are the per-tile voxel maps (a scan point near an edge finds its correspondence only in the voxel map of one tile), matches of one scan split across several tile factors, and point density. Confounders: y = 0 is a grid line for every grid size, so 10, 20 and 50 m tiles all split the corridor lengthwise; and the dump has more points (79103 against 44264, its overlaps hold the same surfaces several times) and full-range submaps that overlap. Isolating the cause needs a dump and a PCD with the same points, or a grid offset off the corridor.
+    - **Noise:** the single-run differences (8/9 against 9/9, 14.8 against 14.3 mm, k 20 passing 9/9) are within run-to-run noise of 3 noise draws, and do not support changing a default.
   - **Yaw search:** on PCD maps the true yaw scores about 0.88 instead of 0.996, and the margin over the next yaw is about 0.065 instead of 0.104, just above `init_yaw_search_min_score_gap` 0.05. With 50 m tiles the 180 deg flip of the symmetric corridor sometimes scores higher; the search then rejects the pose as ambiguous, which is the safe outcome, but it does not localize.
-  - **Dump export:** with exact copies in the overlap, k 5 and k 10 give degenerate covariances and every run fails (0.4 to 5 m ATE). `--voxel-size 0.05` (about a quarter of the point spacing) or k 20 fixes it, after which the export behaves like the PCD of the scene.
-  - **Limits:** one synthetic scene (a corridor along the y = 0 grid line, so 20 m tiles split it lengthwise), three seeds, CPU only. Real data may differ in size, but not in direction: the dump has overlapping, sensor-range submaps, and a point cloud does not.
+  - **Dump export:** with the exact copies of this synthetic dump in the overlap, k 5 and k 10 give degenerate covariances and every run fails (0.4 to 5 m ATE). Here `--voxel-size 0.05` (about a quarter of the point spacing) or k 20 fixed it, after which the export behaves like the PCD of the scene. A real export has near-duplicates instead; the guide says to use a voxel at least as large as their spacing, which is not measured.
+  - **Limits:** one synthetic geometry (a corridor along the y = 0 grid line), three noise draws, CPU only. Whether real maps show the same gap is not known.
 - **Open** ([#61](https://github.com/atinfinity/glim_localization/issues/61)):
-  - raising the default `--k-neighbors` for point cloud input to 20, or the default `--grid-size` to 50 m, would close most of the gap on this scene; it needs a check on a real map first;
-  - the same comparison on a real GLIM dump and its export.
+  - an isolating experiment for the gap (a dump and a PCD with the same points, a grid offset off the corridor, other geometries);
+  - the same comparison on a real GLIM dump and its export;
+  - changing the default `--k-neighbors` or `--grid-size` for point cloud input only after both of the above.
