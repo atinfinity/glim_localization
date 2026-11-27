@@ -6,6 +6,10 @@ LiDAR-IMU localization on a prebuilt 3D map, built on top of [GLIM](https://gith
 
 *Offline replay on synthetic data, oblique 3D view: each scan (red) is placed on the prebuilt map (gray floor, the rest colored by height) by the estimated pose (orange dot, heading arrow and up axis). Thin lines drop from the estimate to the surface below it, so the path visibly passes over the low boxes in the corridor. Regenerate with [`scripts/render_demo.py`](docs/replay.md#demo-animation).*
 
+<img src="docs/media/sim_viz.webp" width="640" alt="RViz2 view from above a Gazebo room: the prebuilt map in gray, the current scan in orange on the walls, the pose axes, and the estimated path in cyan over the white ground truth">
+
+*The ROS 2 node (R2) on a Gazebo bag in RViz2, three times as fast as real time: the map (`~/map`, gray), the scan placed by the estimate (`~/aligned_points`, orange), the pose, and the estimated path (cyan) over the ground truth (white). Regenerate with [`scripts/sim_viz.sh`](docs/sim_eval.md#rviz2-capture).*
+
 > **Status: under development. CPU by default; the GPU module (CUDA image) is tested on synthetic data only.** The core, the offline tools and both ROS 2 integrations work on synthetic data and pass CI. Real-data evaluation is limited (see [Limitations](#limitations)). The interfaces may still change. Details: [Status and limitations](docs/status.md), [progress](docs/progress/README.md), [open issues](https://github.com/atinfinity/glim_localization/issues).
 
 ## Features

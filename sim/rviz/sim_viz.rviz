@@ -1,0 +1,124 @@
+# RViz2 config for the capture of scripts/sim_viz.sh (docs/sim_eval.md): no panels, a fixed camera over
+# the sim_eval room (30 m x 20 m, origin at a corner). Topics: the map, the aligned scan and the pose of
+# glim_localization_node, and the paths of sim/scripts/viz_paths.py.
+Panels: []
+Visualization Manager:
+  Class: ""
+  Displays:
+    - Class: rviz_default_plugins/Grid
+      Name: Grid
+      Enabled: true
+      Cell Size: 5
+      Plane Cell Count: 8
+      Offset:
+        X: 15
+        Y: 10
+        Z: 0
+      Reference Frame: map
+      Color: 110; 110; 110
+      Alpha: 0.4
+      Value: true
+    - Class: rviz_default_plugins/PointCloud2
+      Name: Map
+      Enabled: true
+      Topic:
+        Value: /glim_localization/map
+        Depth: 1
+        Durability Policy: Transient Local
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+      Style: Points
+      Size (Pixels): 2
+      Color Transformer: FlatColor
+      Color: 175; 185; 200
+      Alpha: 0.8
+      Decay Time: 0
+      Selectable: false
+      Value: true
+    - Class: rviz_default_plugins/PointCloud2
+      Name: Aligned scan
+      Enabled: true
+      Topic:
+        Value: /glim_localization/aligned_points
+        Depth: 1
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Best Effort
+      Style: Points
+      Size (Pixels): 3
+      Color Transformer: FlatColor
+      Color: 255; 140; 0
+      Alpha: 1
+      Decay Time: 0
+      Selectable: false
+      Value: true
+    - Class: rviz_default_plugins/Path
+      Name: Ground truth
+      Enabled: true
+      Topic:
+        Value: /sim_viz/gt_path
+        Depth: 1
+        Durability Policy: Transient Local
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+      Line Style: Lines
+      Color: 255; 255; 255
+      Alpha: 0.6
+      Value: true
+    - Class: rviz_default_plugins/Path
+      Name: Estimate
+      Enabled: true
+      Topic:
+        Value: /sim_viz/est_path
+        Depth: 1
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+      Line Style: Billboards
+      Line Width: 0.08
+      Color: 0; 200; 255
+      Alpha: 1
+      Value: true
+    - Class: rviz_default_plugins/PoseWithCovariance
+      Name: Pose
+      Enabled: true
+      Topic:
+        Value: /glim_localization/pose
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+      Shape: Axes
+      Axes Length: 1.5
+      Axes Radius: 0.12
+      Covariance:
+        Value: false
+      Value: true
+  Enabled: true
+  Global Options:
+    Background Color: 32; 32; 36
+    Fixed Frame: map
+    Frame Rate: 30
+  Name: root
+  Tools: []
+  Value: true
+  Views:
+    Current:
+      Class: rviz_default_plugins/Orbit
+      Name: Current View
+      Target Frame: <Fixed Frame>
+      Distance: 34
+      Focal Point:
+        X: 15
+        Y: 9
+        Z: 0
+      Pitch: 0.9
+      Yaw: 4.4
+      Near Clip Distance: 0.01
+      Value: Orbit (rviz)
+    Saved: ~
+Window Geometry:
+  Height: 720
+  Width: 960
+  Hide Left Dock: true
+  Hide Right Dock: true

@@ -11,7 +11,8 @@ ARG JOBS=4
 SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
 
 # ros-jazzy-ros-gz brings Gazebo Harmonic through the gz_*_vendor packages (with headers, for the
-# scripted motion plugin built by scripts/sim_eval.sh). Mesa provides llvmpipe for EGL.
+# scripted motion plugin built by scripts/sim_eval.sh). Mesa provides llvmpipe for EGL. Xvfb and ffmpeg
+# are for the RViz2 capture of scripts/sim_viz.sh (rviz2 comes with ros-jazzy-ros-gz).
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
          build-essential cmake git ca-certificates \
@@ -20,6 +21,7 @@ RUN apt-get update \
          ros-jazzy-rosbag2-storage-mcap \
          ros-jazzy-pcl-conversions libpcl-dev \
          libegl1 libegl-mesa0 libgl1-mesa-dri libglx-mesa0 libgles2 mesa-utils \
+         xvfb ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 # sdf2map (Apache-2.0), pinned. Tests are not built.
