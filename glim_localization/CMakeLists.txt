@@ -48,6 +48,7 @@ add_library(glim_localization SHARED
   src/glim_localization/relocalization/pose_candidates.cpp
   src/glim_localization/replay/replay_dataset.cpp
   src/glim_localization/replay/replay_runner.cpp
+  src/glim_localization/util/process_claim.cpp
 )
 target_compile_definitions(glim_localization PRIVATE
   GLIM_LOCALIZATION_VERSION="${PROJECT_VERSION}"

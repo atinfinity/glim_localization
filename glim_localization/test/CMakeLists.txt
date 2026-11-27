@@ -5,6 +5,10 @@ add_executable(test_version test_version.cpp)
 target_link_libraries(test_version PRIVATE glim_localization GTest::gtest_main)
 gtest_discover_tests(test_version)
 
+add_executable(test_process_claim test_process_claim.cpp)
+target_link_libraries(test_process_claim PRIVATE glim_localization GTest::gtest_main)
+gtest_discover_tests(test_process_claim)
+
 add_executable(test_config test_config.cpp)
 target_compile_definitions(test_config PRIVATE
   GLIM_LOCALIZATION_CONFIG_DIR="${PROJECT_SOURCE_DIR}/config"
