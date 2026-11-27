@@ -371,7 +371,14 @@ void OdometryEstimationLocalization::insert_imu(const double stamp, const Eigen:
     // A fault, not a stray sample: the stream is on another clock, or a batch arrived late
     imu_rejected_ = 0;
     if (!std::isfinite(stamp)) {
-      return;  // Nothing to restart from
+      // Nothing to restart from, and the stream is broken: keep the queue (it is still consistent) and stop publishing
+      if (!frames.empty() && !imu_lost_) {
+        spdlog::error("the IMU stamps are not finite ({} consecutive samples dropped): the localization is lost until it is initialized again", kImuFaultRejects);
+        imu_lost_ = true;
+        gap_pending_ = false;
+        publish_lost();
+      }
+      return;
     }
     imu_integration->erase_imu_data(static_cast<int>(imu_integration->imu_data_in_queue().size()));
     imu_stamps_.clear();

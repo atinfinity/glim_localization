@@ -1315,6 +1315,40 @@ TEST_F(ReplayRunnerTest, IMUStampGateRejectsNonFiniteStamps) {
   }
 }
 
+TEST_F(ReplayRunnerTest, IMUStampGateFiveNonFiniteStampsInARowGoLostWithoutClearingTheQueue) {
+  for (const int count : {4, 5}) {
+    SCOPED_TRACE(count);
+    const auto run = run_probe(*dataset_, [&](ProbeOdometry& o) {
+      o.imu_hook = at_four_seconds([count](double stamp, const Forward& forward) {
+        forward(stamp);
+        for (int k = 0; k < count; k++) {
+          forward(std::numeric_limits<double>::quiet_NaN());
+        }
+      });
+    });
+    EXPECT_TRUE(queue_and_history_agree(*run.odometry));
+    if (count < 5) {
+      expect_untouched(run.records, *run.odometry);
+    } else {
+      expect_fails_closed(run.records, run.summary, *run.odometry);
+      EXPECT_EQ(run.odometry->incomplete_drops(), 0u);  // The fault, not the INCOMPLETE escalation
+    }
+  }
+}
+
+TEST_F(ReplayRunnerTest, IMUStampGateAllNonFiniteStampsNeverGiveAPoseAfterTheFirst) {
+  // Upstream's async wrapper releases every frame (scan_end > NaN is false) and no sample reaches the queue
+  const auto run = run_probe(*dataset_, [](ProbeOdometry& o) {
+    o.imu_hook = [](double, const Forward& forward) { forward(std::numeric_limits<double>::quiet_NaN()); };
+  });
+  ASSERT_FALSE(run.records.empty());
+  for (size_t i = 1; i < run.records.size(); i++) {
+    EXPECT_NE(run.records[i].result, ReplayResult::ESTIMATED) << run.records[i].stamp_ns;
+  }
+  EXPECT_EQ(run.records.back().state, LocalizationState::LOST);
+  EXPECT_TRUE(run.odometry->queue_stamps().empty());
+}
+
 TEST_F(ReplayRunnerTest, IMUStampGateAnExternalResetRecoversAfterAFault) {
   const auto dataset = make_variant("imu_fault_then_reset", Variant());
   auto reset_done = std::make_shared<bool>(false);
