@@ -8,4 +8,16 @@
   - The node config is the one of `localize.sh`, with these changes: the R2 `config_ros.json`, the sim topics, `global_shutter_lidar: true` (the Gazebo clouds have no per-point time), and the first ground truth pose as `init_T_world_imu`. `map_cloud_voxel` is 0.2 m instead of 0.5 m, because the coarse map looked sparse at this size. The map is drawn in gray and the scan in orange: with the map colored by height, the floor hid the scan.
   - The WebP is three times as fast as recorded, 5 fps, 640 px wide and quality 30: 2.9 MB for 60 s. At 10 fps, 720 px and quality 50 it was 9.6 MB. The quality changes little: the size comes from the many small points that move in every frame, so the frame rate and the width are the settings that matter (quality 20 instead of 30 saved 0.5 MB at 6 fps).
 - **Verification** (Docker, amd64): the R2 node on the restamped bag had an RMSE of 3.4 mm against the ground truth, the same as the replay on the same data. A full `scripts/sim_viz.sh` run took 82 s once the images and the ROS build existed. The checks were the frames and the final picture, with the scan on the map walls and the estimate on the ground truth. The GLIM warning that per-point timestamps are not given is expected for a global shutter LiDAR.
+- **Review** (agent): no high findings. Fixed:
+  - a 30 min hang when the capture never saw `/clock`;
+  - three paths that reported success on a broken run: rviz2 or `viz_paths.py` exiting, and the node exiting;
+  - the order of the cleanup trap;
+  - signals to `ros_localize.sh` as PID 1.
+
+  Left as they are, and documented:
+  - only one capture at a time;
+  - no handshake between the subscribers and the playback (`SIM_VIZ_SETTLE`);
+  - `restamp_bag.py` holds the bag in memory (60 s bags) and drops the recorded QoS profiles; the sensor data subscribers accept the reliable default.
+
+  After the fixes, the full run passed again (80 s).
 - **Open**: the picture is from simulation; a capture on a real bag waits for [#5](https://github.com/atinfinity/glim_localization/issues/5).
