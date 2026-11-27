@@ -14,14 +14,25 @@ test_r1_extension.py). The launch file runs glim_rosbag with the installed confi
 the map path through its map_path argument, and a params_file of this test (auto_quit off, so that
 the node and its latched ~/map stay up). Accuracy is covered by test_r1_extension.py; this test
 checks that the launch file starts the extension and that ~/pose, TF and ~/map come out.
+
+The config is a copy of the installed config/r1 with glim_ros.playback_speed 1 (the launch file
+still fills in the map path). glim_rosbag hands the bag's /initialpose to the extension when it
+reads it, but queues the frames for the odometry, and throttles on that queue only loosely. Faster
+than the odometry, it reads seconds ahead on a loaded runner (ctest -j): the reset of the 5 s
+/initialpose then drops every queued frame before 5 s, and a frame handled more than 1 s after the
+newest IMU sample gets no angular velocity and is not published. At the default 100x that cost 31
+of 121 frames in CI, and 2x still lost about 40 under load. Real time is what the odometry must
+keep up with anyway. test_r1_extension.py does the same.
 """
 import atexit
+import json
 import os
 import shutil
 import sys
 import tempfile
 import unittest
 
+from ament_index_python.packages import get_package_share_directory
 import launch
 import launch_testing
 import launch_testing.actions
@@ -35,6 +46,19 @@ import launch_file_helpers  # noqa: E402, I100
 import r2_helpers  # noqa: E402  (its R2Client records ~/pose and /tf of a given node)
 
 NODE = '/glim_ros'
+PLAYBACK_SPEED = 1.0
+
+
+def make_config_dir(dst):
+    """Copy the installed config/r1 to dst with glim_ros.playback_speed set (see the docstring)."""
+    src = os.path.join(get_package_share_directory('glim_localization_ros2'), 'config', 'r1')
+    shutil.copytree(src, dst)
+    path = os.path.join(dst, 'config_ros.json')
+    config = r2_helpers.strip_comments(path)
+    config['glim_ros']['playback_speed'] = PLAYBACK_SPEED
+    with open(path, 'w') as f:
+        json.dump(config, f)
+    return dst
 
 
 @pytest.mark.launch_test
@@ -56,6 +80,7 @@ def generate_test_description():
         'localization_r1.launch.py',
         {
             'bag': bag,
+            'config_path': make_config_dir(os.path.join(work_dir, 'config')),
             'map_path': r2_helpers.require_env('GLIM_R1_MAP'),
             'params_file': params_file,
         })
