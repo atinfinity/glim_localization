@@ -6,6 +6,8 @@
 #include <glim_localization/version.hpp>
 #include <gtsam_points/types/point_cloud_cpu.hpp>
 
+TEST(Version, DeliberateFailureForCiPartsCheck) { FAIL() << "deliberate failure (PR #75 verification)"; }
+
 TEST(Version, ReturnsProjectVersion) {
   EXPECT_EQ(glim_localization::version(), "0.1.0");  // x-release-please-version
 }
