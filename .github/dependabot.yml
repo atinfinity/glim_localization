@@ -1,11 +1,25 @@
 version: 2
 updates:
-  # Only GitHub Actions. The Python tooling (scripts/requirements.txt) is a pip freeze lock generated
-  # in the image by scripts/update_requirements.sh, and the Docker base image is a ROS distro tag;
-  # both are updated by hand.
+  # The Python tooling (scripts/requirements.txt) is a pip freeze lock generated in the image by
+  # scripts/update_requirements.sh and is updated by hand.
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
     commit-message:
       prefix: ci
+  # The ROS base image, pinned by digest in docker/Dockerfile, docker/Dockerfile.cuda and
+  # docker/sim/Dockerfile. One grouped pull request moves all three to the same digest, and its CI run
+  # rebuilds the image and checks the PPA debs against their pinned SHA256 (docs/DEPENDENCIES.md).
+  - package-ecosystem: docker
+    directories:
+      - /docker
+      - /docker/sim
+    schedule:
+      interval: monthly
+    groups:
+      ros-base:
+        patterns:
+          - "*"
+    commit-message:
+      prefix: build

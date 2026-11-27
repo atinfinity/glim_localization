@@ -1,5 +1,7 @@
 # Headless development image: Ubuntu 24.04 + ROS 2 Jazzy, CPU only.
-FROM ros:jazzy-ros-base
+# The base image is pinned by the digest of its multi-platform index; Dependabot proposes updates
+# (.github/dependabot.yml), and docs/DEPENDENCIES.md ("Updating the pins") has the manual way.
+FROM ros:jazzy-ros-base@sha256:5147d3ae250ce754afd399f6bfec15b33dd4e473ca357e30432a3182031bfad6
 
 ARG GLIM_COMMIT=1a197c999e4865f5cab7c9cd25474128413ebbca
 ARG GTSAM_VERSION=4.3.0
@@ -7,9 +9,19 @@ ARG GTSAM_POINTS_VERSION=1.2.2
 ARG JOBS=4
 # Primary key fingerprint of the koide3 PPA (docs/DEPENDENCIES.md). The build fails if KEY.gpg differs.
 ARG KOIDE3_PPA_KEY_FPR=A0DAE9CF75CFEF37A509FCD3C2C44E47B79E8F3A
+# SHA256 of the PPA debs per architecture (docs/DEPENDENCIES.md). The PPA has replaced debs under the
+# same version, so the version alone does not pin the contents; the build fails on any other file.
+ARG GTSAM_SHA256_AMD64=257cbe2edf232cbce64f3bac45060c6e56f1b17ead939b415ae7247557cb4e66
+ARG GTSAM_SHA256_ARM64=211bc1693478a3afbd9cc70bbc386a9ec4c9d06b9f87beb9c2192f1bbc7303cb
+ARG GTSAM_POINTS_SHA256_AMD64=bd947013c199789e04b1f2a234159a107213b9decc04a892877de05b1898f8b4
+ARG GTSAM_POINTS_SHA256_ARM64=246d03b234bf7904cc755e62ed506e5097d4845ce38241e9bdf65ad039e1b34e
 
 SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
 
+# The PPA debs are fetched with apt-get download (which checks them against the signed index),
+# compared with the pinned SHA256 and installed with dpkg -i: apt-get install on a local file
+# fetches the same version from the repository again instead of using the checked file. Their
+# dependencies (Boost, METIS, the toolchain runtime) come from the first apt-get install of this RUN.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
          build-essential cmake git ca-certificates curl gpg \
@@ -19,19 +31,39 @@ RUN apt-get update \
     && install -d -m 0755 /etc/apt/keyrings \
     && curl -fsSL --compressed https://koide3.github.io/ppa/ubuntu2404/KEY.gpg -o /tmp/koide3_ppa.asc \
     && export GNUPGHOME="$(mktemp -d)" \
-    && fprs="$(gpg --batch --show-keys --with-colons /tmp/koide3_ppa.asc \
-         | awk -F: '$1 == "pub" { p = 1; next } $1 == "fpr" && p { print $10; p = 0 }')" \
+    && { fprs="$(gpg --batch --show-keys --with-colons /tmp/koide3_ppa.asc \
+         | awk -F: '$1 == "pub" { p = 1; next } $1 == "fpr" && p { print $10; p = 0 }')" || fprs=""; } \
     && if [ "${fprs}" != "${KOIDE3_PPA_KEY_FPR}" ]; then \
          echo "koide3 PPA key mismatch: expected ${KOIDE3_PPA_KEY_FPR}, got: ${fprs:-none}" >&2; exit 1; \
        fi \
-    && gpg --batch --dearmor -o /etc/apt/keyrings/koide3_ppa.gpg /tmp/koide3_ppa.asc \
+    && gpg --batch --quiet --import /tmp/koide3_ppa.asc \
+    && gpg --batch --export "${KOIDE3_PPA_KEY_FPR}" > /etc/apt/keyrings/koide3_ppa.gpg \
+    && test -s /etc/apt/keyrings/koide3_ppa.gpg \
     && rm -rf /tmp/koide3_ppa.asc "${GNUPGHOME}" && unset GNUPGHOME \
     && echo "deb [signed-by=/etc/apt/keyrings/koide3_ppa.gpg] https://koide3.github.io/ppa/ubuntu2404 ./" \
          > /etc/apt/sources.list.d/koide3_ppa.list \
     && apt-get update \
-    && apt-get install -y --no-install-recommends \
-         "libgtsam-notbb-dev=${GTSAM_VERSION}" \
-         "libgtsam-points-dev=${GTSAM_POINTS_VERSION}" \
+    && arch="$(dpkg --print-architecture)" \
+    && case "${arch}" in \
+         amd64 | arm64) ;; \
+         *) echo "no pinned SHA256 of the PPA debs for architecture ${arch} (docs/DEPENDENCIES.md)" >&2; exit 1 ;; \
+       esac \
+    && debs="$(mktemp -d)" && chown _apt "${debs}" \
+    && check_sha256() { \
+         local deb="${debs}/$1_${arch}.deb" expected="${!2:-}" actual; \
+         actual="$(sha256sum "${deb}" | cut -d ' ' -f 1)" || actual=""; \
+         if [ -z "${expected}" ] || [ "${actual}" != "${expected}" ]; then \
+           echo "SHA256 mismatch for ${1%%_*} on ${arch}: expected ${expected:-none} (ARG $2), got ${actual:-none}." >&2; \
+           echo "Either ARG $2 is wrong, or the PPA replaced this file under the same version: re-verify per docs/DEPENDENCIES.md (Updating the pins), then update ARG $2 in every Dockerfile that declares it." >&2; \
+           exit 1; \
+         fi; \
+       } \
+    && (cd "${debs}" && apt-get download "libgtsam-notbb-dev=${GTSAM_VERSION}" "libgtsam-points-dev=${GTSAM_POINTS_VERSION}") \
+    && check_sha256 "libgtsam-notbb-dev_${GTSAM_VERSION}" "GTSAM_SHA256_${arch^^}" \
+    && check_sha256 "libgtsam-points-dev_${GTSAM_POINTS_VERSION}" "GTSAM_POINTS_SHA256_${arch^^}" \
+    && dpkg -i "${debs}/libgtsam-notbb-dev_${GTSAM_VERSION}_${arch}.deb" \
+         "${debs}/libgtsam-points-dev_${GTSAM_POINTS_VERSION}_${arch}.deb" \
+    && rm -rf "${debs}" \
     && ldconfig \
     && rm -rf /var/lib/apt/lists/*
 
