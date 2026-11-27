@@ -47,8 +47,8 @@ def test_summarize_and_table():
     runs = [{"latency_median_ms": v, "pose_fraction": 1.0, "ate_trans_rmse_mm": None, "num_clouds": 601}
             for v in (12.0, 10.0, 11.0)]
     summary = compare_methods.summarize(runs)
-    assert summary["latency_median_ms"] == {"median": 11.0, "min": 10.0, "max": 12.0}
-    assert "ate_trans_rmse_mm" not in summary  # no value in some run
+    assert summary["latency_median_ms"] == {"median": 11.0, "min": 10.0, "max": 12.0, "valid": 3, "runs": 3}
+    assert summary["ate_trans_rmse_mm"] == {"valid": 0, "runs": 3}  # no value in any run
     table = compare_methods.format_table({"glim": summary}, {"glim": 3})
     lines = table.splitlines()
     assert lines[0].startswith("| Method | Runs | ATE trans RMSE [mm] |")
@@ -59,7 +59,21 @@ def test_summarize_and_table():
     assert row["Runs"] == "3"
     assert row["Latency median [ms]"] == "11.0 (10.0 to 12.0)"
     assert row["Scans with a pose"] == "1.000"  # no range when all runs agree
-    assert row["ATE trans RMSE [mm]"] == "n/a"
+    assert row["ATE trans RMSE [mm]"] == "n/a [0 of 3 runs]"
+
+
+def test_summarize_shows_a_failed_run():
+    # Run 2 produced no pose, so it has no accuracy; the other two still give a median, and the cell says
+    # that one run is missing instead of hiding it.
+    runs = [{"ate_trans_rmse_mm": 3.0, "accuracy_error": None},
+            {"ate_trans_rmse_mm": None, "accuracy_error": "no poses"},
+            {"ate_trans_rmse_mm": 5.0, "accuracy_error": None}]
+    summary = compare_methods.summarize(runs)
+    assert summary["ate_trans_rmse_mm"] == {"median": 4.0, "min": 3.0, "max": 5.0, "valid": 2, "runs": 3}
+    assert "accuracy_error" not in summary  # text, not a metric
+    row = compare_methods.format_table({"glim": summary}, {"glim": 3}).splitlines()[2]
+    assert "| 4.0 (3.0 to 5.0) [2 of 3 runs] |" in row
+    assert compare_methods.cell(None, "{:.1f}") == "n/a"
 
 
 def write_run(run_dir, offset_m, latency_ms, skip=()):
@@ -106,7 +120,8 @@ def test_main_end_to_end(tmp_path):
     assert run1["cpu_ms_per_scan"] == pytest.approx(20.0)  # 2 s of CPU over 100 scan periods
     assert run1["cpu_percent"] == pytest.approx(20.0)
     assert run1["peak_rss_mib"] == pytest.approx(2.0)
-    assert glim["summary"]["latency_median_ms"] == {"median": 25.0, "min": 20.0, "max": 30.0}
+    assert glim["summary"]["latency_median_ms"] == {"median": 25.0, "min": 20.0, "max": 30.0,
+                                                    "valid": 2, "runs": 2}
     lidarloc = report["methods"]["lidarloc"]["runs"]["run1"]
     assert lidarloc["missing_poses"] == 2
     assert lidarloc["pose_fraction"] == pytest.approx(99 / 101)

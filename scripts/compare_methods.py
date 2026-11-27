@@ -14,7 +14,8 @@ traj.txt and resources.json of sim/scripts/bench_recorder.py). For every run:
   of one core;
 - memory: VmHWM (peak RSS) at the end, and the largest VmRSS sample.
 Writes <bench>/benchmark.json (every run and the summary) and <bench>/benchmark.md (one row per method:
-the median over the runs and the range in brackets), and with --svg a bar chart of latency and ATE
+the median over the runs and the range in brackets; a cell where only k of the n runs have a value, for
+example a run without poses, says "[k of n runs]", and "n/a" when none has), and with --svg a bar chart of latency and ATE
 (plain SVG, as the other figures of docs/media).
 """
 import argparse
@@ -129,7 +130,7 @@ def run_metrics(run_dir, gt, settle_s, stamp_tol_ns):
         resources = json.load(handle)
     lat, missing, unmatched = latency(clouds, poses, stamp_tol_ns)
     num_clouds = len({s for s, _ in clouds})
-    cpu_per_scan, cpu_percent = cpu_usage(resources, len(clouds))
+    cpu_per_scan, cpu_percent = cpu_usage(resources, num_clouds)
     rss = [kb for _, kb in resources.get("rss_kb", []) if kb is not None]
     result = {
         "num_clouds": num_clouds,
@@ -156,23 +157,39 @@ def run_metrics(run_dir, gt, settle_s, stamp_tol_ns):
     return result
 
 
+def is_number(value):
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and np.isfinite(value)
+
+
 def summarize(runs):
-    """The median and the range over the runs of every metric; None where a run has no value."""
+    """The median and the range of every metric over the runs that have a value for it.
+
+    Each entry also has "valid" (the runs with a value) and "runs" (all runs), so that a run that failed
+    for a metric (no pose, no CPU sample, an accuracy error) shows in the table instead of being dropped.
+    A metric without a value in any run gets only the two counts; a key with a non-number (text) is skipped.
+    """
     summary = {}
     for key in runs[0]:
-        values = [r[key] for r in runs]
-        if not all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in values):
+        values = [r.get(key) for r in runs]
+        if any(v is not None and not is_number(v) for v in values):
             continue
-        summary[key] = {"median": float(np.median(values)), "min": float(min(values)), "max": float(max(values))}
+        valid = [float(v) for v in values if v is not None]
+        entry = {"valid": len(valid), "runs": len(values)}
+        if valid:
+            entry.update(median=float(np.median(valid)), min=min(valid), max=max(valid))
+        summary[key] = entry
     return summary
 
 
 def cell(stat, fmt):
-    if stat is None:
-        return "n/a"
+    """"median (min to max)", with "[k of n runs]" when only k of the n runs have a value; "n/a" for none."""
+    if stat is None or "median" not in stat:
+        return "n/a" if stat is None else f"n/a [0 of {stat['runs']} runs]"
     text = fmt.format(stat["median"])
     if fmt.format(stat["min"]) != fmt.format(stat["max"]):
         text += f" ({fmt.format(stat['min'])} to {fmt.format(stat['max'])})"
+    if stat.get("valid", 1) < stat.get("runs", 1):
+        text += f" [{stat['valid']} of {stat['runs']} runs]"
     return text
 
 
