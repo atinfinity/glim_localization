@@ -94,8 +94,11 @@ void EstimateBridge::disconnect()
   if (!claim_) {
     return;
   }
-  // CallbackSlot::remove sets the entry to an empty function (the ids stay valid), which destroys
-  // the lambdas and their references to this bridge. The caller is still holding one.
+  // CallbackSlot::remove (GLIM 1a197c9) is `callbacks[id] = nullptr`, with no lock against call():
+  // it is safe only because no odometry thread runs any more (R2 calls this after stop() has joined
+  // it, and the claim keeps any other localization out of the process). The ids stay valid
+  // because the vector never shrinks. Emptying the entries destroys the lambdas and their
+  // references to this bridge; the caller is still holding one.
   glim::OdometryEstimationCallbacks::on_insert_imu.remove(imu_callback_id_);
   glim::OdometryEstimationCallbacks::on_update_new_frame.remove(frame_callback_id_);
   glim_localization::LocalizationCallbacks::on_status.remove(status_callback_id_);
