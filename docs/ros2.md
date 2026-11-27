@@ -65,7 +65,7 @@ ROS parameters:
 | --- | --- | --- |
 | `config_path` | `config/r2` | GLIM-style config directory; a relative path is taken from the package share |
 | `map_path` | (empty) | GLIM dump or compiled map; overrides `odometry_estimation.map_path` |
-| `max_init_pose_delay` | 0.2 | Largest accepted delay [s] of a stamped initial pose behind the last input frame |
+| `max_init_pose_delay` | 0.2 | Largest accepted delay [s] of a stamped initial pose behind the last input frame. Both are frame time (cloud header + `glim_ros.points_time_offset`) |
 | `autostart` | false (`true` in the launch file) | Configure and activate once the node spins; a failed step is logged and leaves the node in the state it reached |
 
 Everything else comes from the JSON files: input topics, QoS and time offsets from `glim_ros` in `config_ros.json` (default `/points` and `/imu`), the publisher settings from `localization_ros`, and the odometry settings from `config/r1/config_odometry_localization_cpu.json`. `config/r2/config.json` refers to the `r1` files, so copy the whole `config` directory to customize it.
@@ -77,14 +77,14 @@ Lifecycle: configure fails and leaves the node unconfigured on a missing config 
 | Name | Type | Notes |
 | --- | --- | --- |
 | points, imu (in) | `sensor_msgs/PointCloud2`, `sensor_msgs/Imu` | Topic names from `config_ros.json` |
-| `/initialpose` (in) | `geometry_msgs/PoseWithCovarianceStamped` | Base pose in the map frame. Applied as given, or refined by the [yaw search](#initial-pose-yaw-search) when it is enabled |
+| `/initialpose` (in) | `geometry_msgs/PoseWithCovarianceStamped` | Base pose in the map frame. Applied as given, or refined by the [yaw search](#initial-pose-yaw-search) when it is enabled. The stamp is frame time (cloud header + `glim_ros.points_time_offset`), the time base of `~/pose`, TF and RViz `now()`; it is not shifted, so a client with a raw cloud header stamp adds the offset itself |
 | `~/pose` | `geometry_msgs/PoseWithCovarianceStamped` | Base pose in the map frame, LiDAR rate. Covariance is zero (not estimated) |
 | `~/odometry` | `nav_msgs/Odometry` | Pose and twist of the base |
 | `~/map` | `sensor_msgs/PointCloud2` | The loaded map in the map frame, published once, latched (reliable, transient local). One centroid per `map_cloud_voxel` (0.5 m) voxel; `publish_map: false` turns it off. Built once (R1: at node start, R2: at configure) at 12 bytes per point; with `map_cloud_voxel: 0` a map above 10 million points gets a warning, and a cloud above 1 GiB is not published |
 | `~/aligned_points` | `sensor_msgs/PointCloud2` | The current scan (deskewed) in the map frame, stamped with the frame, for each published `~/pose`; nothing in LOST. Sensor data QoS. Built only while the topic has a subscriber. `aligned_points_voxel` (0: every point) keeps one centroid per voxel; `publish_aligned_points: false` turns it off |
 | `~/status` | `glim_localization_msgs/LocalizationStatus` | State, inlier ratio, tiles, map factors, residual, processing time, reset count and reason, result of the initial pose search |
 | `/diagnostics` | `diagnostic_msgs/DiagnosticArray` | OK, WARN for DEGRADED, ERROR for LOST (the message says why the yaw search rejected the given pose) |
-| `~/initialize` (R2) | `glim_localization_msgs/srv/Initialize` | Sets the pose. `success` means accepted, applied at the next frame; the yaw search result comes later on `~/status`. `global_search=true` returns `success=false` ([#3](https://github.com/atinfinity/glim_localization/issues/3)) |
+| `~/initialize` (R2) | `glim_localization_msgs/srv/Initialize` | Sets the pose. `success` means accepted, applied at the first frame at or after its stamp (0: the next frame; the stamp is frame time, as for `/initialpose`); the yaw search result comes later on `~/status`. `global_search=true` returns `success=false` ([#3](https://github.com/atinfinity/glim_localization/issues/3)) |
 | `~/relocalize` (R2) | `std_srvs/srv/Trigger` | Restarts from the newest estimate; refused unless TRACKING or DEGRADED with an estimate no older than `max_init_pose_delay` and no reset pending |
 
 States: `INITIALIZING` (started or reset) -> `TRACKING` -> `DEGRADED` (low inlier ratio, map weight lowered) -> `LOST` (left only by an external initialization). In LOST, no pose, odometry or `map->odom` is published; `odom->base_link` continues in `internal_odom`.
