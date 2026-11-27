@@ -46,7 +46,8 @@ commit hash.
 Pinned debs (`ubuntu2404/Packages`, checked 2026-11-27; each file was also downloaded and hashed with
 `sha256sum`). The Dockerfiles pin these values as build arguments: `apt-get download` fetches the
 pinned version, the build compares the file with the value for `dpkg --print-architecture`, fails on
-a mismatch or on an architecture without a value, and only then installs the checked file.
+a mismatch or on an architecture without a value, and only then installs the checked file with
+`dpkg -i` (`apt-get install` on a local file would fetch the same version from the repository again).
 
 | File | Size | SHA256 | Build argument |
 |---|---|---|---|
