@@ -54,7 +54,7 @@ packages() {  # <image>: "package version" lines
 dev_image="${GLIM_LOC_IMAGE:-glim_localization:dev}"
 baseline_image="${GLIM_LOC_BASELINE_IMAGE:-glim_localization:baseline-lidarloc}"
 dirty=false
-[[ -n "$(git -C "${repo_root}" status --porcelain)" ]] && dirty=true
+[[ -n "$(git -C "${repo_root}" status --porcelain --untracked-files=no)" ]] && dirty=true
 python3 - "$(nproc)" "$(LC_ALL=C lscpu | sed -n 's/^Model name: *//p' | head -n 1)" \
   "${dev_image}" "$(image_id "${dev_image}")" "$(packages "${dev_image}")" \
   "${baseline_image}" "$(image_id "${baseline_image}")" "$(packages "${baseline_image}")" \
