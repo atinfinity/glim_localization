@@ -18,6 +18,10 @@ ARG GTSAM_POINTS_SHA256_ARM64=246d03b234bf7904cc755e62ed506e5097d4845ce38241e9bd
 
 SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
 
+# The PPA debs are fetched with apt-get download (which checks them against the signed index),
+# compared with the pinned SHA256 and installed with dpkg -i: apt-get install on a local file
+# fetches the same version from the repository again instead of using the checked file. Their
+# dependencies (Boost, METIS, the toolchain runtime) come from the first apt-get install of this RUN.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
          build-essential cmake git ca-certificates curl gpg \
@@ -57,8 +61,7 @@ RUN apt-get update \
     && (cd "${debs}" && apt-get download "libgtsam-notbb-dev=${GTSAM_VERSION}" "libgtsam-points-dev=${GTSAM_POINTS_VERSION}") \
     && check_sha256 "libgtsam-notbb-dev_${GTSAM_VERSION}" "GTSAM_SHA256_${arch^^}" \
     && check_sha256 "libgtsam-points-dev_${GTSAM_POINTS_VERSION}" "GTSAM_POINTS_SHA256_${arch^^}" \
-    && apt-get install -y --no-install-recommends \
-         "${debs}/libgtsam-notbb-dev_${GTSAM_VERSION}_${arch}.deb" \
+    && dpkg -i "${debs}/libgtsam-notbb-dev_${GTSAM_VERSION}_${arch}.deb" \
          "${debs}/libgtsam-points-dev_${GTSAM_POINTS_VERSION}_${arch}.deb" \
     && rm -rf "${debs}" \
     && ldconfig \

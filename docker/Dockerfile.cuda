@@ -52,6 +52,10 @@ ENV PATH=/usr/local/cuda/bin:${PATH} \
     NVIDIA_DRIVER_CAPABILITIES=compute,utility \
     GLIM_LOC_BUILD_WITH_CUDA=ON
 
+# The PPA debs are fetched with apt-get download (which checks them against the signed index),
+# compared with the pinned SHA256 and installed with dpkg -i: apt-get install on a local file
+# fetches the same version from the repository again instead of using the checked file. Their
+# dependencies (Boost, METIS, the toolchain runtime) come from the first apt-get install of this RUN.
 # CUDA: the NVIDIA repository and the PPA's CUDA builds of gtsam_points are amd64 only.
 RUN if [ "$(dpkg --print-architecture)" != amd64 ]; then \
       echo "docker/Dockerfile.cuda supports amd64 only (got $(dpkg --print-architecture))" >&2; exit 1; \
@@ -108,9 +112,9 @@ RUN if [ "$(dpkg --print-architecture)" != amd64 ]; then \
     && (cd "${debs}" && apt-get download "libgtsam-notbb-dev=${GTSAM_VERSION}" "${GTSAM_POINTS_PACKAGE}=${GTSAM_POINTS_VERSION}") \
     && check_sha256 "libgtsam-notbb-dev_${GTSAM_VERSION}" "GTSAM_SHA256_${arch^^}" \
     && check_sha256 "${GTSAM_POINTS_PACKAGE}_${GTSAM_POINTS_VERSION}" "GTSAM_POINTS_CUDA_SHA256_${arch^^}" \
-    && apt-get install -y --no-install-recommends \
-         "${debs}/libgtsam-notbb-dev_${GTSAM_VERSION}_${arch}.deb" \
+    && dpkg -i "${debs}/libgtsam-notbb-dev_${GTSAM_VERSION}_${arch}.deb" \
          "${debs}/${GTSAM_POINTS_PACKAGE}_${GTSAM_POINTS_VERSION}_${arch}.deb" \
+    && apt-get install -y --no-install-recommends \
          "cuda-nvcc-${CUDA_PKG_SUFFIX}=${CUDA_NVCC_VERSION}" \
          "cuda-cudart-dev-${CUDA_PKG_SUFFIX}=${CUDA_CUDART_VERSION}" \
          "cuda-cccl-${CUDA_PKG_SUFFIX}=${CUDA_CCCL_VERSION}" \
